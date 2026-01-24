@@ -22,11 +22,7 @@ jobs:
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT || 22 }}
           script: |
-            # Switch to root user
-            echo "🔐 Switching to root user..."
-            echo "${{ secrets.ROOT_PASSWORD }}" | su - << 'ROOTEOF'
             cd ${{ secrets.SERVER_DEPLOY_PATH }}
-            
             # Pull latest changes
             echo "📦 Pulling latest code..."
             git pull origin main || git pull origin master
@@ -63,7 +59,7 @@ jobs:
             pm2 status
             
             echo "✅ Deployment completed!"
-            ROOTEOF
+            EOF
       
       - name: Deployment Status
         if: always()
