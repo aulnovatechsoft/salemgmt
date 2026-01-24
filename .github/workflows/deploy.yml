@@ -17,13 +17,15 @@ jobs:
       - name: Deploy to Private Server
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.SERVER_IP }}
-          username: ${{ secrets.SERVER_USERNAME }}
+          host: ${{ vars.SERVER_IP }}
+          username: ${{ vars.SERVER_USERNAME }}
           password: ${{ secrets.SERVER_PASSWORD }}
-          port: ${{ secrets.SERVER_PORT || 22 }}
+          port: 22
           script: |
-            echo ${{ secrets.SERVER_DEPLOY_PATH }}
-            cd ${{ secrets.SERVER_DEPLOY_PATH }}
+            echo ${{ vars.SERVER_DEPLOY_PATH }}
+            cd ..
+            cd ..
+            cd ${{ vars.SERVER_DEPLOY_PATH }}
             # Pull latest changes
             echo "📦 Pulling latest code..."
             git pull origin main || git pull origin master
