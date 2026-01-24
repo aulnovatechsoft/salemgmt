@@ -1,0 +1,78 @@
+name: Deploy to Private Server
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Deploy to Private Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            # Switch to root user
+            echo "🔐 Switching to root user..."
+            echo "${{ secrets.ROOT_PASSWORD }}" | su - << 'ROOTEOF'
+            cd ${{ secrets.SERVER_DEPLOY_PATH }}
+            
+            # Pull latest changes
+            echo "📦 Pulling latest code..."
+            git pull origin main || git pull origin master
+            
+            # Load environment variables
+            if [ -f .env ]; then
+              export $(cat .env | grep -v '#' | xargs)
+            fi
+            
+            # Run migrations
+            echo "🗄️  Running database migrations..."
+            bun run backend/db/migrate.ts || npm run migrate
+            
+            # Install dependencies
+            echo "📥 Installing dependencies..."
+            bun install || npm install
+            
+            # Build web version
+            echo "🔨 Building web version..."
+            bunx expo export --platform web || npx expo export --platform web
+            
+            # Install PM2 globally (if not already installed)
+            echo "⚙️  Ensuring PM2 is installed..."
+            npm install -g pm2 || true
+            
+            # Restart application with PM2
+            echo "♻️  Restarting application with PM2..."
+            pm2 stop salesmgmt-backend || true
+            sleep 1
+            pm2 delete salesmgmt-backend || true
+            
+            # Start server with PM2
+            pm2 start "bun run server.ts" --name salesmgmt-backend
+            pm2 save
+            
+            # Setup PM2 auto-start on system reboot
+            pm2 startup systemd -u root --hp /root || true
+            
+            sleep 3
+            
+            # Show PM2 status
+            pm2 status
+            
+            echo "✅ Deployment completed!"
+            ROOTEOF
+      
+      - name: Deployment Status
+        if: always()
+        run: echo "Deployment status: ${{ job.status }}"
