@@ -31,7 +31,7 @@ const CIRCLES_DATA = [
 ];
 
 async function seedCircles() {
-  const sql = postgres(connectionString, { ssl: 'require' });
+  const sql = postgres(connectionString, { ssl: false });
 
   console.log('Creating circles table and seeding data...');
 

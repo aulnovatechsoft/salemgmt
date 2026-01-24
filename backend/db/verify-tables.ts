@@ -3,7 +3,7 @@ import postgres from 'postgres';
 const connectionString = process.env.DATABASE_URL!;
 
 async function verifyTables() {
-  const sql = postgres(connectionString, { ssl: 'require' });
+  const sql = postgres(connectionString, { ssl: false });
 
   try {
     const tables = await sql`

@@ -9,7 +9,7 @@ if (!connectionString) {
 }
 
 const client = postgres(connectionString, { 
-  ssl: 'require',
+  ssl: false,
   max: 10,
   idle_timeout: 20,
   connect_timeout: 10,

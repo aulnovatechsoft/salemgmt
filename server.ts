@@ -42,7 +42,7 @@ console.log('Database connection initialized');
 
 Bun.serve({
   port,
-  hostname: '0.0.0.0',
+  hostname: 'localhost',
   async fetch(req) {
     const url = new URL(req.url);
     
