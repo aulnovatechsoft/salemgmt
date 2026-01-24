@@ -30,41 +30,33 @@ jobs:
             # Pull latest changes
             echo "📦 Pulling latest code..."
             git pull origin main || git pull origin master
-            
+
             # Load environment variables
             if [ -f .env ]; then
               export $(cat .env | grep -v '#' | xargs)
             fi
-            
-            # Install dependencies
+
+            # 🔑 IMPORTANT: Load Bun into PATH
+            export PATH="$HOME/.bun/bin:$PATH"
+
             echo "📥 Installing dependencies..."
+            bun --version
             bun install
-            
-            # Install PM2 globally (if not already installed)
-            echo "⚙️  Ensuring PM2 is installed..."
+
+            echo "⚙️ Ensuring PM2 is installed..."
             npm install -g pm2 || true
-            
-            # Restart application with PM2
-            echo "♻️  Restarting application with PM2..."
+
+            echo "♻️ Restarting application with PM2..."
             pm2 stop salesmgmt-backend || true
-            sleep 1
             pm2 delete salesmgmt-backend || true
-            
-            # Start server with PM2
+
             pm2 start "bun run server.ts" --name salesmgmt-backend
             pm2 save
-            
-            # Setup PM2 auto-start on system reboot
-            pm2 startup systemd -u root --hp /root || true
-            
-            sleep 3
-            
-            # Show PM2 status
+
             pm2 status
-            
+
             echo "✅ Deployment completed!"
-            EOF
-      
+
       - name: Deployment Status
         if: always()
         run: |
