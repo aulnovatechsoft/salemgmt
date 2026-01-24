@@ -26,6 +26,7 @@ jobs:
             cd ..
             cd ..
             cd ${{ vars.SERVER_DEPLOY_PATH }}
+            echo "pwd: $(pwd)"
             # Pull latest changes
             echo "📦 Pulling latest code..."
             git pull origin main || git pull origin master
