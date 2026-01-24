@@ -1,0 +1,71 @@
+modules = ["nodejs-20", "postgresql-16"]
+[agent]
+expertMode = true
+
+[nix]
+channel = "stable-25_05"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "BSNL App"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Expo Mobile"
+
+[[workflows.workflow]]
+name = "BSNL App"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bun run server.ts"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow]]
+name = "Expo Mobile"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "EXPO_NO_TELEMETRY=1 EXPO_NO_GIT_STATUS=1 CI=1 bunx expo start --web --clear --port 8080"
+waitForPort = 8080
+
+[[ports]]
+localPort = 5000
+externalPort = 80
+
+[[ports]]
+localPort = 8080
+externalPort = 8080
+
+[[ports]]
+localPort = 8081
+externalPort = 8081
+
+[[ports]]
+localPort = 8082
+externalPort = 3000
+
+[deployment]
+deploymentTarget = "autoscale"
+run = ["bun", "run", "server.ts"]
+build = ["bun", "run", "bunx", "expo", "export", "--platform", "web"]
+
+[userenv]
+
+[userenv.shared]
