@@ -1,15 +1,6 @@
 export type UserRole = 'GM' | 'CGM' | 'DGM' | 'AGM' | 'SD_JTO' | 'SALES_STAFF';
 
-export type EventCategory = 
-  | 'Cultural' 
-  | 'Religious' 
-  | 'Sports' 
-  | 'Exhibition' 
-  | 'Fair'
-  | 'Festival'
-  | 'Agri-Tourism'
-  | 'Eco-Tourism'
-  | 'Trade/Religious';
+export type EventCategory = string;
 
 export type Circle = 
   | 'ANDAMAN_NICOBAR'
@@ -86,6 +77,24 @@ export interface Event {
   createdAt: string;
   keyInsight?: string;
   status?: EventStatus;
+  teamMembers?: { purseId: string; name: string; designation: string | null }[];
+  creatorName?: string | null;
+  assigneeName?: string | null;
+  assigneeDesignation?: string | null;
+  simsSold?: number;
+  ftthSold?: number;
+  targetEb?: number;
+  targetLease?: number;
+  targetBtsDown?: number;
+  targetFtthDown?: number;
+  targetRouteFail?: number;
+  targetOfcFail?: number;
+  ebCompleted?: number;
+  leaseCompleted?: number;
+  btsDownCompleted?: number;
+  ftthDownCompleted?: number;
+  routeFailCompleted?: number;
+  ofcFailCompleted?: number;
 }
 
 export interface SalesReport {

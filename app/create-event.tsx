@@ -7,7 +7,16 @@ import Colors from '@/constants/colors';
 import { Event, Circle } from '@/types';
 import { CIRCLES_FALLBACK } from '@/constants/app';
 import { trpc } from '@/lib/trpc';
-import { Calendar, ChevronLeft, ChevronRight, Check, Phone, CheckCircle, User, X, BadgeCheck } from 'lucide-react-native';
+import { Calendar, ChevronLeft, ChevronRight, Check, Phone, CheckCircle, User, X, BadgeCheck, Users, Trash2 } from 'lucide-react-native';
+import TeamHierarchyPicker from '@/components/TeamHierarchyPicker';
+
+interface TaskAssignment {
+  employeePurseId: string;
+  employeeName: string;
+  employeeDesignation: string | null;
+  linkedEmployeeId: string | null;
+  taskIds: string[];
+}
 
 const TASK_TYPES = [
   { id: 'SIM', label: 'SIM', description: 'SIM card sales' },
@@ -97,6 +106,8 @@ export default function CreateEventScreen() {
   const [showCirclePicker, setShowCirclePicker] = useState(false);
   const [showStartCalendar, setShowStartCalendar] = useState(false);
   const [showEndCalendar, setShowEndCalendar] = useState(false);
+  const [showTeamPicker, setShowTeamPicker] = useState(false);
+  const [teamAssignments, setTeamAssignments] = useState<TaskAssignment[]>([]);
   const [startCalendarMonth, setStartCalendarMonth] = useState(today.getMonth());
   const [startCalendarYear, setStartCalendarYear] = useState(today.getFullYear());
   const [endCalendarMonth, setEndCalendarMonth] = useState(today.getMonth());
@@ -450,6 +461,8 @@ export default function CreateEventScreen() {
     try {
       const categoryString = selectedCategories.join(',');
       
+      const teamMemberPurseIds = teamAssignments.map(a => a.employeePurseId);
+      
       createEventMutation.mutate({
         name: getTaskName(),
         location: location.trim(),
@@ -460,13 +473,20 @@ export default function CreateEventScreen() {
         category: categoryString as any,
         targetSim: showSimTarget ? (parseInt(targetSim) || 0) : 0,
         targetFtth: showFtthTarget ? (parseInt(targetFtth) || 0) : 0,
-        assignedTeam: [],
+        targetEb: showEbTarget ? (parseInt(targetEb) || 0) : 0,
+        targetLease: showLeaseCircuitTarget ? (parseInt(targetLeaseCircuit) || 0) : 0,
+        targetBtsDown: selectedCategories.includes('BTS_DOWN') ? (parseInt(maintenanceDetails.BTS_DOWN?.sites) || 0) : 0,
+        targetFtthDown: selectedCategories.includes('FTTH_DOWN') ? (parseInt(maintenanceDetails.FTTH_DOWN?.sites) || 0) : 0,
+        targetRouteFail: selectedCategories.includes('ROUTE_FAIL') ? (parseInt(maintenanceDetails.ROUTE_FAIL?.sites) || 0) : 0,
+        targetOfcFail: selectedCategories.includes('OFC_FAIL') ? (parseInt(maintenanceDetails.OFC_FAIL?.sites) || 0) : 0,
+        assignedTeam: teamMemberPurseIds,
         allocatedSim: 0,
         allocatedFtth: 0,
         keyInsight: keyInsight.trim() || undefined,
         assignedTo: assignedEmployee?.id,
         assignedToStaffId: assignedToStaffId.trim() || undefined,
         createdBy: employee.id,
+        teamAssignments: teamAssignments.length > 0 ? JSON.stringify(teamAssignments) : undefined,
       });
     } catch (error) {
       console.error('Task creation error:', error);
@@ -627,6 +647,66 @@ export default function CreateEventScreen() {
               )}
               <Text style={styles.helperText}>This person will manage the task and can create subtasks</Text>
             </View>
+
+            <View style={styles.dividerContainer}>
+              <View style={styles.divider} />
+              <Text style={styles.dividerText}>OR</Text>
+              <View style={styles.divider} />
+            </View>
+
+            <TouchableOpacity
+              style={styles.pickFromTeamButton}
+              onPress={() => setShowTeamPicker(true)}
+            >
+              <Users size={20} color={Colors.light.primary} />
+              <View style={styles.pickFromTeamContent}>
+                <Text style={styles.pickFromTeamTitle}>Pick from My Team</Text>
+                <Text style={styles.pickFromTeamSubtitle}>
+                  {teamAssignments.length === 0 
+                    ? 'Select team members from your hierarchy'
+                    : `${teamAssignments.length} team member${teamAssignments.length > 1 ? 's' : ''} assigned`
+                  }
+                </Text>
+              </View>
+              <ChevronRight size={20} color={Colors.light.textSecondary} />
+            </TouchableOpacity>
+
+            {teamAssignments.length > 0 && (
+              <View style={styles.teamAssignmentsList}>
+                <Text style={styles.teamAssignmentsTitle}>Team Assignments</Text>
+                {teamAssignments.map((assignment) => (
+                  <View key={assignment.employeePurseId} style={styles.teamAssignmentCard}>
+                    <View style={styles.teamAssignmentLeft}>
+                      <View style={styles.teamAssignmentAvatar}>
+                        <Text style={styles.teamAssignmentAvatarText}>
+                          {assignment.employeeName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
+                        </Text>
+                      </View>
+                      <View style={styles.teamAssignmentInfo}>
+                        <Text style={styles.teamAssignmentName}>{assignment.employeeName}</Text>
+                        <Text style={styles.teamAssignmentMeta}>{assignment.employeePurseId}</Text>
+                        <View style={styles.teamAssignmentTasks}>
+                          {assignment.taskIds.map(taskId => {
+                            const taskLabel = TASK_TYPES.find(t => t.id === taskId)?.label || taskId;
+                            return (
+                              <View key={taskId} style={styles.teamAssignmentTaskPill}>
+                                <Text style={styles.teamAssignmentTaskText}>{taskLabel}</Text>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      </View>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.removeAssignmentBtn}
+                      onPress={() => setTeamAssignments(prev => prev.filter(a => a.employeePurseId !== assignment.employeePurseId))}
+                    >
+                      <Trash2 size={16} color={Colors.light.error} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
           </View>
 
           <View style={styles.locationSection}>
@@ -983,57 +1063,61 @@ export default function CreateEventScreen() {
             if (!taskInfo || !details) return null;
             
             return (
-              <View key={taskId} style={styles.targetSection}>
-                <Text style={styles.targetSectionTitle}>{taskInfo.label} Details</Text>
+              <View key={taskId} style={styles.maintenanceSection}>
+                <View style={styles.maintenanceSectionHeader}>
+                  <Text style={styles.maintenanceSectionTitle}>{taskInfo.label} Details</Text>
+                </View>
                 
-                <View style={styles.inputGroup}>
-                  <Text style={styles.label}>Priority Level *</Text>
-                  <View style={styles.priorityRow}>
+                <View style={styles.maintenanceContent}>
+                  <Text style={styles.maintenanceLabel}>Priority Level *</Text>
+                  <View style={styles.priorityContainer}>
                     {(['low', 'medium', 'high', 'critical'] as const).map((priority) => (
                       <TouchableOpacity
                         key={priority}
                         style={[
-                          styles.priorityChip,
-                          details.priority === priority && styles.priorityChipSelected,
-                          priority === 'critical' && details.priority === priority && styles.priorityChipCritical,
-                          priority === 'high' && details.priority === priority && styles.priorityChipHigh,
-                          priority === 'medium' && details.priority === priority && styles.priorityChipMedium,
-                          priority === 'low' && details.priority === priority && styles.priorityChipLow,
+                          styles.priorityButton,
+                          details.priority === priority && styles.priorityButtonSelected,
+                          priority === 'critical' && details.priority === priority && styles.priorityButtonCritical,
+                          priority === 'high' && details.priority === priority && styles.priorityButtonHigh,
+                          priority === 'medium' && details.priority === priority && styles.priorityButtonMedium,
+                          priority === 'low' && details.priority === priority && styles.priorityButtonLow,
                         ]}
                         onPress={() => updateMaintenanceDetail(taskId, 'priority', priority)}
                       >
                         <Text style={[
-                          styles.priorityChipText,
-                          details.priority === priority && styles.priorityChipTextSelected
+                          styles.priorityButtonText,
+                          details.priority === priority && styles.priorityButtonTextSelected
                         ]}>
                           {priority.charAt(0).toUpperCase() + priority.slice(1)}
                         </Text>
                       </TouchableOpacity>
                     ))}
                   </View>
-                </View>
 
-                <View style={styles.row}>
-                  <View style={[styles.inputGroup, styles.halfWidth]}>
-                    <Text style={styles.label}>Sites to Attend</Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Number of sites"
-                      value={details.sites}
-                      onChangeText={(value) => updateMaintenanceDetail(taskId, 'sites', value)}
-                      keyboardType="number-pad"
-                    />
-                  </View>
+                  <View style={styles.maintenanceFieldsRow}>
+                    <View style={styles.maintenanceFieldHalf}>
+                      <Text style={styles.maintenanceLabel}>Sites to Attend</Text>
+                      <TextInput
+                        style={styles.maintenanceInput}
+                        placeholder="Number of sites"
+                        placeholderTextColor="#9CA3AF"
+                        value={details.sites}
+                        onChangeText={(value) => updateMaintenanceDetail(taskId, 'sites', value)}
+                        keyboardType="number-pad"
+                      />
+                    </View>
 
-                  <View style={[styles.inputGroup, styles.halfWidth]}>
-                    <Text style={styles.label}>Est. Resolution (hrs)</Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Estimated hours"
-                      value={details.hours}
-                      onChangeText={(value) => updateMaintenanceDetail(taskId, 'hours', value)}
-                      keyboardType="number-pad"
-                    />
+                    <View style={styles.maintenanceFieldHalf}>
+                      <Text style={styles.maintenanceLabel}>Est. Hours</Text>
+                      <TextInput
+                        style={styles.maintenanceInput}
+                        placeholder="Hours"
+                        placeholderTextColor="#9CA3AF"
+                        value={details.hours}
+                        onChangeText={(value) => updateMaintenanceDetail(taskId, 'hours', value)}
+                        keyboardType="number-pad"
+                      />
+                    </View>
                   </View>
                 </View>
               </View>
@@ -1074,6 +1158,18 @@ export default function CreateEventScreen() {
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
+
+      <TeamHierarchyPicker
+        visible={showTeamPicker}
+        onClose={() => setShowTeamPicker(false)}
+        employeeId={employee?.id || ''}
+        selectedTasks={selectedCategories.map(id => ({
+          id,
+          label: TASK_TYPES.find(t => t.id === id)?.label || id,
+        }))}
+        onAssignmentsComplete={(assignments) => setTeamAssignments(assignments)}
+        existingAssignments={teamAssignments}
+      />
     </>
   );
 }
@@ -1251,6 +1347,99 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.light.warning,
     textAlign: 'center',
+  },
+  maintenanceSection: {
+    backgroundColor: Colors.light.background,
+    borderRadius: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    overflow: 'hidden',
+  },
+  maintenanceSectionHeader: {
+    backgroundColor: Colors.light.primary + '10',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  maintenanceSectionTitle: {
+    fontSize: 15,
+    fontWeight: '700' as const,
+    color: Colors.light.primary,
+  },
+  maintenanceContent: {
+    padding: 16,
+  },
+  maintenanceLabel: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.light.textSecondary,
+    marginBottom: 10,
+  },
+  priorityContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 20,
+  },
+  priorityButton: {
+    flex: 1,
+    minWidth: '22%',
+    maxWidth: '24%',
+    paddingVertical: 10,
+    marginRight: 8,
+    marginBottom: 0,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: Colors.light.border,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  priorityButtonSelected: {
+    borderColor: Colors.light.primary,
+  },
+  priorityButtonCritical: {
+    backgroundColor: '#DC2626',
+    borderColor: '#DC2626',
+  },
+  priorityButtonHigh: {
+    backgroundColor: '#F97316',
+    borderColor: '#F97316',
+  },
+  priorityButtonMedium: {
+    backgroundColor: '#FBBF24',
+    borderColor: '#FBBF24',
+  },
+  priorityButtonLow: {
+    backgroundColor: '#22C55E',
+    borderColor: '#22C55E',
+  },
+  priorityButtonText: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.light.textSecondary,
+  },
+  priorityButtonTextSelected: {
+    color: '#fff',
+    fontWeight: '700' as const,
+  },
+  maintenanceFieldsRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  maintenanceFieldHalf: {
+    flex: 1,
+  },
+  maintenanceInput: {
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: Colors.light.text,
   },
   priorityRow: {
     flexDirection: 'row',
@@ -1773,5 +1962,123 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 12,
     fontStyle: 'italic' as const,
+  },
+  dividerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 20,
+  },
+  divider: {
+    flex: 1,
+    height: 1,
+    backgroundColor: Colors.light.border,
+  },
+  dividerText: {
+    marginHorizontal: 16,
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.light.textSecondary,
+  },
+  pickFromTeamButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.light.primary + '08',
+    borderWidth: 1.5,
+    borderColor: Colors.light.primary + '40',
+    borderRadius: 12,
+    padding: 16,
+    borderStyle: 'dashed',
+  },
+  pickFromTeamContent: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  pickFromTeamTitle: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.light.primary,
+  },
+  pickFromTeamSubtitle: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginTop: 2,
+  },
+  teamAssignmentsList: {
+    marginTop: 16,
+    backgroundColor: Colors.light.success + '08',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.success + '30',
+  },
+  teamAssignmentsTitle: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.light.success,
+    marginBottom: 12,
+  },
+  teamAssignmentCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.light.background,
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  teamAssignmentLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  teamAssignmentAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.light.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  teamAssignmentAvatarText: {
+    fontSize: 14,
+    fontWeight: '700' as const,
+    color: '#fff',
+  },
+  teamAssignmentInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  teamAssignmentName: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+  },
+  teamAssignmentMeta: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginTop: 2,
+  },
+  teamAssignmentTasks: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 6,
+    gap: 4,
+  },
+  teamAssignmentTaskPill: {
+    backgroundColor: Colors.light.primary,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  teamAssignmentTaskText: {
+    fontSize: 10,
+    fontWeight: '600' as const,
+    color: '#fff',
+  },
+  removeAssignmentBtn: {
+    padding: 8,
+    marginLeft: 8,
   },
 });

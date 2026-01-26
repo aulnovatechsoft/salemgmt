@@ -93,6 +93,16 @@ export default function EventDetailScreen() {
   console.log('Event Detail - Loading:', isLoading);
   console.log('Event Detail - Error:', isError, error?.message);
   console.log('Event Detail - Data:', eventData ? 'Found' : 'Not found');
+  if (eventData) {
+    console.log('Event Detail - Category:', eventData.category);
+    console.log('Event Detail - Targets:', { 
+      sim: eventData.targetSim, 
+      ftth: eventData.targetFtth, 
+      eb: eventData.targetEb,
+      lease: eventData.targetLease,
+      btsDown: eventData.targetBtsDown
+    });
+  }
   
   const managerPurseId = eventData?.assignedToEmployee ? 
     (eventData.assignedToEmployee as any).purseId || null : null;
@@ -104,6 +114,11 @@ export default function EventDetailScreen() {
   
   const { data: resourceStatus } = trpc.events.getEventResourceStatus.useQuery(
     { eventId: id || '' },
+    { enabled: !!id && id.length > 0 }
+  );
+
+  const { data: activityLogs } = trpc.audit.getByEntity.useQuery(
+    { entityType: 'EVENT', entityId: id || '' },
     { enabled: !!id && id.length > 0 }
   );
   
@@ -196,6 +211,25 @@ export default function EventDetailScreen() {
       Alert.alert('Error', error.message);
     },
   });
+
+  const updateTaskProgressMutation = trpc.events.updateTaskProgress.useMutation({
+    onSuccess: () => {
+      refetch();
+    },
+    onError: (error) => {
+      Alert.alert('Error', error.message);
+    },
+  });
+
+  const handleMarkTaskComplete = (taskType: 'EB' | 'LEASE' | 'BTS_DOWN' | 'FTTH_DOWN' | 'ROUTE_FAIL' | 'OFC_FAIL', increment: number = 1) => {
+    if (!employee?.id || !id) return;
+    updateTaskProgressMutation.mutate({
+      eventId: id,
+      taskType,
+      increment,
+      updatedBy: employee.id,
+    });
+  };
   
   const resetAssignForm = () => {
     setSelectedMemberId('');
@@ -786,53 +820,164 @@ export default function EventDetailScreen() {
             </View>
           </View>
         </View>
-        
-        {resourceStatus && (
+
+        {/* Additional Task Progress Section - EB, Lease, and Maintenance */}
+        {(eventData.targetEb > 0 || eventData.targetLease > 0 || eventData.targetBtsDown > 0 || 
+          eventData.targetFtthDown > 0 || eventData.targetRouteFail > 0 || eventData.targetOfcFail > 0) ? (
           <View style={styles.summarySection}>
-            <Text style={styles.sectionTitle}>Resource Allocation Status</Text>
-            <View style={styles.resourceStatusGrid}>
-              <View style={styles.resourceCard}>
-                <Text style={styles.resourceCardTitle}>SIM Resources</Text>
-                <View style={styles.resourceRow}>
-                  <Text style={styles.resourceLabel}>Allocated to Event:</Text>
-                  <Text style={styles.resourceValue}>{resourceStatus.allocated.sim}</Text>
+            <Text style={styles.sectionTitle}>Additional Task Progress</Text>
+            <View style={styles.maintenanceTasksGrid}>
+              {eventData.targetEb > 0 && (
+                <View style={styles.maintenanceCard}>
+                  <View style={styles.maintenanceHeader}>
+                    <Text style={styles.maintenanceLabel}>EB Connections</Text>
+                    <Text style={styles.maintenanceProgress}>{eventData.ebCompleted || 0}/{eventData.targetEb}</Text>
+                  </View>
+                  <View style={styles.progressBar}>
+                    <View style={[styles.progressFill, { width: `${Math.min(((eventData.ebCompleted || 0) / eventData.targetEb) * 100, 100)}%`, backgroundColor: '#7B1FA2' }]} />
+                  </View>
+                  {canManageTeam && (eventData.ebCompleted || 0) < eventData.targetEb && (
+                    <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#F3E5F5' }]} onPress={() => handleMarkTaskComplete('EB')}>
+                      <CheckCircle size={14} color="#7B1FA2" />
+                      <Text style={[styles.markCompleteBtnText, { color: '#7B1FA2' }]}>+1 Complete</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
-                <View style={styles.resourceRow}>
-                  <Text style={styles.resourceLabel}>Distributed to Team:</Text>
-                  <Text style={styles.resourceValue}>{resourceStatus.distributed.sim}</Text>
+              )}
+              {eventData.targetLease > 0 && (
+                <View style={styles.maintenanceCard}>
+                  <View style={styles.maintenanceHeader}>
+                    <Text style={styles.maintenanceLabel}>Lease Circuit</Text>
+                    <Text style={styles.maintenanceProgress}>{eventData.leaseCompleted || 0}/{eventData.targetLease}</Text>
+                  </View>
+                  <View style={styles.progressBar}>
+                    <View style={[styles.progressFill, { width: `${Math.min(((eventData.leaseCompleted || 0) / eventData.targetLease) * 100, 100)}%`, backgroundColor: '#EF6C00' }]} />
+                  </View>
+                  {canManageTeam && (eventData.leaseCompleted || 0) < eventData.targetLease && (
+                    <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FFF3E0' }]} onPress={() => handleMarkTaskComplete('LEASE')}>
+                      <CheckCircle size={14} color="#EF6C00" />
+                      <Text style={[styles.markCompleteBtnText, { color: '#EF6C00' }]}>+1 Complete</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
-                <View style={styles.resourceRow}>
-                  <Text style={styles.resourceLabel}>Sold:</Text>
-                  <Text style={[styles.resourceValue, { color: Colors.light.success }]}>{resourceStatus.sold.sim}</Text>
+              )}
+              {eventData.targetBtsDown > 0 && (
+                <View style={styles.maintenanceCard}>
+                  <View style={styles.maintenanceHeader}>
+                    <Text style={styles.maintenanceLabel}>BTS Down</Text>
+                    <Text style={styles.maintenanceProgress}>{eventData.btsDownCompleted || 0}/{eventData.targetBtsDown}</Text>
+                  </View>
+                  <View style={styles.progressBar}>
+                    <View style={[styles.progressFill, { width: `${Math.min(((eventData.btsDownCompleted || 0) / eventData.targetBtsDown) * 100, 100)}%`, backgroundColor: '#C62828' }]} />
+                  </View>
+                  {canManageTeam && (eventData.btsDownCompleted || 0) < eventData.targetBtsDown && (
+                    <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FFEBEE' }]} onPress={() => handleMarkTaskComplete('BTS_DOWN')}>
+                      <CheckCircle size={14} color="#C62828" />
+                      <Text style={[styles.markCompleteBtnText, { color: '#C62828' }]}>+1 Fixed</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
-                <View style={styles.resourceRow}>
-                  <Text style={styles.resourceLabel}>Available to Distribute:</Text>
-                  <Text style={[styles.resourceValue, { color: resourceStatus.remaining.simToDistribute > 0 ? Colors.light.primary : Colors.light.textSecondary }]}>
-                    {resourceStatus.remaining.simToDistribute}
-                  </Text>
+              )}
+              {eventData.targetFtthDown > 0 && (
+                <View style={styles.maintenanceCard}>
+                  <View style={styles.maintenanceHeader}>
+                    <Text style={styles.maintenanceLabel}>FTTH Down</Text>
+                    <Text style={styles.maintenanceProgress}>{eventData.ftthDownCompleted || 0}/{eventData.targetFtthDown}</Text>
+                  </View>
+                  <View style={styles.progressBar}>
+                    <View style={[styles.progressFill, { width: `${Math.min(((eventData.ftthDownCompleted || 0) / eventData.targetFtthDown) * 100, 100)}%`, backgroundColor: '#D81B60' }]} />
+                  </View>
+                  {canManageTeam && (eventData.ftthDownCompleted || 0) < eventData.targetFtthDown && (
+                    <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FCE4EC' }]} onPress={() => handleMarkTaskComplete('FTTH_DOWN')}>
+                      <CheckCircle size={14} color="#D81B60" />
+                      <Text style={[styles.markCompleteBtnText, { color: '#D81B60' }]}>+1 Fixed</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
-              </View>
-              <View style={styles.resourceCard}>
-                <Text style={styles.resourceCardTitle}>FTTH Resources</Text>
-                <View style={styles.resourceRow}>
-                  <Text style={styles.resourceLabel}>Allocated to Event:</Text>
-                  <Text style={styles.resourceValue}>{resourceStatus.allocated.ftth}</Text>
+              )}
+              {eventData.targetRouteFail > 0 && (
+                <View style={styles.maintenanceCard}>
+                  <View style={styles.maintenanceHeader}>
+                    <Text style={styles.maintenanceLabel}>Route Fail</Text>
+                    <Text style={styles.maintenanceProgress}>{eventData.routeFailCompleted || 0}/{eventData.targetRouteFail}</Text>
+                  </View>
+                  <View style={styles.progressBar}>
+                    <View style={[styles.progressFill, { width: `${Math.min(((eventData.routeFailCompleted || 0) / eventData.targetRouteFail) * 100, 100)}%`, backgroundColor: '#E65100' }]} />
+                  </View>
+                  {canManageTeam && (eventData.routeFailCompleted || 0) < eventData.targetRouteFail && (
+                    <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FBE9E7' }]} onPress={() => handleMarkTaskComplete('ROUTE_FAIL')}>
+                      <CheckCircle size={14} color="#E65100" />
+                      <Text style={[styles.markCompleteBtnText, { color: '#E65100' }]}>+1 Fixed</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
-                <View style={styles.resourceRow}>
-                  <Text style={styles.resourceLabel}>Distributed to Team:</Text>
-                  <Text style={styles.resourceValue}>{resourceStatus.distributed.ftth}</Text>
+              )}
+              {eventData.targetOfcFail > 0 && (
+                <View style={styles.maintenanceCard}>
+                  <View style={styles.maintenanceHeader}>
+                    <Text style={styles.maintenanceLabel}>OFC Fail</Text>
+                    <Text style={styles.maintenanceProgress}>{eventData.ofcFailCompleted || 0}/{eventData.targetOfcFail}</Text>
+                  </View>
+                  <View style={styles.progressBar}>
+                    <View style={[styles.progressFill, { width: `${Math.min(((eventData.ofcFailCompleted || 0) / eventData.targetOfcFail) * 100, 100)}%`, backgroundColor: '#546E7A' }]} />
+                  </View>
+                  {canManageTeam && (eventData.ofcFailCompleted || 0) < eventData.targetOfcFail && (
+                    <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#ECEFF1' }]} onPress={() => handleMarkTaskComplete('OFC_FAIL')}>
+                      <CheckCircle size={14} color="#546E7A" />
+                      <Text style={[styles.markCompleteBtnText, { color: '#546E7A' }]}>+1 Fixed</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
-                <View style={styles.resourceRow}>
-                  <Text style={styles.resourceLabel}>Sold:</Text>
-                  <Text style={[styles.resourceValue, { color: Colors.light.success }]}>{resourceStatus.sold.ftth}</Text>
-                </View>
-                <View style={styles.resourceRow}>
-                  <Text style={styles.resourceLabel}>Available to Distribute:</Text>
-                  <Text style={[styles.resourceValue, { color: resourceStatus.remaining.ftthToDistribute > 0 ? Colors.light.primary : Colors.light.textSecondary }]}>
-                    {resourceStatus.remaining.ftthToDistribute}
-                  </Text>
-                </View>
-              </View>
+              )}
+            </View>
+          </View>
+        ) : null}
+
+        {/* Activity Log Section */}
+        {activityLogs && activityLogs.length > 0 && (
+          <View style={styles.summarySection}>
+            <View style={styles.sectionTitleRow}>
+              <Clock size={18} color={Colors.light.text} />
+              <Text style={styles.sectionTitle}>Recent Activity</Text>
+            </View>
+            <View style={styles.activityList}>
+              {activityLogs.slice(0, 5).map((log, idx) => {
+                const getActivityIcon = (action: string) => {
+                  if (action.includes('TASK_PROGRESS')) return { icon: 'check', color: '#2E7D32', bg: '#E8F5E9' };
+                  if (action.includes('ASSIGN')) return { icon: 'user', color: '#1565C0', bg: '#E3F2FD' };
+                  if (action.includes('STATUS')) return { icon: 'flag', color: '#EF6C00', bg: '#FFF3E0' };
+                  if (action.includes('CREATE')) return { icon: 'plus', color: '#7B1FA2', bg: '#F3E5F5' };
+                  return { icon: 'activity', color: '#546E7A', bg: '#ECEFF1' };
+                };
+                const iconInfo = getActivityIcon(log.action);
+                const details = log.details as { taskType?: string; increment?: number; status?: string } | null;
+                
+                const getActivityText = () => {
+                  if (log.action === 'UPDATE_TASK_PROGRESS' && details) {
+                    return `Completed ${details.increment || 1} ${details.taskType?.replace('_', ' ') || 'task'}`;
+                  }
+                  if (log.action === 'UPDATE_EVENT_STATUS' && details) {
+                    return `Status changed to ${details.status}`;
+                  }
+                  if (log.action === 'ASSIGN_TEAM_MEMBER') return 'Team member assigned';
+                  if (log.action === 'CREATE_SUBTASK') return 'Subtask created';
+                  return log.action.replace(/_/g, ' ').toLowerCase();
+                };
+                
+                return (
+                  <View key={log.id || idx} style={styles.activityItem}>
+                    <View style={[styles.activityIcon, { backgroundColor: iconInfo.bg }]}>
+                      <CheckCircle size={12} color={iconInfo.color} />
+                    </View>
+                    <View style={styles.activityContent}>
+                      <Text style={styles.activityText}>{getActivityText()}</Text>
+                      <Text style={styles.activityTime}>
+                        {new Date(log.timestamp).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })}
             </View>
           </View>
         )}
@@ -1538,6 +1683,19 @@ const styles = StyleSheet.create({
   progressValue: { fontSize: 18, fontWeight: 'bold' as const, color: Colors.light.text, marginBottom: 8 },
   progressBar: { height: 6, backgroundColor: '#E0E0E0', borderRadius: 3, overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 3 },
+  maintenanceTasksGrid: { gap: 10 },
+  maintenanceCard: { backgroundColor: Colors.light.backgroundSecondary, padding: 12, borderRadius: 8 },
+  maintenanceHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  maintenanceLabel: { fontSize: 13, fontWeight: '600' as const, color: Colors.light.text },
+  maintenanceProgress: { fontSize: 13, fontWeight: 'bold' as const, color: Colors.light.textSecondary },
+  markCompleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6, marginTop: 8, gap: 6 },
+  markCompleteBtnText: { fontSize: 12, fontWeight: '600' as const },
+  activityList: { marginTop: 12, gap: 10 },
+  activityItem: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  activityIcon: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  activityContent: { flex: 1 },
+  activityText: { fontSize: 13, color: Colors.light.text, marginBottom: 2 },
+  activityTime: { fontSize: 11, color: Colors.light.textSecondary },
   subtasksSection: { backgroundColor: Colors.light.card, padding: 16, marginBottom: 12 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   addButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.light.primary, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, gap: 4 },

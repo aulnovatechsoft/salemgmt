@@ -59,6 +59,22 @@ export const [AppProvider, useApp] = createContextHook(() => {
         assignedTo: e.assignedTo,
         simsSold: e.simSold || 0,
         ftthSold: e.ftthSold || 0,
+        teamMembers: e.teamMembers || [],
+        creatorName: e.creatorName || null,
+        assigneeName: e.assigneeName || null,
+        assigneeDesignation: e.assigneeDesignation || null,
+        targetEb: e.targetEb || 0,
+        targetLease: e.targetLease || 0,
+        targetBtsDown: e.targetBtsDown || 0,
+        targetFtthDown: e.targetFtthDown || 0,
+        targetRouteFail: e.targetRouteFail || 0,
+        targetOfcFail: e.targetOfcFail || 0,
+        ebCompleted: e.ebCompleted || 0,
+        leaseCompleted: e.leaseCompleted || 0,
+        btsDownCompleted: e.btsDownCompleted || 0,
+        ftthDownCompleted: e.ftthDownCompleted || 0,
+        routeFailCompleted: e.routeFailCompleted || 0,
+        ofcFailCompleted: e.ofcFailCompleted || 0,
       }));
       console.log('Formatted events from backend:', formattedEvents.length);
       setEvents(formattedEvents);

@@ -45,14 +45,48 @@ export const eventsRouter = createTRPCRouter({
       // Get all event assignments to calculate sales progress
       const allAssignments = await db.select().from(eventAssignments);
       
+      // Get all employee master records for resolving team member names
+      const allMasterRecords = await db.select({
+        purseId: employeeMaster.purseId,
+        name: employeeMaster.name,
+        designation: employeeMaster.designation,
+      }).from(employeeMaster);
+      const masterMap = new Map(allMasterRecords.map(m => [m.purseId, m]));
+      
+      // Get creator and assignee details
+      const allEmployeeIds = [...new Set([
+        ...results.map(e => e.createdBy),
+        ...results.map(e => e.assignedTo).filter(Boolean) as string[],
+      ])];
+      let employeeMap = new Map<string, { name: string; designation?: string }>();
+      if (allEmployeeIds.length > 0) {
+        const empRecords = await db.select({
+          id: employees.id,
+          name: employees.name,
+          designation: employees.designation,
+        }).from(employees).where(sql`${employees.id} IN ${allEmployeeIds}`);
+        employeeMap = new Map(empRecords.map(e => [e.id, { name: e.name, designation: e.designation || undefined }]));
+      }
+      
       // Auto-complete expired events
       const expiredEventIds = await autoCompleteExpiredEvents(results);
       
-      // Add sales progress to each event (with corrected status for expired ones)
+      // Add sales progress and team member details to each event
       const eventsWithProgress = results.map(event => {
         const eventAssigns = allAssignments.filter(a => a.eventId === event.id);
         const simSold = eventAssigns.reduce((sum, a) => sum + a.simSold, 0);
         const ftthSold = eventAssigns.reduce((sum, a) => sum + a.ftthSold, 0);
+        
+        // Resolve team member names from purseIds
+        const assignedTeamPurseIds = (event.assignedTeam || []) as string[];
+        const teamMembers = assignedTeamPurseIds.map(purseId => {
+          const member = masterMap.get(purseId);
+          return member ? { purseId, name: member.name, designation: member.designation } : { purseId, name: purseId, designation: null };
+        });
+        
+        // Get creator and assignee info
+        const creatorInfo = employeeMap.get(event.createdBy);
+        const assigneeInfo = event.assignedTo ? employeeMap.get(event.assignedTo) : null;
         
         // Apply corrected status for expired events in this response
         const correctedStatus = expiredEventIds.includes(event.id) ? 'completed' : event.status;
@@ -62,6 +96,10 @@ export const eventsRouter = createTRPCRouter({
           status: correctedStatus,
           simSold,
           ftthSold,
+          teamMembers,
+          creatorName: creatorInfo?.name || null,
+          assigneeName: assigneeInfo?.name || null,
+          assigneeDesignation: assigneeInfo?.designation || null,
         };
       });
       
@@ -84,9 +122,15 @@ export const eventsRouter = createTRPCRouter({
       zone: z.string().min(1),
       startDate: z.string(),
       endDate: z.string(),
-      category: z.enum(['Cultural', 'Religious', 'Sports', 'Exhibition', 'Fair', 'Festival', 'Agri-Tourism', 'Eco-Tourism', 'Trade/Religious']),
+      category: z.string().min(1),
       targetSim: z.number().min(0),
       targetFtth: z.number().min(0),
+      targetEb: z.number().min(0).optional(),
+      targetLease: z.number().min(0).optional(),
+      targetBtsDown: z.number().min(0).optional(),
+      targetFtthDown: z.number().min(0).optional(),
+      targetRouteFail: z.number().min(0).optional(),
+      targetOfcFail: z.number().min(0).optional(),
       assignedTeam: z.array(z.string()).optional(),
       allocatedSim: z.number().min(0),
       allocatedFtth: z.number().min(0),
@@ -94,6 +138,7 @@ export const eventsRouter = createTRPCRouter({
       assignedTo: z.string().uuid().optional(),
       assignedToStaffId: z.string().optional(),
       createdBy: z.string().uuid(),
+      teamAssignments: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
       console.log("Creating event:", input.name);
@@ -142,6 +187,12 @@ export const eventsRouter = createTRPCRouter({
         category: input.category,
         targetSim: input.targetSim,
         targetFtth: input.targetFtth,
+        targetEb: input.targetEb || 0,
+        targetLease: input.targetLease || 0,
+        targetBtsDown: input.targetBtsDown || 0,
+        targetFtthDown: input.targetFtthDown || 0,
+        targetRouteFail: input.targetRouteFail || 0,
+        targetOfcFail: input.targetOfcFail || 0,
         assignedTeam: input.assignedTeam || [],
         allocatedSim: input.allocatedSim,
         allocatedFtth: input.allocatedFtth,
@@ -203,6 +254,59 @@ export const eventsRouter = createTRPCRouter({
           await db.update(events)
             .set({ assignedTeam: [assignedToId], updatedAt: new Date() })
             .where(eq(events.id, result[0].id));
+        }
+      }
+
+      if (input.teamAssignments) {
+        try {
+          const assignments = JSON.parse(input.teamAssignments) as Array<{
+            employeePurseId: string;
+            employeeName: string;
+            linkedEmployeeId: string | null;
+            taskIds: string[];
+          }>;
+          
+          console.log("Processing team assignments:", assignments.length);
+          
+          for (const assignment of assignments) {
+            const hasSim = assignment.taskIds.includes('SIM');
+            const hasFtth = assignment.taskIds.includes('FTTH');
+            
+            let employeeId = assignment.linkedEmployeeId;
+            
+            if (!employeeId) {
+              const masterRecord = await db.select().from(employeeMaster)
+                .where(eq(employeeMaster.purseId, assignment.employeePurseId));
+              employeeId = masterRecord[0]?.linkedEmployeeId || null;
+            }
+            
+            if (employeeId) {
+              const existingAssignment = await db.select().from(eventAssignments)
+                .where(and(
+                  eq(eventAssignments.eventId, result[0].id),
+                  eq(eventAssignments.employeeId, employeeId)
+                ));
+              
+              const simTarget = hasSim ? Math.ceil(input.targetSim / (assignments.filter(a => a.taskIds.includes('SIM')).length || 1)) : 0;
+              const ftthTarget = hasFtth ? Math.ceil(input.targetFtth / (assignments.filter(a => a.taskIds.includes('FTTH')).length || 1)) : 0;
+              
+              if (!existingAssignment[0]) {
+                await db.insert(eventAssignments).values({
+                  eventId: result[0].id,
+                  employeeId: employeeId,
+                  simTarget: simTarget,
+                  ftthTarget: ftthTarget,
+                  assignedBy: input.createdBy,
+                });
+              } else {
+                await db.update(eventAssignments)
+                  .set({ simTarget, ftthTarget, updatedAt: new Date() })
+                  .where(eq(eventAssignments.id, existingAssignment[0].id));
+              }
+            }
+          }
+        } catch (e) {
+          console.error("Error processing team assignments:", e);
         }
       }
 
@@ -492,12 +596,21 @@ export const eventsRouter = createTRPCRouter({
           .where(sql`${employees.id} IN ${allEmployeeIds}`);
       }
       
-      const masterRecords = await db.select().from(employeeMaster);
+      const assignedTeamPurseIds = (eventResult[0].assignedTeam || []) as string[];
+      
+      let masterRecords: any[] = [];
+      if (allEmployeeIds.length > 0 || assignedTeamPurseIds.length > 0) {
+        masterRecords = await db.select().from(employeeMaster)
+          .where(sql`${employeeMaster.linkedEmployeeId} IN ${allEmployeeIds.length > 0 ? allEmployeeIds : ['00000000-0000-0000-0000-000000000000']} OR ${employeeMaster.purseId} IN ${assignedTeamPurseIds.length > 0 ? assignedTeamPurseIds : ['__none__']}`);
+      }
+      
       const purseIdMap = new Map<string, string>();
-      masterRecords.forEach(m => {
+      const masterByPurseId = new Map<string, typeof masterRecords[0]>();
+      masterRecords.forEach((m: any) => {
         if (m.linkedEmployeeId) {
           purseIdMap.set(m.linkedEmployeeId, m.purseId);
         }
+        masterByPurseId.set(m.purseId, m);
       });
       
       const teamWithAllocations = assignments.map(assignment => {
@@ -506,14 +619,61 @@ export const eventsRouter = createTRPCRouter({
         const totalSimsSold = memberSales.reduce((sum, s) => sum + s.simsSold, 0);
         const totalFtthSold = memberSales.reduce((sum, s) => sum + s.ftthSold, 0);
         
+        let employeeData = employee ? { ...employee, purseId: purseIdMap.get(employee.id) || null } : undefined;
+        
+        if (!employeeData) {
+          const purseId = purseIdMap.get(assignment.employeeId);
+          const master = purseId ? masterByPurseId.get(purseId) : null;
+          if (master) {
+            employeeData = {
+              id: assignment.employeeId,
+              name: master.name,
+              designation: master.designation,
+              purseId: master.purseId,
+              role: 'SALES_STAFF',
+            };
+          }
+        }
+        
         return {
           ...assignment,
-          employee: employee ? { ...employee, purseId: purseIdMap.get(employee.id) || null } : undefined,
+          employee: employeeData,
           actualSimSold: totalSimsSold,
           actualFtthSold: totalFtthSold,
           salesEntries: memberSales,
         };
       });
+      
+      for (const purseId of assignedTeamPurseIds) {
+        const alreadyIncluded = teamWithAllocations.some(t => t.employee?.purseId === purseId);
+        if (!alreadyIncluded) {
+          const master = masterByPurseId.get(purseId);
+          if (master) {
+            teamWithAllocations.push({
+              id: `temp-${purseId}`,
+              eventId: input.id,
+              employeeId: master.linkedEmployeeId || purseId,
+              simTarget: 0,
+              ftthTarget: 0,
+              simSold: 0,
+              ftthSold: 0,
+              assignedBy: eventResult[0].createdBy,
+              assignedAt: new Date(),
+              updatedAt: new Date(),
+              employee: {
+                id: master.linkedEmployeeId || purseId,
+                name: master.name,
+                designation: master.designation,
+                purseId: master.purseId,
+                role: 'SALES_STAFF',
+              },
+              actualSimSold: 0,
+              actualFtthSold: 0,
+              salesEntries: [],
+            } as any);
+          }
+        }
+      }
       
       const subtasksWithAssignees = subtasks.map(subtask => {
         const emp = subtask.assignedTo ? teamMembers.find(e => e.id === subtask.assignedTo) : undefined;
@@ -950,6 +1110,87 @@ export const eventsRouter = createTRPCRouter({
       });
 
       return result[0];
+    }),
+
+  updateTaskProgress: publicProcedure
+    .input(z.object({
+      eventId: z.string().uuid(),
+      taskType: z.enum(['SIM', 'FTTH', 'EB', 'LEASE', 'BTS_DOWN', 'FTTH_DOWN', 'ROUTE_FAIL', 'OFC_FAIL']),
+      increment: z.number().int().default(1),
+      updatedBy: z.string().uuid(),
+    }))
+    .mutation(async ({ input }) => {
+      console.log("Updating task progress:", input);
+      
+      const event = await db.select().from(events).where(eq(events.id, input.eventId));
+      if (!event[0]) throw new Error("Event not found");
+      
+      const columnMap: Record<string, keyof typeof events> = {
+        'EB': 'ebCompleted',
+        'LEASE': 'leaseCompleted',
+        'BTS_DOWN': 'btsDownCompleted',
+        'FTTH_DOWN': 'ftthDownCompleted',
+        'ROUTE_FAIL': 'routeFailCompleted',
+        'OFC_FAIL': 'ofcFailCompleted',
+      };
+      
+      const targetMap: Record<string, keyof typeof events> = {
+        'EB': 'targetEb',
+        'LEASE': 'targetLease',
+        'BTS_DOWN': 'targetBtsDown',
+        'FTTH_DOWN': 'targetFtthDown',
+        'ROUTE_FAIL': 'targetRouteFail',
+        'OFC_FAIL': 'targetOfcFail',
+      };
+      
+      if (input.taskType === 'SIM' || input.taskType === 'FTTH') {
+        throw new Error("SIM and FTTH progress is tracked through sales entries");
+      }
+      
+      const completedColumn = columnMap[input.taskType];
+      const targetColumn = targetMap[input.taskType];
+      
+      if (!completedColumn || !targetColumn) {
+        throw new Error("Invalid task type");
+      }
+      
+      const currentCompleted = (event[0] as any)[completedColumn] || 0;
+      const target = (event[0] as any)[targetColumn] || 0;
+      const newCompleted = Math.min(currentCompleted + input.increment, target);
+      
+      const result = await db.update(events)
+        .set({ [completedColumn]: newCompleted, updatedAt: new Date() } as any)
+        .where(eq(events.id, input.eventId))
+        .returning();
+      
+      await db.insert(auditLogs).values({
+        action: 'UPDATE_TASK_PROGRESS',
+        entityType: 'EVENT',
+        entityId: input.eventId,
+        performedBy: input.updatedBy,
+        details: { taskType: input.taskType, increment: input.increment, newCompleted },
+      });
+      
+      return result[0];
+    }),
+
+  getTaskProgress: publicProcedure
+    .input(z.object({ eventId: z.string().uuid() }))
+    .query(async ({ input }) => {
+      const event = await db.select().from(events).where(eq(events.id, input.eventId));
+      if (!event[0]) throw new Error("Event not found");
+      
+      const e = event[0];
+      return {
+        sim: { target: e.allocatedSim || e.targetSim, completed: 0 },
+        ftth: { target: e.allocatedFtth || e.targetFtth, completed: 0 },
+        eb: { target: e.targetEb, completed: e.ebCompleted },
+        lease: { target: e.targetLease, completed: e.leaseCompleted },
+        btsDown: { target: e.targetBtsDown, completed: e.btsDownCompleted },
+        ftthDown: { target: e.targetFtthDown, completed: e.ftthDownCompleted },
+        routeFail: { target: e.targetRouteFail, completed: e.routeFailCompleted },
+        ofcFail: { target: e.targetOfcFail, completed: e.ofcFailCompleted },
+      };
     }),
 
   createSubtask: publicProcedure
