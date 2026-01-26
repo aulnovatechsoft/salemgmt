@@ -39,13 +39,6 @@ jobs:
             # 🔑 IMPORTANT: Load Bun into PATH
             export PATH="$HOME/.bun/bin:$PATH"
 
-            echo "📥 Installing dependencies..."
-            bun --version
-            bun install
-
-            echo "⚙️ Ensuring PM2 is installed..."
-            npm install -g pm2 || true
-
             echo "♻️ Restarting application with PM2..."
             pm2 stop salesmgmt-backend || true
             pm2 delete salesmgmt-backend || true
