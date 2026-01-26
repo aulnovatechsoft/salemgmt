@@ -39,8 +39,8 @@ jobs:
           # cp .env .                    # already there, but explicit
 
           # Optional: if you want .env inside build/ or dist/ instead
-          cp .env build/
           cp -r dist/. build/dist/
+          cp .env build/
 
       - name: Deploy build/ and dist/ + .env to server
         uses: appleboy/scp-action@master
