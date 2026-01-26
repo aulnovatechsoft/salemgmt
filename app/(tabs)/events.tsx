@@ -25,7 +25,7 @@ export default function EventsScreen() {
   
   const updateStatusMutation = trpc.events.updateEventStatus.useMutation({
     onSuccess: () => {
-      Alert.alert('Success', 'Work activated successfully! Team members can now submit sales.');
+      Alert.alert('Success', 'Task activated successfully! Team members can now submit sales.');
       refetchEvents?.();
     },
     onError: (error) => {
@@ -36,8 +36,8 @@ export default function EventsScreen() {
   const handleActivateEvent = (eventId: string) => {
     if (!employee?.id) return;
     Alert.alert(
-      'Activate Work?',
-      'This will make the work active and visible to team members. Sales can be submitted once activated.',
+      'Activate Task?',
+      'This will make the task active and visible to team members. Sales can be submitted once activated.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -141,7 +141,7 @@ export default function EventsScreen() {
     <>
       <Stack.Screen 
         options={{ 
-          title: 'Works',
+          title: 'Tasks',
           headerStyle: {
             backgroundColor: Colors.light.primary,
           },
@@ -167,7 +167,7 @@ export default function EventsScreen() {
           <Search size={20} color={Colors.light.textSecondary} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search works..."
+            placeholder="Search tasks..."
             value={searchQuery}
             onChangeText={setSearchQuery}
           />
@@ -178,7 +178,7 @@ export default function EventsScreen() {
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <FileText size={18} color="#78909C" />
-                <Text style={styles.sectionTitle}>Draft Works ({draftEvents.length})</Text>
+                <Text style={styles.sectionTitle}>Draft Tasks ({draftEvents.length})</Text>
               </View>
               {draftEvents.map(event => (
                 <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} onActivate={handleActivateEvent} />
@@ -190,7 +190,7 @@ export default function EventsScreen() {
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Play size={18} color="#2E7D32" />
-                <Text style={styles.sectionTitle}>Active Works ({activeEvents.length})</Text>
+                <Text style={styles.sectionTitle}>Active Tasks ({activeEvents.length})</Text>
               </View>
               {activeEvents.map(event => (
                 <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
@@ -202,7 +202,7 @@ export default function EventsScreen() {
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Pause size={18} color="#EF6C00" />
-                <Text style={styles.sectionTitle}>Paused Works ({pausedEvents.length})</Text>
+                <Text style={styles.sectionTitle}>Paused Tasks ({pausedEvents.length})</Text>
               </View>
               {pausedEvents.map(event => (
                 <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
@@ -214,7 +214,7 @@ export default function EventsScreen() {
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Calendar size={18} color="#7B1FA2" />
-                <Text style={styles.sectionTitle}>Upcoming Works ({upcomingEvents.length})</Text>
+                <Text style={styles.sectionTitle}>Upcoming Tasks ({upcomingEvents.length})</Text>
               </View>
               {upcomingEvents.map(event => (
                 <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
@@ -226,7 +226,7 @@ export default function EventsScreen() {
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <CheckCircle size={18} color="#1565C0" />
-                <Text style={styles.sectionTitle}>Completed Works ({completedEvents.length})</Text>
+                <Text style={styles.sectionTitle}>Completed Tasks ({completedEvents.length})</Text>
               </View>
               {completedEvents.map(event => (
                 <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
@@ -238,7 +238,7 @@ export default function EventsScreen() {
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Calendar size={18} color="#546E7A" />
-                <Text style={styles.sectionTitle}>Past Due Works ({pastEvents.length})</Text>
+                <Text style={styles.sectionTitle}>Past Due Tasks ({pastEvents.length})</Text>
               </View>
               {pastEvents.map(event => (
                 <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
@@ -250,7 +250,7 @@ export default function EventsScreen() {
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <XCircle size={18} color="#C62828" />
-                <Text style={styles.sectionTitle}>Cancelled Works ({cancelledEvents.length})</Text>
+                <Text style={styles.sectionTitle}>Cancelled Tasks ({cancelledEvents.length})</Text>
               </View>
               {cancelledEvents.map(event => (
                 <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
@@ -261,11 +261,11 @@ export default function EventsScreen() {
           {filteredEvents.length === 0 && (
             <View style={styles.emptyState}>
               <Calendar size={64} color={Colors.light.textSecondary} />
-              <Text style={styles.emptyTitle}>No Works Found</Text>
+              <Text style={styles.emptyTitle}>No Tasks Found</Text>
               <Text style={styles.emptySubtitle}>
                 {canCreateEvents(employee?.role || 'SALES_STAFF')
-                  ? 'Tap the + button to create your first work'
-                  : 'Check back later for upcoming works'}
+                  ? 'Tap the + button to create your first task'
+                  : 'Check back later for upcoming tasks'}
               </Text>
             </View>
           )}
@@ -388,7 +388,7 @@ function EventCard({ event, getDisplayStatus, canEdit, onActivate }: {
           </TouchableOpacity>
           <TouchableOpacity style={styles.quickActionButtonPrimary} onPress={handleActivate}>
             <Zap size={16} color="#fff" />
-            <Text style={styles.quickActionTextPrimary}>Activate Work</Text>
+            <Text style={styles.quickActionTextPrimary}>Activate Task</Text>
           </TouchableOpacity>
         </View>
       )}

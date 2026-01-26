@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
-import { db, issues, auditLogs, employees, events } from "@/backend/db";
-import { notifyIssueRaised, notifyIssueResolved, notifyIssueStatusChanged } from "@/backend/services/notification.service";
+import { db, issues, auditLogs } from "@/backend/db";
 
 export const issuesRouter = createTRPCRouter({
   getAll: publicProcedure
@@ -91,15 +90,6 @@ export const issuesRouter = createTRPCRouter({
         },
       });
 
-      // Notify escalated person about the issue
-      if (input.escalatedTo) {
-        const raisedByEmployee = await db.select().from(employees).where(eq(employees.id, input.raisedBy));
-        const event = await db.select().from(events).where(eq(events.id, input.eventId));
-        const raisedByName = raisedByEmployee[0]?.name || 'Team Member';
-        const eventName = event[0]?.name || 'Unknown Event';
-        await notifyIssueRaised(input.escalatedTo, result[0].id, input.type, eventName, raisedByName);
-      }
-
       return result[0];
     }),
 
@@ -152,26 +142,6 @@ export const issuesRouter = createTRPCRouter({
         details: { status: input.status },
       });
 
-      // Notify issue raiser when resolved
-      if ((input.status === 'RESOLVED' || input.status === 'CLOSED') && existing[0].raisedBy !== input.updatedBy) {
-        const updatedByEmployee = await db.select().from(employees).where(eq(employees.id, input.updatedBy));
-        const resolvedByName = updatedByEmployee[0]?.name || 'Manager';
-        await notifyIssueResolved(existing[0].raisedBy, input.id, existing[0].type, resolvedByName);
-      } else if (input.status !== 'RESOLVED' && input.status !== 'CLOSED') {
-        // Notify about status change
-        const updatedByEmployee = await db.select().from(employees).where(eq(employees.id, input.updatedBy));
-        const changedByName = updatedByEmployee[0]?.name || 'Manager';
-        
-        // Notify the person who raised the issue
-        if (existing[0].raisedBy !== input.updatedBy) {
-          await notifyIssueStatusChanged(existing[0].raisedBy, input.id, input.status, changedByName);
-        }
-        // Also notify escalated person if different
-        if (existing[0].escalatedTo && existing[0].escalatedTo !== input.updatedBy && existing[0].escalatedTo !== existing[0].raisedBy) {
-          await notifyIssueStatusChanged(existing[0].escalatedTo, input.id, input.status, changedByName);
-        }
-      }
-
       return result[0];
     }),
 
@@ -216,13 +186,6 @@ export const issuesRouter = createTRPCRouter({
         performedBy: input.escalatedBy,
         details: { escalatedTo: input.escalatedTo },
       });
-
-      // Notify the new escalated person
-      const escalatedByEmployee = await db.select().from(employees).where(eq(employees.id, input.escalatedBy));
-      const event = await db.select().from(events).where(eq(events.id, existing[0].eventId));
-      const escalatedByName = escalatedByEmployee[0]?.name || 'Manager';
-      const eventName = event[0]?.name || 'Unknown Event';
-      await notifyIssueRaised(input.escalatedTo, input.id, existing[0].type, eventName, escalatedByName);
 
       return result[0];
     }),

@@ -1,11 +1,11 @@
-import postgres from 'postgres';
+import postgres from "postgres";
 
 const connectionString = process.env.DATABASE_URL!;
 
 async function createTables() {
   const sql = postgres(connectionString, { ssl: false });
 
-  console.log('Creating database tables...');
+  console.log("Creating database tables...");
 
   try {
     await sql.unsafe(`
@@ -16,9 +16,13 @@ async function createTables() {
       END $user_role$;
     `);
 
-    await sql.unsafe(`
+    await sql
+      .unsafe(
+        `
       ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'SD_JTO';
-    `).catch(() => {});
+    `,
+      )
+      .catch(() => {});
 
     await sql`
       DO $bsnl$ BEGIN
@@ -98,7 +102,7 @@ async function createTables() {
       END $$;
     `;
 
-    console.log('Enums created successfully');
+    console.log("Enums created successfully");
 
     await sql`
       CREATE TABLE IF NOT EXISTS employees (
@@ -118,7 +122,7 @@ async function createTables() {
         updated_at TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    console.log('employees table created');
+    console.log("employees table created");
 
     await sql`
       CREATE TABLE IF NOT EXISTS events (
@@ -142,7 +146,7 @@ async function createTables() {
         updated_at TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    console.log('events table created');
+    console.log("events table created");
 
     await sql`
       CREATE TABLE IF NOT EXISTS sales_reports (
@@ -163,7 +167,7 @@ async function createTables() {
         updated_at TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    console.log('sales_reports table created');
+    console.log("sales_reports table created");
 
     await sql`
       CREATE TABLE IF NOT EXISTS resources (
@@ -177,8 +181,8 @@ async function createTables() {
         updated_at TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    
-    console.log('resources table created');
+
+    console.log("resources table created");
 
     await sql`
       CREATE TABLE IF NOT EXISTS issues (
@@ -196,7 +200,7 @@ async function createTables() {
         updated_at TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    console.log('issues table created');
+    console.log("issues table created");
 
     await sql`
       CREATE TABLE IF NOT EXISTS audit_logs (
@@ -209,7 +213,7 @@ async function createTables() {
         timestamp TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    console.log('audit_logs table created');
+    console.log("audit_logs table created");
 
     await sql`
       CREATE TABLE IF NOT EXISTS otp_verifications (
@@ -221,7 +225,7 @@ async function createTables() {
         created_at TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    console.log('otp_verifications table created');
+    console.log("otp_verifications table created");
 
     await sql`
       CREATE TABLE IF NOT EXISTS event_assignments (
@@ -238,7 +242,7 @@ async function createTables() {
         UNIQUE(event_id, employee_id)
       );
     `;
-    console.log('event_assignments table created');
+    console.log("event_assignments table created");
 
     // Add columns if they don't exist (for existing databases)
     try {
@@ -249,9 +253,9 @@ async function createTables() {
       await sql`ALTER TABLE event_assignments ADD COLUMN IF NOT EXISTS assigned_by UUID REFERENCES employees(id)`;
       await sql`ALTER TABLE event_assignments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW() NOT NULL`;
     } catch (e) {
-      console.log('event_assignments columns may already exist');
+      console.log("event_assignments columns may already exist");
     }
-    console.log('event_assignments columns updated');
+    console.log("event_assignments columns updated");
 
     await sql`
       CREATE TABLE IF NOT EXISTS event_sales_entries (
@@ -270,7 +274,7 @@ async function createTables() {
         created_at TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    console.log('event_sales_entries table created');
+    console.log("event_sales_entries table created");
 
     await sql`CREATE INDEX IF NOT EXISTS idx_event_sales_entries_event ON event_sales_entries(event_id);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_event_sales_entries_employee ON event_sales_entries(employee_id);`;
@@ -285,7 +289,7 @@ async function createTables() {
         allocated_at TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    console.log('resource_allocations table created');
+    console.log("resource_allocations table created");
 
     await sql`
       CREATE TABLE IF NOT EXISTS roles (
@@ -297,7 +301,7 @@ async function createTables() {
         created_at TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    console.log('roles table created');
+    console.log("roles table created");
 
     await sql`
       CREATE TABLE IF NOT EXISTS circles (
@@ -308,13 +312,12 @@ async function createTables() {
         created_at TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    console.log('circles table created');
+    console.log("circles table created");
 
     await sql`CREATE INDEX IF NOT EXISTS idx_employees_email ON employees(email);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_employees_phone ON employees(phone);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_employees_role ON employees(role);`;
-    
-    
+
     await sql`CREATE INDEX IF NOT EXISTS idx_events_created_by ON events(created_by);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_events_dates ON events(start_date, end_date);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_sales_reports_event ON sales_reports(event_id);`;
@@ -327,9 +330,9 @@ async function createTables() {
       await sql`ALTER TABLE sales_reports ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP`;
       await sql`ALTER TABLE sales_reports ADD COLUMN IF NOT EXISTS review_remarks TEXT`;
       await sql`CREATE INDEX IF NOT EXISTS idx_sales_reports_status ON sales_reports(status);`;
-      console.log('sales_reports approval columns added');
+      console.log("sales_reports approval columns added");
     } catch (e) {
-      console.log('sales_reports approval columns may already exist');
+      console.log("sales_reports approval columns may already exist");
     }
     await sql`CREATE INDEX IF NOT EXISTS idx_issues_event ON issues(event_id);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);`;
@@ -337,17 +340,37 @@ async function createTables() {
     await sql`CREATE INDEX IF NOT EXISTS idx_audit_logs_performed_by ON audit_logs(performed_by);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_otp_identifier ON otp_verifications(identifier);`;
 
-    console.log('Indexes created successfully');
+    console.log("Indexes created successfully");
 
     const circles = [
-      'ANDAMAN_NICOBAR', 'ANDHRA_PRADESH', 'ASSAM', 'BIHAR', 'CHHATTISGARH',
-      'GUJARAT', 'HARYANA', 'HIMACHAL_PRADESH', 'JAMMU_KASHMIR', 'JHARKHAND',
-      'KARNATAKA', 'KERALA', 'MADHYA_PRADESH', 'MAHARASHTRA', 'NORTH_EAST_I',
-      'NORTH_EAST_II', 'ODISHA', 'PUNJAB', 'RAJASTHAN', 'TAMIL_NADU',
-      'TELANGANA', 'UTTARAKHAND', 'UTTAR_PRADESH_EAST', 'UTTAR_PRADESH_WEST', 'WEST_BENGAL'
+      "ANDAMAN_NICOBAR",
+      "ANDHRA_PRADESH",
+      "ASSAM",
+      "BIHAR",
+      "CHHATTISGARH",
+      "GUJARAT",
+      "HARYANA",
+      "HIMACHAL_PRADESH",
+      "JAMMU_KASHMIR",
+      "JHARKHAND",
+      "KARNATAKA",
+      "KERALA",
+      "MADHYA_PRADESH",
+      "MAHARASHTRA",
+      "NORTH_EAST_I",
+      "NORTH_EAST_II",
+      "ODISHA",
+      "PUNJAB",
+      "RAJASTHAN",
+      "TAMIL_NADU",
+      "TELANGANA",
+      "UTTARAKHAND",
+      "UTTAR_PRADESH_EAST",
+      "UTTAR_PRADESH_WEST",
+      "WEST_BENGAL",
     ];
-    const resourceTypes = ['SIM', 'FTTH'];
-    
+    const resourceTypes = ["SIM", "FTTH"];
+
     for (const resourceType of resourceTypes) {
       for (const circleVal of circles) {
         await sql`
@@ -357,15 +380,15 @@ async function createTables() {
         `;
       }
     }
-    console.log('Initial resources seeded');
+    console.log("Initial resources seeded");
 
     const rolesData = [
-      { value: 'GM', label: 'GM (Multi-Circle)', hierarchy: 6 },
-      { value: 'CGM', label: 'CGM (Circle)', hierarchy: 5 },
-      { value: 'DGM', label: 'DGM (Zone)', hierarchy: 4 },
-      { value: 'AGM', label: 'AGM (Team/Event)', hierarchy: 3 },
-      { value: 'SD_JTO', label: 'SD/JTO', hierarchy: 2 },
-      { value: 'SALES_STAFF', label: 'Sales Staff', hierarchy: 1 },
+      { value: "GM", label: "GM (Multi-Circle)", hierarchy: 6 },
+      { value: "CGM", label: "CGM (Circle)", hierarchy: 5 },
+      { value: "DGM", label: "DGM (Zone)", hierarchy: 4 },
+      { value: "AGM", label: "AGM (Team/Event)", hierarchy: 3 },
+      { value: "SD_JTO", label: "SD/JTO", hierarchy: 2 },
+      { value: "SALES_STAFF", label: "Sales Staff", hierarchy: 1 },
     ];
 
     for (const role of rolesData) {
@@ -375,34 +398,34 @@ async function createTables() {
         ON CONFLICT (value) DO UPDATE SET label = ${role.label}, hierarchy = ${role.hierarchy};
       `;
     }
-    console.log('Initial roles seeded');
+    console.log("Initial roles seeded");
 
     const circlesData = [
-      { value: 'ANDAMAN_NICOBAR', label: 'Andaman & Nicobar' },
-      { value: 'ANDHRA_PRADESH', label: 'Andhra Pradesh' },
-      { value: 'ASSAM', label: 'Assam' },
-      { value: 'BIHAR', label: 'Bihar' },
-      { value: 'CHHATTISGARH', label: 'Chhattisgarh' },
-      { value: 'GUJARAT', label: 'Gujarat' },
-      { value: 'HARYANA', label: 'Haryana' },
-      { value: 'HIMACHAL_PRADESH', label: 'Himachal Pradesh' },
-      { value: 'JAMMU_KASHMIR', label: 'Jammu & Kashmir' },
-      { value: 'JHARKHAND', label: 'Jharkhand' },
-      { value: 'KARNATAKA', label: 'Karnataka' },
-      { value: 'KERALA', label: 'Kerala' },
-      { value: 'MADHYA_PRADESH', label: 'Madhya Pradesh' },
-      { value: 'MAHARASHTRA', label: 'Maharashtra' },
-      { value: 'NORTH_EAST_I', label: 'North East-I' },
-      { value: 'NORTH_EAST_II', label: 'North East-II' },
-      { value: 'ODISHA', label: 'Odisha' },
-      { value: 'PUNJAB', label: 'Punjab' },
-      { value: 'RAJASTHAN', label: 'Rajasthan' },
-      { value: 'TAMIL_NADU', label: 'Tamil Nadu' },
-      { value: 'TELANGANA', label: 'Telangana' },
-      { value: 'UTTARAKHAND', label: 'Uttarakhand' },
-      { value: 'UTTAR_PRADESH_EAST', label: 'Uttar Pradesh (East)' },
-      { value: 'UTTAR_PRADESH_WEST', label: 'Uttar Pradesh (West)' },
-      { value: 'WEST_BENGAL', label: 'West Bengal' },
+      { value: "ANDAMAN_NICOBAR", label: "Andaman & Nicobar" },
+      { value: "ANDHRA_PRADESH", label: "Andhra Pradesh" },
+      { value: "ASSAM", label: "Assam" },
+      { value: "BIHAR", label: "Bihar" },
+      { value: "CHHATTISGARH", label: "Chhattisgarh" },
+      { value: "GUJARAT", label: "Gujarat" },
+      { value: "HARYANA", label: "Haryana" },
+      { value: "HIMACHAL_PRADESH", label: "Himachal Pradesh" },
+      { value: "JAMMU_KASHMIR", label: "Jammu & Kashmir" },
+      { value: "JHARKHAND", label: "Jharkhand" },
+      { value: "KARNATAKA", label: "Karnataka" },
+      { value: "KERALA", label: "Kerala" },
+      { value: "MADHYA_PRADESH", label: "Madhya Pradesh" },
+      { value: "MAHARASHTRA", label: "Maharashtra" },
+      { value: "NORTH_EAST_I", label: "North East-I" },
+      { value: "NORTH_EAST_II", label: "North East-II" },
+      { value: "ODISHA", label: "Odisha" },
+      { value: "PUNJAB", label: "Punjab" },
+      { value: "RAJASTHAN", label: "Rajasthan" },
+      { value: "TAMIL_NADU", label: "Tamil Nadu" },
+      { value: "TELANGANA", label: "Telangana" },
+      { value: "UTTARAKHAND", label: "Uttarakhand" },
+      { value: "UTTAR_PRADESH_EAST", label: "Uttar Pradesh (East)" },
+      { value: "UTTAR_PRADESH_WEST", label: "Uttar Pradesh (West)" },
+      { value: "WEST_BENGAL", label: "West Bengal" },
     ];
 
     for (const circle of circlesData) {
@@ -412,7 +435,7 @@ async function createTables() {
         ON CONFLICT (value) DO UPDATE SET label = ${circle.label};
       `;
     }
-    console.log('Initial circles seeded');
+    console.log("Initial circles seeded");
 
     await sql`
       CREATE TABLE IF NOT EXISTS division_master (
@@ -422,7 +445,7 @@ async function createTables() {
         created_at TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    console.log('division_master table created');
+    console.log("division_master table created");
 
     await sql`
       CREATE TABLE IF NOT EXISTS event_subtasks (
@@ -441,68 +464,68 @@ async function createTables() {
         updated_at TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    console.log('event_subtasks table created');
+    console.log("event_subtasks table created");
 
     await sql`CREATE INDEX IF NOT EXISTS idx_event_subtasks_event ON event_subtasks(event_id);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_event_subtasks_assigned ON event_subtasks(assigned_to);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_event_subtasks_status ON event_subtasks(status);`;
 
     const divisionsData = [
-      { id: 1, name: 'Commercial' },
-      { id: 2, name: 'Marketing' },
-      { id: 3, name: 'Enterprise Business' },
-      { id: 4, name: 'Retail Sales' },
-      { id: 5, name: 'Business Development' },
-      { id: 6, name: 'Customer Service' },
-      { id: 7, name: 'Revenue & Billing' },
-      { id: 8, name: 'Network Operations' },
-      { id: 9, name: 'Transmission' },
-      { id: 10, name: 'Switching' },
-      { id: 11, name: 'Mobile Services' },
-      { id: 12, name: 'Fixed Line' },
-      { id: 13, name: 'FTTH / Broadband' },
-      { id: 14, name: 'IP / MPLS' },
-      { id: 15, name: 'NOC' },
-      { id: 16, name: 'RF / Radio Planning' },
-      { id: 17, name: 'Planning' },
-      { id: 18, name: 'Project Management' },
-      { id: 19, name: 'Infrastructure Development' },
-      { id: 20, name: 'Optical Fiber (OFC)' },
-      { id: 21, name: 'Civil Works' },
-      { id: 22, name: 'Electrical' },
-      { id: 23, name: 'Power & Energy' },
-      { id: 24, name: 'IT' },
-      { id: 25, name: 'Software / Applications' },
-      { id: 26, name: 'Data Center' },
-      { id: 27, name: 'Cyber Security' },
-      { id: 28, name: 'ERP / SAP' },
-      { id: 29, name: 'Digital Services' },
-      { id: 30, name: 'HR / Personnel' },
-      { id: 31, name: 'Administration' },
-      { id: 32, name: 'Establishment' },
-      { id: 33, name: 'Training' },
-      { id: 34, name: 'ALTTC' },
-      { id: 35, name: 'Vigilance' },
-      { id: 36, name: 'Legal' },
-      { id: 37, name: 'Finance' },
-      { id: 38, name: 'Accounts' },
-      { id: 39, name: 'Audit' },
-      { id: 40, name: 'Budget & Costing' },
-      { id: 41, name: 'Revenue Assurance' },
-      { id: 42, name: 'Inspection' },
-      { id: 43, name: 'Quality Assurance' },
-      { id: 44, name: 'Performance Monitoring' },
-      { id: 45, name: 'Stores' },
-      { id: 46, name: 'Procurement' },
-      { id: 47, name: 'Inventory' },
-      { id: 48, name: 'Transport' },
-      { id: 49, name: 'Security' },
-      { id: 50, name: 'Corporate Office' },
-      { id: 51, name: 'ITPC' },
-      { id: 52, name: 'CN-TX' },
-      { id: 53, name: 'Telecom Factory' },
-      { id: 54, name: 'Special Projects' },
-      { id: 55, name: 'R&D / Research' },
+      { id: 1, name: "Commercial" },
+      { id: 2, name: "Marketing" },
+      { id: 3, name: "Enterprise Business" },
+      { id: 4, name: "Retail Sales" },
+      { id: 5, name: "Business Development" },
+      { id: 6, name: "Customer Service" },
+      { id: 7, name: "Revenue & Billing" },
+      { id: 8, name: "Network Operations" },
+      { id: 9, name: "Transmission" },
+      { id: 10, name: "Switching" },
+      { id: 11, name: "Mobile Services" },
+      { id: 12, name: "Fixed Line" },
+      { id: 13, name: "FTTH / Broadband" },
+      { id: 14, name: "IP / MPLS" },
+      { id: 15, name: "NOC" },
+      { id: 16, name: "RF / Radio Planning" },
+      { id: 17, name: "Planning" },
+      { id: 18, name: "Project Management" },
+      { id: 19, name: "Infrastructure Development" },
+      { id: 20, name: "Optical Fiber (OFC)" },
+      { id: 21, name: "Civil Works" },
+      { id: 22, name: "Electrical" },
+      { id: 23, name: "Power & Energy" },
+      { id: 24, name: "IT" },
+      { id: 25, name: "Software / Applications" },
+      { id: 26, name: "Data Center" },
+      { id: 27, name: "Cyber Security" },
+      { id: 28, name: "ERP / SAP" },
+      { id: 29, name: "Digital Services" },
+      { id: 30, name: "HR / Personnel" },
+      { id: 31, name: "Administration" },
+      { id: 32, name: "Establishment" },
+      { id: 33, name: "Training" },
+      { id: 34, name: "ALTTC" },
+      { id: 35, name: "Vigilance" },
+      { id: 36, name: "Legal" },
+      { id: 37, name: "Finance" },
+      { id: 38, name: "Accounts" },
+      { id: 39, name: "Audit" },
+      { id: 40, name: "Budget & Costing" },
+      { id: 41, name: "Revenue Assurance" },
+      { id: 42, name: "Inspection" },
+      { id: 43, name: "Quality Assurance" },
+      { id: 44, name: "Performance Monitoring" },
+      { id: 45, name: "Stores" },
+      { id: 46, name: "Procurement" },
+      { id: 47, name: "Inventory" },
+      { id: 48, name: "Transport" },
+      { id: 49, name: "Security" },
+      { id: 50, name: "Corporate Office" },
+      { id: 51, name: "ITPC" },
+      { id: 52, name: "CN-TX" },
+      { id: 53, name: "Telecom Factory" },
+      { id: 54, name: "Special Projects" },
+      { id: 55, name: "R&D / Research" },
     ];
 
     for (const division of divisionsData) {
@@ -512,7 +535,7 @@ async function createTables() {
         ON CONFLICT (division_id) DO UPDATE SET division_name = ${division.name};
       `;
     }
-    console.log('Initial divisions seeded');
+    console.log("Initial divisions seeded");
 
     await sql`
       CREATE TABLE IF NOT EXISTS employee_master (
@@ -531,16 +554,16 @@ async function createTables() {
         updated_at TIMESTAMP DEFAULT NOW() NOT NULL
       );
     `;
-    console.log('employee_master table created');
+    console.log("employee_master table created");
 
     await sql`CREATE INDEX IF NOT EXISTS idx_employee_master_purse_id ON employee_master(purse_id);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_employee_master_reporting ON employee_master(reporting_purse_id);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_employee_master_linked ON employee_master(linked_employee_id);`;
 
-    console.log('All tables created successfully!');
+    console.log("All tables created successfully!");
     await sql.end();
   } catch (error) {
-    console.error('Error creating tables:', error);
+    console.error("Error creating tables:", error);
     await sql.end();
     throw error;
   }

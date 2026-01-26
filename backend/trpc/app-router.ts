@@ -10,7 +10,6 @@ import { rolesRouter } from "./routes/roles";
 import { circlesRouter } from "./routes/circles";
 import { divisionsRouter } from "./routes/divisions";
 import { adminRouter } from "./routes/admin";
-import { notificationsRouter } from "./routes/notifications";
 
 export const appRouter = createTRPCRouter({
   employees: employeesRouter,
@@ -24,7 +23,6 @@ export const appRouter = createTRPCRouter({
   circles: circlesRouter,
   divisions: divisionsRouter,
   admin: adminRouter,
-  notifications: notificationsRouter,
 });
 
 export type AppRouter = typeof appRouter;

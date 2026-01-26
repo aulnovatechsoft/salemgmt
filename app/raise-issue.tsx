@@ -102,13 +102,13 @@ export default function RaiseIssueScreen() {
       <ScrollView style={styles.container}>
         <View style={styles.form}>
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Select Work *</Text>
+            <Text style={styles.label}>Select Task *</Text>
             <TouchableOpacity 
               style={styles.picker}
               onPress={() => setShowEventPicker(!showEventPicker)}
             >
               <Text style={styles.pickerText}>
-                {selectedEvent ? selectedEvent.name : 'Choose a work'}
+                {selectedEvent ? selectedEvent.name : 'Choose a task'}
               </Text>
             </TouchableOpacity>
             {showEventPicker && (
