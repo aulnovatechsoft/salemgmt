@@ -8,6 +8,8 @@ if (!connectionString) {
   console.error("DATABASE_URL is not set");
 }
 
+console.log("Connecting to database:", connectionString?.replace(/:[^:@]+@/, ':***@'));
+
 const client = postgres(connectionString, {
   ssl: false,
   max: 10,

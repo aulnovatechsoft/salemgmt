@@ -32,16 +32,20 @@ export default function DashboardScreen() {
       if (isManagement) return true;
       
       const isAssignedToMe = e.assignedTo === employee?.id;
-      const isInMyTeam = Array.isArray(e.assignedTeam) && e.assignedTeam.includes(employee?.id || '');
+      const isCreatedByMe = e.createdBy === employee?.id;
+      const isInMyTeam = Array.isArray(e.assignedTeam) && (
+        e.assignedTeam.includes(employee?.id || '') || 
+        e.assignedTeam.includes(employee?.employeeNo || '')
+      );
       
       // SALES_STAFF only sees events they're specifically assigned to
       if (isSalesStaff) {
-        return isAssignedToMe || isInMyTeam;
+        return isAssignedToMe || isInMyTeam || isCreatedByMe;
       }
       
-      // SD_JTO sees circle events + assigned events
+      // SD_JTO sees circle events + assigned events + created events
       const isMyCircle = e.circle === employee?.circle;
-      return isMyCircle || isAssignedToMe || isInMyTeam;
+      return isMyCircle || isAssignedToMe || isInMyTeam || isCreatedByMe;
     });
     
     const totalSimsSold = salesReports.reduce((acc, r) => acc + r.simsSold, 0);
@@ -412,6 +416,15 @@ function CircularProgress({ percentage, size = 60, strokeWidth = 6, color }: { p
   );
 }
 
+function getInitials(name: string): string {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) {
+    return parts[0].substring(0, 2).toUpperCase();
+  }
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 function getDateStatus(startDate: Date, endDate: Date) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -471,18 +484,59 @@ function formatDateRange(startDate: Date, endDate: Date) {
   return `${formatDate(startDate)} - ${formatDate(endDate)}`;
 }
 
-function EventProgressMeter({ event, onPress, isCompleted }: { event: Event; onPress: () => void; isCompleted?: boolean }) {
+const TASK_TYPE_COLORS: Record<string, { bg: string; text: string }> = {
+  'SIM': { bg: '#E3F2FD', text: '#1565C0' },
+  'FTTH': { bg: '#E8F5E9', text: '#2E7D32' },
+  'LEASE_CIRCUIT': { bg: '#FFF3E0', text: '#EF6C00' },
+  'EB': { bg: '#F3E5F5', text: '#7B1FA2' },
+  'BTS_DOWN': { bg: '#FFEBEE', text: '#C62828' },
+  'FTTH_DOWN': { bg: '#FCE4EC', text: '#AD1457' },
+  'ROUTE_FAIL': { bg: '#FBE9E7', text: '#D84315' },
+  'OFC_FAIL': { bg: '#ECEFF1', text: '#546E7A' },
+};
+
+const TASK_TYPE_LABELS: Record<string, string> = {
+  'SIM': 'SIM',
+  'FTTH': 'FTTH',
+  'LEASE_CIRCUIT': 'Lease',
+  'EB': 'EB',
+  'BTS_DOWN': 'BTS-Down',
+  'FTTH_DOWN': 'FTTH-Down',
+  'ROUTE_FAIL': 'Route-Fail',
+  'OFC_FAIL': 'OFC-Fail',
+};
+
+function EventProgressMeter({ event, onPress, isCompleted }: { event: Event & { teamMembers?: { purseId: string; name: string; designation: string | null }[]; creatorName?: string | null; assigneeName?: string | null; targetEb?: number; targetLease?: number; ebCompleted?: number; leaseCompleted?: number }; onPress: () => void; isCompleted?: boolean }) {
   const simTarget = event.allocatedSim || event.targetSim || 0;
   const ftthTarget = event.allocatedFtth || event.targetFtth || 0;
+  const ebTarget = (event as any).targetEb || 0;
+  const leaseTarget = (event as any).targetLease || 0;
+  const btsDownTarget = (event as any).targetBtsDown || 0;
+  const ftthDownTarget = (event as any).targetFtthDown || 0;
+  const routeFailTarget = (event as any).targetRouteFail || 0;
+  const ofcFailTarget = (event as any).targetOfcFail || 0;
+  
   const simSold = event.simsSold || 0;
   const ftthSold = event.ftthSold || 0;
+  const ebCompleted = (event as any).ebCompleted || 0;
+  const leaseCompleted = (event as any).leaseCompleted || 0;
+  const btsDownCompleted = (event as any).btsDownCompleted || 0;
+  const ftthDownCompleted = (event as any).ftthDownCompleted || 0;
+  const routeFailCompleted = (event as any).routeFailCompleted || 0;
+  const ofcFailCompleted = (event as any).ofcFailCompleted || 0;
   
-  const totalTarget = simTarget + ftthTarget;
-  const totalSold = simSold + ftthSold;
+  const totalTarget = simTarget + ftthTarget + ebTarget + leaseTarget + btsDownTarget + ftthDownTarget + routeFailTarget + ofcFailTarget;
+  const totalSold = simSold + ftthSold + ebCompleted + leaseCompleted + btsDownCompleted + ftthDownCompleted + routeFailCompleted + ofcFailCompleted;
   const overallPercentage = totalTarget > 0 ? Math.round((totalSold / totalTarget) * 100) : 0;
   
   const simPercentage = simTarget > 0 ? Math.round((simSold / simTarget) * 100) : 0;
   const ftthPercentage = ftthTarget > 0 ? Math.round((ftthSold / ftthTarget) * 100) : 0;
+  const ebPercentage = ebTarget > 0 ? Math.round((ebCompleted / ebTarget) * 100) : 0;
+  const leasePercentage = leaseTarget > 0 ? Math.round((leaseCompleted / leaseTarget) * 100) : 0;
+  const btsDownPercentage = btsDownTarget > 0 ? Math.round((btsDownCompleted / btsDownTarget) * 100) : 0;
+  const ftthDownPercentage = ftthDownTarget > 0 ? Math.round((ftthDownCompleted / ftthDownTarget) * 100) : 0;
+  const routeFailPercentage = routeFailTarget > 0 ? Math.round((routeFailCompleted / routeFailTarget) * 100) : 0;
+  const ofcFailPercentage = ofcFailTarget > 0 ? Math.round((ofcFailCompleted / ofcFailTarget) * 100) : 0;
   
   const getProgressColor = (pct: number) => {
     if (pct >= 75) return '#2E7D32';
@@ -508,6 +562,10 @@ function EventProgressMeter({ event, onPress, isCompleted }: { event: Event; onP
         return <Clock size={12} color={dateStatus.color} />;
     }
   };
+
+  const taskTypes = event.category ? event.category.split(',').map(t => t.trim()) : [];
+  const teamMembers = (event as any).teamMembers || [];
+  const assigneeName = (event as any).assigneeName;
   
   return (
     <TouchableOpacity 
@@ -520,7 +578,23 @@ function EventProgressMeter({ event, onPress, isCompleted }: { event: Event; onP
       </View>
       
       <View style={styles.progressMeterContent}>
-        <Text style={styles.progressMeterTitle} numberOfLines={1}>{event.name}</Text>
+        <View style={styles.taskTypesRow}>
+          {taskTypes.slice(0, 4).map((type, idx) => {
+            const colors = TASK_TYPE_COLORS[type] || { bg: '#ECEFF1', text: '#546E7A' };
+            const label = TASK_TYPE_LABELS[type] || type;
+            return (
+              <View key={idx} style={[styles.taskTypeBadge, { backgroundColor: colors.bg }]}>
+                <Text style={[styles.taskTypeText, { color: colors.text }]}>{label}</Text>
+              </View>
+            );
+          })}
+          {taskTypes.length > 4 && (
+            <View style={[styles.taskTypeBadge, { backgroundColor: '#ECEFF1' }]}>
+              <Text style={[styles.taskTypeText, { color: '#546E7A' }]}>+{taskTypes.length - 4}</Text>
+            </View>
+          )}
+        </View>
+        
         <Text style={styles.progressMeterLocation} numberOfLines={1}>{event.location}</Text>
         
         <View style={styles.dateInfoContainer}>
@@ -534,22 +608,112 @@ function EventProgressMeter({ event, onPress, isCompleted }: { event: Event; onP
           </View>
         </View>
         
+        {(assigneeName || teamMembers.length > 0) && (
+          <View style={styles.assignedTeamRow}>
+            {assigneeName && (
+              <View style={[styles.memberAvatarCircle, { backgroundColor: '#1565C0' }]}>
+                <Text style={styles.memberAvatarText}>{getInitials(assigneeName)}</Text>
+              </View>
+            )}
+            {teamMembers.slice(0, 3).map((m: any, idx: number) => (
+              <View 
+                key={idx} 
+                style={[
+                  styles.memberAvatarCircle, 
+                  { backgroundColor: '#2E7D32', marginLeft: idx > 0 || assigneeName ? -6 : 0 }
+                ]}
+              >
+                <Text style={styles.memberAvatarText}>{getInitials(m.name)}</Text>
+              </View>
+            ))}
+            {teamMembers.length > 3 && (
+              <View style={[styles.memberAvatarCircle, { backgroundColor: '#78909C', marginLeft: -6 }]}>
+                <Text style={styles.memberAvatarText}>+{teamMembers.length - 3}</Text>
+              </View>
+            )}
+          </View>
+        )}
+        
         <View style={styles.progressBarsContainer}>
-          <View style={styles.progressBarRow}>
-            <Text style={styles.progressBarLabel}>SIM</Text>
-            <View style={styles.progressBarTrack}>
-              <View style={[styles.progressBarFill, { width: `${Math.min(simPercentage, 100)}%`, backgroundColor: Colors.light.primary }]} />
+          {simTarget > 0 && (
+            <View style={styles.progressBarRow}>
+              <Text style={styles.progressBarLabel}>SIM</Text>
+              <View style={styles.progressBarTrack}>
+                <View style={[styles.progressBarFill, { width: `${Math.min(simPercentage, 100)}%`, backgroundColor: Colors.light.primary }]} />
+              </View>
+              <Text style={styles.progressBarValue}>{simSold}/{simTarget}</Text>
             </View>
-            <Text style={styles.progressBarValue}>{simSold}/{simTarget}</Text>
-          </View>
+          )}
           
-          <View style={styles.progressBarRow}>
-            <Text style={styles.progressBarLabel}>FTTH</Text>
-            <View style={styles.progressBarTrack}>
-              <View style={[styles.progressBarFill, { width: `${Math.min(ftthPercentage, 100)}%`, backgroundColor: Colors.light.success }]} />
+          {ftthTarget > 0 && (
+            <View style={styles.progressBarRow}>
+              <Text style={styles.progressBarLabel}>FTTH</Text>
+              <View style={styles.progressBarTrack}>
+                <View style={[styles.progressBarFill, { width: `${Math.min(ftthPercentage, 100)}%`, backgroundColor: Colors.light.success }]} />
+              </View>
+              <Text style={styles.progressBarValue}>{ftthSold}/{ftthTarget}</Text>
             </View>
-            <Text style={styles.progressBarValue}>{ftthSold}/{ftthTarget}</Text>
-          </View>
+          )}
+          
+          {ebTarget > 0 && (
+            <View style={styles.progressBarRow}>
+              <Text style={styles.progressBarLabel}>EB</Text>
+              <View style={styles.progressBarTrack}>
+                <View style={[styles.progressBarFill, { width: `${Math.min(ebPercentage, 100)}%`, backgroundColor: '#7B1FA2' }]} />
+              </View>
+              <Text style={styles.progressBarValue}>{ebCompleted}/{ebTarget}</Text>
+            </View>
+          )}
+          
+          {leaseTarget > 0 && (
+            <View style={styles.progressBarRow}>
+              <Text style={styles.progressBarLabel}>Lease</Text>
+              <View style={styles.progressBarTrack}>
+                <View style={[styles.progressBarFill, { width: `${Math.min(leasePercentage, 100)}%`, backgroundColor: '#EF6C00' }]} />
+              </View>
+              <Text style={styles.progressBarValue}>{leaseCompleted}/{leaseTarget}</Text>
+            </View>
+          )}
+          
+          {btsDownTarget > 0 && (
+            <View style={styles.progressBarRow}>
+              <Text style={styles.progressBarLabel}>BTS</Text>
+              <View style={styles.progressBarTrack}>
+                <View style={[styles.progressBarFill, { width: `${Math.min(btsDownPercentage, 100)}%`, backgroundColor: '#C62828' }]} />
+              </View>
+              <Text style={styles.progressBarValue}>{btsDownCompleted}/{btsDownTarget}</Text>
+            </View>
+          )}
+          
+          {ftthDownTarget > 0 && (
+            <View style={styles.progressBarRow}>
+              <Text style={styles.progressBarLabel}>FD</Text>
+              <View style={styles.progressBarTrack}>
+                <View style={[styles.progressBarFill, { width: `${Math.min(ftthDownPercentage, 100)}%`, backgroundColor: '#AD1457' }]} />
+              </View>
+              <Text style={styles.progressBarValue}>{ftthDownCompleted}/{ftthDownTarget}</Text>
+            </View>
+          )}
+          
+          {routeFailTarget > 0 && (
+            <View style={styles.progressBarRow}>
+              <Text style={styles.progressBarLabel}>RF</Text>
+              <View style={styles.progressBarTrack}>
+                <View style={[styles.progressBarFill, { width: `${Math.min(routeFailPercentage, 100)}%`, backgroundColor: '#D84315' }]} />
+              </View>
+              <Text style={styles.progressBarValue}>{routeFailCompleted}/{routeFailTarget}</Text>
+            </View>
+          )}
+          
+          {ofcFailTarget > 0 && (
+            <View style={styles.progressBarRow}>
+              <Text style={styles.progressBarLabel}>OFC</Text>
+              <View style={styles.progressBarTrack}>
+                <View style={[styles.progressBarFill, { width: `${Math.min(ofcFailPercentage, 100)}%`, backgroundColor: '#546E7A' }]} />
+              </View>
+              <Text style={styles.progressBarValue}>{ofcFailCompleted}/{ofcFailTarget}</Text>
+            </View>
+          )}
         </View>
       </View>
       
@@ -784,6 +948,45 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     marginBottom: 4,
   },
+  taskTypesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginBottom: 4,
+  },
+  taskTypeBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  taskTypeText: {
+    fontSize: 10,
+    fontWeight: '600' as const,
+  },
+  assignedTeamRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  memberAvatarCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  memberAvatarText: {
+    fontSize: 10,
+    fontWeight: '700' as const,
+    color: '#FFFFFF',
+  },
+  assignedTeamText: {
+    fontSize: 11,
+    color: Colors.light.textSecondary,
+    flex: 1,
+  },
   dateInfoContainer: {
     marginBottom: 8,
   },
@@ -822,7 +1025,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600' as const,
     color: Colors.light.textSecondary,
-    width: 32,
+    width: 38,
   },
   progressBarTrack: {
     flex: 1,

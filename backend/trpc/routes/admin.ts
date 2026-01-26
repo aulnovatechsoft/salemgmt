@@ -1129,4 +1129,110 @@ export const adminRouter = createTRPCRouter({
         throw new Error('Failed to search team members. Please try again.');
       }
     }),
+
+  getTwoLevelSubordinates: publicProcedure
+    .input(z.object({
+      employeeId: z.string().uuid(),
+    }))
+    .query(async ({ input }) => {
+      try {
+        console.log("Fetching 2-level subordinates for:", input.employeeId);
+        
+        const employee = await db.select().from(employees)
+          .where(eq(employees.id, input.employeeId));
+        
+        if (!employee[0]?.employeeNo) {
+          return { subordinates: [], managerPurseId: null };
+        }
+        
+        const managerPurseId = employee[0].employeeNo;
+        
+        // Get Level 1 subordinates (direct reports)
+        const level1Reports = await db.select().from(employeeMaster)
+          .where(eq(employeeMaster.reportingPurseId, managerPurseId))
+          .orderBy(desc(employeeMaster.sortOrder));
+        
+        // Get Level 2 subordinates (reports of direct reports)
+        const level1PurseIds = level1Reports.map(r => r.purseId);
+        let level2Reports: typeof level1Reports = [];
+        
+        if (level1PurseIds.length > 0) {
+          level2Reports = await db.select().from(employeeMaster)
+            .where(inArray(employeeMaster.reportingPurseId, level1PurseIds))
+            .orderBy(desc(employeeMaster.sortOrder));
+        }
+        
+        // Get linked employee details for all
+        const allLinkedIds = [...level1Reports, ...level2Reports]
+          .filter(r => r.linkedEmployeeId)
+          .map(r => r.linkedEmployeeId!);
+        
+        const linkedEmployeeMap = new Map<string, any>();
+        if (allLinkedIds.length > 0) {
+          const linkedEmps = await db.select().from(employees)
+            .where(inArray(employees.id, allLinkedIds));
+          linkedEmps.forEach(emp => linkedEmployeeMap.set(emp.id, emp));
+        }
+        
+        // Get subordinate counts for each employee
+        const allPurseIds = [...level1PurseIds, ...level2Reports.map(r => r.purseId)];
+        const countMap = new Map<string, number>();
+        
+        if (allPurseIds.length > 0) {
+          const countResults = await db.select({
+            reportingPurseId: employeeMaster.reportingPurseId,
+            count: sql<number>`count(*)`,
+          })
+            .from(employeeMaster)
+            .where(inArray(employeeMaster.reportingPurseId, allPurseIds))
+            .groupBy(employeeMaster.reportingPurseId);
+          
+          countResults.forEach(r => countMap.set(r.reportingPurseId!, Number(r.count)));
+        }
+        
+        // Format subordinates with hierarchy structure
+        const formatSubordinate = (emp: typeof level1Reports[0], level: number) => {
+          const linkedEmployee = emp.linkedEmployeeId ? linkedEmployeeMap.get(emp.linkedEmployeeId) : null;
+          return {
+            id: emp.id,
+            purseId: emp.purseId,
+            name: emp.name,
+            designation: emp.designation,
+            circle: emp.circle,
+            zone: emp.zone,
+            division: emp.division,
+            officeName: emp.officeName,
+            isLinked: emp.isLinked,
+            level,
+            reportingPurseId: emp.reportingPurseId,
+            linkedEmployee: linkedEmployee ? {
+              id: linkedEmployee.id,
+              email: linkedEmployee.email,
+              phone: linkedEmployee.phone,
+              role: linkedEmployee.role,
+            } : null,
+            directReportsCount: countMap.get(emp.purseId) || 0,
+          };
+        };
+        
+        // Build hierarchical structure
+        const level1Formatted = level1Reports.map(emp => ({
+          ...formatSubordinate(emp, 1),
+          subordinates: level2Reports
+            .filter(l2 => l2.reportingPurseId === emp.purseId)
+            .map(l2 => formatSubordinate(l2, 2)),
+        }));
+        
+        console.log(`Found ${level1Reports.length} level-1 and ${level2Reports.length} level-2 subordinates`);
+        
+        return {
+          subordinates: level1Formatted,
+          managerPurseId,
+          totalCount: level1Reports.length + level2Reports.length,
+        };
+      } catch (error) {
+        console.error('Error fetching 2-level subordinates:', error);
+        throw new Error('Failed to fetch team hierarchy. Please try again.');
+      }
+    }),
 });
