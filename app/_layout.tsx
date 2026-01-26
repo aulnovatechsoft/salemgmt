@@ -9,7 +9,6 @@ import { AuthProvider } from "@/contexts/auth";
 import { AppProvider } from "@/contexts/app";
 import { trpc, trpcClient } from "@/lib/trpc";
 import Colors from "@/constants/colors";
-import { PushNotificationProvider } from "@/components/PushNotificationProvider";
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -42,7 +41,6 @@ function RootLayoutNav() {
       <Stack.Screen name="event-sales" options={{ headerShown: true }} />
       <Stack.Screen name="sales-approval" options={{ headerShown: true }} />
       <Stack.Screen name="resource-management" options={{ headerShown: true }} />
-      <Stack.Screen name="notifications" options={{ headerShown: false }} />
     </Stack>
   );
 }
@@ -57,11 +55,9 @@ export default function RootLayout() {
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
           <AppProvider>
-            <PushNotificationProvider>
-              <GestureHandlerRootView>
-                <RootLayoutNav />
-              </GestureHandlerRootView>
-            </PushNotificationProvider>
+            <GestureHandlerRootView>
+              <RootLayoutNav />
+            </GestureHandlerRootView>
           </AppProvider>
         </AuthProvider>
       </QueryClientProvider>

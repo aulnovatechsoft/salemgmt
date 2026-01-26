@@ -53,7 +53,7 @@ export default function AdminScreen() {
   const importEventsMutation = trpc.admin.importEvents.useMutation({
     onSuccess: (result) => {
       Alert.alert(
-        'Works Import Complete',
+        'Tasks Import Complete',
         `Imported: ${result.imported}\nUpdated: ${result.updated}\nErrors: ${result.errors.length}${result.errors.length > 0 ? '\n\nFirst errors:\n' + result.errors.slice(0, 3).join('\n') : ''}`,
         [{ text: 'OK' }]
       );
@@ -63,7 +63,7 @@ export default function AdminScreen() {
       trpcUtils.events.getAll.invalidate();
     },
     onError: (error) => {
-      Alert.alert('Works Import Error', error.message);
+      Alert.alert('Tasks Import Error', error.message);
     },
   });
   
@@ -405,7 +405,7 @@ export default function AdminScreen() {
       const parseWarning = parseErrors.length > 0 ? `\n\n${parseErrors.length} rows had issues and were skipped.` : '';
       
       Alert.alert(
-        'Confirm Works Import',
+        'Confirm Tasks Import',
         `Import ${data.length} events in ${totalBatches} batch(es)?${parseWarning}`,
         [
           { text: 'Cancel', style: 'cancel' },
@@ -447,7 +447,7 @@ export default function AdminScreen() {
               setImportingEvents(false);
               const parseNote = parseErrors.length > 0 ? `\nSkipped (parse errors): ${parseErrors.length}` : '';
               Alert.alert(
-                'Works Import Complete',
+                'Tasks Import Complete',
                 `Imported: ${totalImported}\nUpdated: ${totalUpdated}\nErrors: ${totalErrors}${parseNote}`,
                 [{ text: 'OK' }]
               );
@@ -584,14 +584,14 @@ export default function AdminScreen() {
           </View>
         )}
 
-        {/* Works Management Section */}
+        {/* Tasks Management Section */}
         <View style={styles.statsSection}>
-          <Text style={styles.sectionTitle}>Works Statistics</Text>
+          <Text style={styles.sectionTitle}>Tasks Statistics</Text>
           <View style={styles.statsRow}>
             <View style={styles.statCard}>
               <Calendar size={24} color={Colors.light.primary} />
               <Text style={styles.statValue}>{eventStats?.total || 0}</Text>
-              <Text style={styles.statLabel}>Total Works</Text>
+              <Text style={styles.statLabel}>Total Tasks</Text>
             </View>
             <View style={styles.statCard}>
               <CheckCircle size={24} color={Colors.light.success} />
@@ -612,15 +612,15 @@ export default function AdminScreen() {
             onPress={() => setShowEventsUploadSection(!showEventsUploadSection)}
           >
             <Calendar size={20} color={Colors.light.background} />
-            <Text style={styles.actionButtonText}>Import Works CSV</Text>
+            <Text style={styles.actionButtonText}>Import Tasks CSV</Text>
           </TouchableOpacity>
         </View>
 
         {showEventsUploadSection && (
           <View style={styles.uploadSection}>
-            <Text style={styles.uploadTitle}>Paste Works CSV Data</Text>
+            <Text style={styles.uploadTitle}>Paste Tasks CSV Data</Text>
             <Text style={styles.uploadHint}>
-              Required: Work Name, Location, Category{'\n'}
+              Required: Task Name, Location, Category{'\n'}
               Optional: Circle (auto-detected from location), Date Range, Zone, Key Insight{'\n'}
               Categories: Cultural, Religious, Sports, Exhibition, Fair, Festival, Agri-Tourism, Eco-Tourism, Trade/Religious
             </Text>
@@ -662,7 +662,7 @@ Harvest Fair,Bangalore,KARNATAKA,Agri-Tourism,2025-11-01 to 2025-11-05,Agricultu
                 onPress={handleEventsImport}
                 disabled={importingEvents}
               >
-                <Text style={styles.importBtnText}>{importingEvents ? 'Importing...' : 'Import Works'}</Text>
+                <Text style={styles.importBtnText}>{importingEvents ? 'Importing...' : 'Import Tasks'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -697,7 +697,7 @@ Harvest Fair,Bangalore,KARNATAKA,Agri-Tourism,2025-11-01 to 2025-11-05,Agricultu
             <Search size={18} color={Colors.light.textSecondary} />
             <TextInput
               style={styles.searchInput}
-              placeholder="Search by name, purse ID, circle..."
+              placeholder="Search by name, Pers No, circle..."
               value={searchQuery}
               onChangeText={setSearchQuery}
             />
@@ -717,7 +717,7 @@ Harvest Fair,Bangalore,KARNATAKA,Agri-Tourism,2025-11-01 to 2025-11-05,Agricultu
                 <View style={styles.itemHeader}>
                   <View style={styles.itemMain}>
                     <Text style={styles.itemName}>{item.name}</Text>
-                    <Text style={styles.itemPurseId}>Purse ID: {item.purseId}</Text>
+                    <Text style={styles.itemPurseId}>Pers No: {item.purseId}</Text>
                   </View>
                   <View style={[styles.statusBadge, item.isLinked ? styles.linkedBadge : styles.unlinkedBadge]}>
                     {item.isLinked ? <Link size={12} color={Colors.light.success} /> : null}

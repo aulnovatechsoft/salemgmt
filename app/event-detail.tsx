@@ -23,11 +23,11 @@ const STATUS_COLORS: Record<SubtaskStatus, { bg: string; text: string }> = {
 };
 
 const EVENT_STATUS_CONFIG: Record<EventStatus, { label: string; color: string; bg: string; icon: string; description: string }> = {
-  draft: { label: 'Draft', color: '#78909C', bg: '#ECEFF1', icon: 'file', description: 'Work is being prepared' },
-  active: { label: 'Active', color: '#2E7D32', bg: '#E8F5E9', icon: 'play', description: 'Work is live and running' },
-  paused: { label: 'Paused', color: '#EF6C00', bg: '#FFF3E0', icon: 'pause', description: 'Work is temporarily paused' },
-  completed: { label: 'Completed', color: '#1565C0', bg: '#E3F2FD', icon: 'check', description: 'Work has been completed' },
-  cancelled: { label: 'Cancelled', color: '#C62828', bg: '#FFEBEE', icon: 'x', description: 'Work has been cancelled' },
+  draft: { label: 'Draft', color: '#78909C', bg: '#ECEFF1', icon: 'file', description: 'Task is being prepared' },
+  active: { label: 'Active', color: '#2E7D32', bg: '#E8F5E9', icon: 'play', description: 'Task is live and running' },
+  paused: { label: 'Paused', color: '#EF6C00', bg: '#FFF3E0', icon: 'pause', description: 'Task is temporarily paused' },
+  completed: { label: 'Completed', color: '#1565C0', bg: '#E3F2FD', icon: 'check', description: 'Task has been completed' },
+  cancelled: { label: 'Cancelled', color: '#C62828', bg: '#FFEBEE', icon: 'x', description: 'Task has been cancelled' },
 };
 
 const STATUS_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
@@ -131,7 +131,7 @@ export default function EventDetailScreen() {
 
   const updateEventMutation = trpc.events.update.useMutation({
     onSuccess: () => {
-      Alert.alert('Success', 'Work updated successfully');
+      Alert.alert('Success', 'Task updated successfully');
       refetch();
       setShowEditModal(false);
     },
@@ -142,7 +142,7 @@ export default function EventDetailScreen() {
 
   const updateStatusMutation = trpc.events.updateEventStatus.useMutation({
     onSuccess: () => {
-      Alert.alert('Success', 'Work status updated');
+      Alert.alert('Success', 'Task status updated');
       refetch();
       setShowStatusModal(false);
     },
@@ -307,10 +307,10 @@ export default function EventDetailScreen() {
     
     const confirmMessages: Record<EventStatus, { title: string; message: string }> = {
       draft: { title: 'Revert to Draft?', message: 'This will move the event back to draft status. You can edit and reactivate it later.' },
-      active: { title: 'Activate Work?', message: 'This will make the work active and visible to team members. Sales can be submitted.' },
-      paused: { title: 'Pause Work?', message: 'This will temporarily pause the work. Team members will not be able to submit sales. You can resume anytime.' },
-      completed: { title: 'Complete Work?', message: 'This will mark the work as completed. Make sure all sales are submitted before completing.' },
-      cancelled: { title: 'Cancel Work?', message: 'This will cancel the work. This action is reversible but should be done with caution.' },
+      active: { title: 'Activate Task?', message: 'This will make the task active and visible to team members. Sales can be submitted.' },
+      paused: { title: 'Pause Task?', message: 'This will temporarily pause the task. Team members will not be able to submit sales. You can resume anytime.' },
+      completed: { title: 'Complete Task?', message: 'This will mark the task as completed. Make sure all sales are submitted before completing.' },
+      cancelled: { title: 'Cancel Task?', message: 'This will cancel the task. This action is reversible but should be done with caution.' },
     };
     
     const { title, message } = confirmMessages[newStatus];
@@ -341,11 +341,11 @@ export default function EventDetailScreen() {
       return;
     }
     if (!subtaskStaffId.trim()) {
-      Alert.alert('Error', 'Please enter Purse ID');
+      Alert.alert('Error', 'Please enter Pers No');
       return;
     }
     if (!foundEmployee && !subtaskAssignee) {
-      Alert.alert('Error', 'Please enter a valid Purse ID and verify the employee');
+      Alert.alert('Error', 'Please enter a valid Pers No and verify the employee');
       return;
     }
     if (!employee?.id) return;
@@ -448,10 +448,10 @@ export default function EventDetailScreen() {
   const getDraftChecklist = () => {
     if (!eventData) return [];
     const checks = [
-      { label: 'Work Name', done: !!eventData.name },
+      { label: 'Task Name', done: !!eventData.name },
       { label: 'Location', done: !!eventData.location },
       { label: 'Date Range', done: !!eventData.startDate && !!eventData.endDate },
-      { label: 'Work Manager Assigned', done: !!eventData.assignedTo },
+      { label: 'Task Manager Assigned', done: !!eventData.assignedTo },
       { label: 'Team Members Added', done: (eventData.teamWithAllocations?.length || 0) > 0 },
       { label: 'SIM/FTTH Targets Set', done: (eventData.targetSim || 0) > 0 || (eventData.targetFtth || 0) > 0 },
     ];
@@ -526,9 +526,9 @@ export default function EventDetailScreen() {
   if (!id) {
     return (
       <>
-        <Stack.Screen options={{ title: 'Work Details', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
+        <Stack.Screen options={{ title: 'Task Details', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
         <View style={styles.loadingContainer}>
-          <Text style={styles.errorTitle}>Invalid Work</Text>
+          <Text style={styles.errorTitle}>Invalid Task</Text>
           <Text style={styles.errorText}>No event ID provided</Text>
           <TouchableOpacity style={styles.retryButton} onPress={() => router.back()}>
             <Text style={styles.retryButtonText}>Go Back</Text>
@@ -541,7 +541,7 @@ export default function EventDetailScreen() {
   if (isLoading) {
     return (
       <>
-        <Stack.Screen options={{ title: 'Work Details', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
+        <Stack.Screen options={{ title: 'Task Details', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
         <View style={styles.loadingContainer}>
           <View style={styles.loadingSpinner}>
             <Text style={styles.loadingIcon}>⏳</Text>
@@ -557,10 +557,10 @@ export default function EventDetailScreen() {
     console.error('Event Detail Error:', error);
     return (
       <>
-        <Stack.Screen options={{ title: 'Work Details', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
+        <Stack.Screen options={{ title: 'Task Details', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
         <View style={styles.loadingContainer}>
           <Text style={styles.errorIcon}>⚠️</Text>
-          <Text style={styles.errorTitle}>Failed to Load Work</Text>
+          <Text style={styles.errorTitle}>Failed to Load Task</Text>
           <Text style={styles.errorText}>{error?.message || 'An unexpected error occurred'}</Text>
           <TouchableOpacity style={styles.retryButton} onPress={() => refetch()}>
             <Text style={styles.retryButtonText}>Retry</Text>
@@ -576,10 +576,10 @@ export default function EventDetailScreen() {
   if (!eventData) {
     return (
       <>
-        <Stack.Screen options={{ title: 'Work Details', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
+        <Stack.Screen options={{ title: 'Task Details', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
         <View style={styles.loadingContainer}>
           <Text style={styles.errorIcon}>🔍</Text>
-          <Text style={styles.errorTitle}>Work Not Found</Text>
+          <Text style={styles.errorTitle}>Task Not Found</Text>
           <Text style={styles.errorText}>The event you are looking for does not exist or has been removed.</Text>
           <TouchableOpacity style={styles.retryButton} onPress={() => refetch()}>
             <Text style={styles.retryButtonText}>Retry</Text>
@@ -685,7 +685,7 @@ export default function EventDetailScreen() {
               >
                 <Zap size={18} color="#fff" />
                 <Text style={styles.draftActivateButtonText}>
-                  {isReadyToActivate ? 'Activate Work' : 'Complete Setup First'}
+                  {isReadyToActivate ? 'Activate Task' : 'Complete Setup First'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -963,7 +963,7 @@ export default function EventDetailScreen() {
 
         {eventData.assignedToEmployee && (
           <View style={styles.managerSection}>
-            <Text style={styles.sectionTitle}>Work Manager</Text>
+            <Text style={styles.sectionTitle}>Task Manager</Text>
             <View style={styles.managerCard}>
               <View style={styles.memberInfo}>
                 <View style={[styles.avatarCircle, { backgroundColor: Colors.light.primary + '20' }]}>
@@ -1204,7 +1204,7 @@ export default function EventDetailScreen() {
             </View>
             
             <ScrollView style={styles.modalBody}>
-              <Text style={styles.inputLabel}>Work Name</Text>
+              <Text style={styles.inputLabel}>Task Name</Text>
               <TextInput style={styles.input} value={editName} onChangeText={setEditName} placeholder="Event name" />
               
               <Text style={styles.inputLabel}>Location</Text>
@@ -1266,7 +1266,7 @@ export default function EventDetailScreen() {
               <Text style={styles.inputLabel}>Description</Text>
               <TextInput style={[styles.input, styles.textArea]} value={subtaskDescription} onChangeText={setSubtaskDescription} placeholder="Description (optional)" multiline numberOfLines={3} />
               
-              <Text style={styles.inputLabel}>Assign To (Purse ID) *</Text>
+              <Text style={styles.inputLabel}>Assign To (Pers No) *</Text>
               <View style={styles.purseIdRow}>
                 <TextInput 
                   style={[styles.input, styles.purseIdInput]} 
@@ -1275,13 +1275,13 @@ export default function EventDetailScreen() {
                     setSubtaskStaffId(text);
                     setFoundEmployee(null);
                   }} 
-                  placeholder="Enter Purse ID" 
+                  placeholder="Enter Pers No" 
                 />
                 <TouchableOpacity 
                   style={[styles.verifyButton, searchingEmployee && styles.buttonDisabled]}
                   onPress={async () => {
                     if (!subtaskStaffId.trim()) {
-                      Alert.alert('Error', 'Please enter a Purse ID');
+                      Alert.alert('Error', 'Please enter a Pers No');
                       return;
                     }
                     setSearchingEmployee(true);
@@ -1292,7 +1292,7 @@ export default function EventDetailScreen() {
                         Alert.alert('Found', `Employee: ${result.name}`);
                       } else {
                         setFoundEmployee(null);
-                        Alert.alert('Not Found', 'No registered employee found with this Purse ID');
+                        Alert.alert('Not Found', 'No registered employee found with this Pers No');
                       }
                     } catch (err) {
                       console.error('Error searching employee:', err);
@@ -1439,7 +1439,7 @@ export default function EventDetailScreen() {
               <TouchableOpacity style={styles.statusOption} onPress={() => { setShowStatusModal(false); handleUpdateStatus('active'); }}>
                 <Play size={20} color={EVENT_STATUS_CONFIG.active.color} />
                 <View style={styles.statusOptionContent}>
-                  <Text style={styles.statusOptionText}>{dbStatus === 'paused' ? 'Resume Work' : 'Activate Work'}</Text>
+                  <Text style={styles.statusOptionText}>{dbStatus === 'paused' ? 'Resume Task' : 'Activate Task'}</Text>
                   <Text style={styles.statusOptionDesc}>{EVENT_STATUS_CONFIG.active.description}</Text>
                 </View>
               </TouchableOpacity>

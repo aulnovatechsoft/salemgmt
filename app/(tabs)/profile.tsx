@@ -1,15 +1,79 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { useState, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, RefreshControl } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { User, Mail, Phone, Briefcase, MapPin, LogOut, FileText, Settings } from 'lucide-react-native';
+import { User, Mail, Phone, Briefcase, MapPin, LogOut, FileText, Settings, ChevronRight, Users, Building2 } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
+import { trpc } from '@/lib/trpc';
 import React from "react";
+
+const getInitials = (name: string) => {
+  const parts = name.split(' ').filter(p => p.length > 0);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+  return name.substring(0, 2).toUpperCase();
+};
+
+const getAvatarColor = (name: string) => {
+  const colors = ['#1976D2', '#388E3C', '#D32F2F', '#7B1FA2', '#F57C00', '#0097A7', '#5D4037', '#455A64'];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
+};
+
+const MiniOrgNode = ({ name, designation, isYou = false }: { name: string; designation?: string | null; isYou?: boolean }) => (
+  <View style={[styles.miniNode, isYou && styles.miniNodeYou]}>
+    <View style={[styles.miniAvatar, { backgroundColor: getAvatarColor(name) }]}>
+      <Text style={styles.miniAvatarText}>{getInitials(name)}</Text>
+    </View>
+    <View style={styles.miniNodeInfo}>
+      <Text style={styles.miniNodeName} numberOfLines={1}>{name}</Text>
+      {designation && <Text style={styles.miniNodeDesig} numberOfLines={1}>{designation}</Text>}
+    </View>
+    {isYou && (
+      <View style={styles.youBadge}>
+        <Text style={styles.youBadgeText}>You</Text>
+      </View>
+    )}
+  </View>
+);
+
+const TreeLine = () => (
+  <View style={styles.treeLine}>
+    <View style={styles.treeLineVertical} />
+  </View>
+);
 
 export default function ProfileScreen() {
   const router = useRouter();
   const { employee, logout } = useAuth();
   const { clearAllData } = useApp();
+  const [refreshing, setRefreshing] = useState(false);
+
+  const { 
+    data: hierarchy, 
+    isLoading: hierarchyLoading, 
+    refetch: refetchHierarchy,
+  } = trpc.admin.getMyHierarchy.useQuery(
+    { employeeId: employee?.id || '' },
+    { enabled: !!employee?.id, retry: 2 }
+  );
+
+  const userPurseId = hierarchy?.masterData?.purseId;
+  const isLinked = hierarchy?.isLinked;
+
+  const { 
+    data: fullHierarchy, 
+    isLoading: fullHierarchyLoading, 
+    refetch: refetchFullHierarchy,
+  } = trpc.admin.getFullHierarchy.useQuery(
+    { purseId: userPurseId || '' },
+    { enabled: !!userPurseId && isLinked, retry: 2, staleTime: 30000 }
+  );
 
   const handleLogout = () => {
     Alert.alert(
@@ -47,7 +111,20 @@ export default function ProfileScreen() {
     );
   };
 
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([refetchHierarchy(), refetchFullHierarchy()]);
+    setRefreshing(false);
+  }, [refetchHierarchy, refetchFullHierarchy]);
+
   if (!employee) return null;
+
+  const topManager = fullHierarchy?.managers?.[fullHierarchy.managers.length - 1];
+  const immediateManager = fullHierarchy?.managers?.[0];
+  const currentUser = fullHierarchy?.currentUser;
+  const topSubordinates = fullHierarchy?.subordinates?.slice(0, 2) || [];
+  const totalSubordinates = currentUser?.directReportsCount || fullHierarchy?.subordinates?.length || 0;
+  const totalManagers = fullHierarchy?.managers?.length || 0;
 
   return (
     <>
@@ -64,7 +141,12 @@ export default function ProfileScreen() {
           headerShown: true,
         }} 
       />
-      <ScrollView style={styles.container}>
+      <ScrollView 
+        style={styles.container}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.light.primary]} />
+        }
+      >
         <View style={styles.header}>
           <View style={styles.avatarContainer}>
             <User size={48} color={Colors.light.background} />
@@ -96,7 +178,7 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Work Information</Text>
+          <Text style={styles.sectionTitle}>Task Information</Text>
           
           <View style={styles.infoCard}>
             <InfoItem
@@ -116,6 +198,93 @@ export default function ProfileScreen() {
             />
           </View>
         </View>
+
+        {isLinked && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>My Organization</Text>
+            
+            <TouchableOpacity 
+              style={styles.orgCard}
+              onPress={() => router.push('/hierarchy')}
+              activeOpacity={0.8}
+            >
+              {hierarchyLoading || fullHierarchyLoading ? (
+                <View style={styles.orgLoadingContainer}>
+                  <ActivityIndicator color={Colors.light.primary} />
+                  <Text style={styles.orgLoadingText}>Loading hierarchy...</Text>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.orgPreviewHeader}>
+                    <View style={styles.orgHeaderLeft}>
+                      <Building2 size={20} color={Colors.light.primary} />
+                      <Text style={styles.orgHeaderTitle}>Organization Tree</Text>
+                    </View>
+                    <ChevronRight size={20} color={Colors.light.textSecondary} />
+                  </View>
+                  
+                  <View style={styles.orgStats}>
+                    <View style={styles.orgStat}>
+                      <Text style={styles.orgStatValue}>{totalManagers}</Text>
+                      <Text style={styles.orgStatLabel}>Levels Up</Text>
+                    </View>
+                    <View style={styles.orgStatDivider} />
+                    <View style={styles.orgStat}>
+                      <Text style={styles.orgStatValue}>{totalSubordinates}</Text>
+                      <Text style={styles.orgStatLabel}>Direct Reports</Text>
+                    </View>
+                  </View>
+                  
+                  <View style={styles.orgTreePreview}>
+                    {immediateManager && (
+                      <>
+                        <MiniOrgNode 
+                          name={immediateManager.name} 
+                          designation={immediateManager.designation}
+                        />
+                        <TreeLine />
+                      </>
+                    )}
+                    
+                    {currentUser && (
+                      <MiniOrgNode 
+                        name={currentUser.name} 
+                        designation={currentUser.designation}
+                        isYou={true}
+                      />
+                    )}
+                    
+                    {topSubordinates.length > 0 && (
+                      <>
+                        <TreeLine />
+                        <View style={styles.subordinatesPreview}>
+                          {topSubordinates.map((sub, index) => (
+                            <View key={sub.id} style={styles.subPreviewItem}>
+                              <View style={[styles.subPreviewAvatar, { backgroundColor: getAvatarColor(sub.name) }]}>
+                                <Text style={styles.subPreviewAvatarText}>{getInitials(sub.name)}</Text>
+                              </View>
+                            </View>
+                          ))}
+                          {totalSubordinates > 2 && (
+                            <View style={styles.moreIndicator}>
+                              <Text style={styles.moreText}>+{totalSubordinates - 2}</Text>
+                            </View>
+                          )}
+                        </View>
+                      </>
+                    )}
+                  </View>
+                  
+                  <View style={styles.viewFullBtn}>
+                    <Users size={16} color={Colors.light.primary} />
+                    <Text style={styles.viewFullText}>View Full Hierarchy</Text>
+                    <ChevronRight size={16} color={Colors.light.primary} />
+                  </View>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Actions</Text>
@@ -240,6 +409,182 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.light.text,
     fontWeight: '600' as const,
+  },
+  orgCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: Colors.light.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: '#E3F2FD',
+  },
+  orgLoadingContainer: {
+    alignItems: 'center',
+    padding: 32,
+    gap: 12,
+  },
+  orgLoadingText: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+  },
+  orgPreviewHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  orgHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  orgHeaderTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  orgStats: {
+    flexDirection: 'row',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+  },
+  orgStat: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  orgStatValue: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: Colors.light.primary,
+  },
+  orgStatLabel: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginTop: 2,
+  },
+  orgStatDivider: {
+    width: 1,
+    backgroundColor: '#E0E0E0',
+    marginHorizontal: 16,
+  },
+  orgTreePreview: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  miniNode: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 10,
+    paddingRight: 16,
+    width: '100%',
+    maxWidth: 280,
+  },
+  miniNodeYou: {
+    backgroundColor: '#E3F2FD',
+    borderWidth: 2,
+    borderColor: Colors.light.primary,
+  },
+  miniAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  miniAvatarText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
+  miniNodeInfo: {
+    flex: 1,
+  },
+  miniNodeName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.light.text,
+  },
+  miniNodeDesig: {
+    fontSize: 11,
+    color: Colors.light.textSecondary,
+  },
+  youBadge: {
+    backgroundColor: Colors.light.primary,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  youBadgeText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  treeLine: {
+    alignItems: 'center',
+    height: 24,
+    justifyContent: 'center',
+  },
+  treeLineVertical: {
+    width: 2,
+    height: '100%',
+    backgroundColor: '#CBD5E1',
+  },
+  subordinatesPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  subPreviewItem: {
+    alignItems: 'center',
+  },
+  subPreviewAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  subPreviewAvatarText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
+  moreIndicator: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#E0E0E0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  moreText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: Colors.light.textSecondary,
+  },
+  viewFullBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingTop: 16,
+    marginTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+  },
+  viewFullText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.light.primary,
   },
   actionButton: {
     flexDirection: 'row',

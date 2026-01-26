@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, sql, desc, and, isNull } from "drizzle-orm";
+import { eq, sql, desc, and, isNull, inArray } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
 import { db, employees, employeeMaster, auditLogs, events } from "@/backend/db";
 
@@ -789,5 +789,344 @@ export const adminRouter = createTRPCRouter({
         active: Number(active[0]?.count || 0),
         draft: Number(draft[0]?.count || 0),
       };
+    }),
+
+  getFullHierarchy: publicProcedure
+    .input(z.object({
+      purseId: z.string(),
+    }))
+    .query(async ({ input }) => {
+      try {
+        const linkedEmployeeCache = new Map<string, any>();
+        
+        const batchFetchLinkedEmployees = async (linkedIds: string[]) => {
+          const uncachedIds = linkedIds.filter(id => !linkedEmployeeCache.has(id));
+          if (uncachedIds.length > 0) {
+            const linkedEmps = await db.select().from(employees)
+              .where(inArray(employees.id, uncachedIds));
+            linkedEmps.forEach(emp => linkedEmployeeCache.set(emp.id, emp));
+          }
+        };
+
+        const getManagerChain = async (purseId: string, visited: Set<string> = new Set()): Promise<any[]> => {
+          if (visited.has(purseId)) {
+            console.warn(`Cycle detected in hierarchy at purseId: ${purseId}`);
+            return [];
+          }
+          visited.add(purseId);
+          
+          const current = await db.select().from(employeeMaster)
+            .where(eq(employeeMaster.purseId, purseId));
+          
+          if (!current[0]) return [];
+          
+          const emp = current[0];
+          if (emp.linkedEmployeeId) {
+            await batchFetchLinkedEmployees([emp.linkedEmployeeId]);
+          }
+          const linkedEmployee = emp.linkedEmployeeId ? linkedEmployeeCache.get(emp.linkedEmployeeId) : null;
+          
+          const node = {
+            id: emp.id,
+            purseId: emp.purseId,
+            name: emp.name,
+            designation: emp.designation,
+            circle: emp.circle,
+            zone: emp.zone,
+            division: emp.division,
+            officeName: emp.officeName,
+            sortOrder: emp.sortOrder,
+            reportingPurseId: emp.reportingPurseId,
+            isLinked: emp.isLinked,
+            linkedEmployee: linkedEmployee ? {
+              id: linkedEmployee.id,
+              email: linkedEmployee.email,
+              phone: linkedEmployee.phone,
+              role: linkedEmployee.role,
+            } : null,
+          };
+          
+          if (emp.reportingPurseId) {
+            const managers = await getManagerChain(emp.reportingPurseId, visited);
+            return [node, ...managers];
+          }
+          
+          return [node];
+        };
+
+        const getSubordinates = async (
+          purseId: string, 
+          depth: number = 0, 
+          maxDepth: number = 3,
+          visited: Set<string> = new Set()
+        ): Promise<any[]> => {
+          if (depth >= maxDepth) return [];
+          if (visited.has(purseId)) {
+            console.warn(`Cycle detected in subordinates at purseId: ${purseId}`);
+            return [];
+          }
+          visited.add(purseId);
+          
+          const directReports = await db.select().from(employeeMaster)
+            .where(eq(employeeMaster.reportingPurseId, purseId))
+            .orderBy(desc(employeeMaster.sortOrder));
+          
+          if (directReports.length === 0) return [];
+          
+          const linkedIds = directReports
+            .filter(emp => emp.linkedEmployeeId)
+            .map(emp => emp.linkedEmployeeId!);
+          await batchFetchLinkedEmployees(linkedIds);
+          
+          const directReportPurseIds = directReports.map(emp => emp.purseId);
+          const countResults = await db.select({
+            reportingPurseId: employeeMaster.reportingPurseId,
+            count: sql<number>`count(*)`,
+          })
+            .from(employeeMaster)
+            .where(inArray(employeeMaster.reportingPurseId, directReportPurseIds))
+            .groupBy(employeeMaster.reportingPurseId);
+          
+          const countMap = new Map(countResults.map(r => [r.reportingPurseId, Number(r.count)]));
+          
+          const subordinates = await Promise.all(directReports.map(async (emp) => {
+            const linkedEmployee = emp.linkedEmployeeId ? linkedEmployeeCache.get(emp.linkedEmployeeId) : null;
+            const children = await getSubordinates(emp.purseId, depth + 1, maxDepth, visited);
+            
+            return {
+              id: emp.id,
+              purseId: emp.purseId,
+              name: emp.name,
+              designation: emp.designation,
+              circle: emp.circle,
+              zone: emp.zone,
+              division: emp.division,
+              officeName: emp.officeName,
+              sortOrder: emp.sortOrder,
+              reportingPurseId: emp.reportingPurseId,
+              isLinked: emp.isLinked,
+              linkedEmployee: linkedEmployee ? {
+                id: linkedEmployee.id,
+                email: linkedEmployee.email,
+                phone: linkedEmployee.phone,
+                role: linkedEmployee.role,
+              } : null,
+              directReportsCount: countMap.get(emp.purseId) || 0,
+              children: children,
+            };
+          }));
+          
+          return subordinates;
+        };
+
+        const current = await db.select().from(employeeMaster)
+          .where(eq(employeeMaster.purseId, input.purseId));
+        
+        if (!current[0]) {
+          return { managers: [], currentUser: null, subordinates: [] };
+        }
+        
+        const emp = current[0];
+        if (emp.linkedEmployeeId) {
+          await batchFetchLinkedEmployees([emp.linkedEmployeeId]);
+        }
+        const linkedEmployee = emp.linkedEmployeeId ? linkedEmployeeCache.get(emp.linkedEmployeeId) : null;
+        
+        const directReportsCount = await db.select({ count: sql<number>`count(*)` })
+          .from(employeeMaster)
+          .where(eq(employeeMaster.reportingPurseId, emp.purseId));
+        
+        const currentUser = {
+          id: emp.id,
+          purseId: emp.purseId,
+          name: emp.name,
+          designation: emp.designation,
+          circle: emp.circle,
+          zone: emp.zone,
+          division: emp.division,
+          officeName: emp.officeName,
+          sortOrder: emp.sortOrder,
+          reportingPurseId: emp.reportingPurseId,
+          isLinked: emp.isLinked,
+          linkedEmployee: linkedEmployee ? {
+            id: linkedEmployee.id,
+            email: linkedEmployee.email,
+            phone: linkedEmployee.phone,
+            role: linkedEmployee.role,
+          } : null,
+          directReportsCount: Number(directReportsCount[0]?.count || 0),
+        };
+        
+        let managers: any[] = [];
+        if (emp.reportingPurseId) {
+          managers = await getManagerChain(emp.reportingPurseId);
+        }
+        
+        const subordinates = await getSubordinates(input.purseId);
+        
+        return { managers, currentUser, subordinates };
+      } catch (error) {
+        console.error('Error fetching hierarchy:', error);
+        throw new Error('Failed to fetch organization hierarchy. Please try again.');
+      }
+    }),
+
+  getSubordinatesPage: publicProcedure
+    .input(z.object({
+      purseId: z.string(),
+      page: z.number().default(1),
+      limit: z.number().default(20),
+      search: z.string().optional(),
+    }))
+    .query(async ({ input }) => {
+      try {
+        const offset = (input.page - 1) * input.limit;
+        
+        const directReports = await db.select().from(employeeMaster)
+          .where(eq(employeeMaster.reportingPurseId, input.purseId))
+          .orderBy(desc(employeeMaster.sortOrder))
+          .limit(input.limit)
+          .offset(offset);
+        
+        const totalCount = await db.select({ count: sql<number>`count(*)` })
+          .from(employeeMaster)
+          .where(eq(employeeMaster.reportingPurseId, input.purseId));
+        
+        if (directReports.length === 0) {
+          return {
+            subordinates: [],
+            total: 0,
+            page: input.page,
+            totalPages: 0,
+          };
+        }
+        
+        const linkedIds = directReports
+          .filter(emp => emp.linkedEmployeeId)
+          .map(emp => emp.linkedEmployeeId!);
+        
+        const linkedEmployeeMap = new Map<string, any>();
+        if (linkedIds.length > 0) {
+          const linkedEmps = await db.select().from(employees)
+            .where(inArray(employees.id, linkedIds));
+          linkedEmps.forEach(emp => linkedEmployeeMap.set(emp.id, emp));
+        }
+        
+        const purseIds = directReports.map(emp => emp.purseId);
+        const countResults = await db.select({
+          reportingPurseId: employeeMaster.reportingPurseId,
+          count: sql<number>`count(*)`,
+        })
+          .from(employeeMaster)
+          .where(inArray(employeeMaster.reportingPurseId, purseIds))
+          .groupBy(employeeMaster.reportingPurseId);
+        
+        const countMap = new Map(countResults.map(r => [r.reportingPurseId, Number(r.count)]));
+        
+        const subordinates = directReports.map((emp) => {
+          const linkedEmployee = emp.linkedEmployeeId ? linkedEmployeeMap.get(emp.linkedEmployeeId) : null;
+          
+          return {
+            id: emp.id,
+            purseId: emp.purseId,
+            name: emp.name,
+            designation: emp.designation,
+            circle: emp.circle,
+            zone: emp.zone,
+            division: emp.division,
+            officeName: emp.officeName,
+            sortOrder: emp.sortOrder,
+            isLinked: emp.isLinked,
+            linkedEmployee: linkedEmployee ? {
+              id: linkedEmployee.id,
+              email: linkedEmployee.email,
+              phone: linkedEmployee.phone,
+              role: linkedEmployee.role,
+            } : null,
+            directReportsCount: countMap.get(emp.purseId) || 0,
+          };
+        });
+        
+        return {
+          subordinates,
+          total: Number(totalCount[0]?.count || 0),
+          page: input.page,
+          totalPages: Math.ceil(Number(totalCount[0]?.count || 0) / input.limit),
+        };
+      } catch (error) {
+        console.error('Error fetching subordinates page:', error);
+        throw new Error('Failed to fetch team members. Please try again.');
+      }
+    }),
+
+  searchHierarchy: publicProcedure
+    .input(z.object({
+      purseId: z.string(),
+      searchQuery: z.string().min(2),
+    }))
+    .query(async ({ input }) => {
+      try {
+        const getAllSubordinatePurseIds = async (purseId: string, visited: Set<string> = new Set(), depth: number = 0): Promise<string[]> => {
+          if (visited.has(purseId) || depth > 10) return [];
+          visited.add(purseId);
+          
+          const directReports = await db.select({ purseId: employeeMaster.purseId })
+            .from(employeeMaster)
+            .where(eq(employeeMaster.reportingPurseId, purseId));
+          
+          const allIds = [purseId];
+          for (const report of directReports) {
+            const childIds = await getAllSubordinatePurseIds(report.purseId, visited, depth + 1);
+            allIds.push(...childIds);
+          }
+          return allIds;
+        };
+
+        const subordinatePurseIds = await getAllSubordinatePurseIds(input.purseId);
+        
+        const searchPattern = `%${input.searchQuery}%`;
+        const results = await db.select().from(employeeMaster)
+          .where(sql`(${employeeMaster.name} ILIKE ${searchPattern} OR ${employeeMaster.purseId} ILIKE ${searchPattern}) AND ${employeeMaster.purseId} = ANY(${subordinatePurseIds})`)
+          .orderBy(desc(employeeMaster.sortOrder))
+          .limit(50);
+        
+        if (results.length === 0) return [];
+        
+        const linkedIds = results
+          .filter(emp => emp.linkedEmployeeId)
+          .map(emp => emp.linkedEmployeeId!);
+        
+        const linkedEmployeeMap = new Map<string, any>();
+        if (linkedIds.length > 0) {
+          const linkedEmps = await db.select().from(employees)
+            .where(inArray(employees.id, linkedIds));
+          linkedEmps.forEach(emp => linkedEmployeeMap.set(emp.id, emp));
+        }
+        
+        const employees_result = results.map((emp) => {
+          const linkedEmployee = emp.linkedEmployeeId ? linkedEmployeeMap.get(emp.linkedEmployeeId) : null;
+          
+          return {
+            id: emp.id,
+            purseId: emp.purseId,
+            name: emp.name,
+            designation: emp.designation,
+            circle: emp.circle,
+            zone: emp.zone,
+            sortOrder: emp.sortOrder,
+            isLinked: emp.isLinked,
+            linkedEmployee: linkedEmployee ? {
+              id: linkedEmployee.id,
+              email: linkedEmployee.email,
+              phone: linkedEmployee.phone,
+            } : null,
+          };
+        });
+        
+        return employees_result;
+      } catch (error) {
+        console.error('Error searching hierarchy:', error);
+        throw new Error('Failed to search team members. Please try again.');
+      }
     }),
 });

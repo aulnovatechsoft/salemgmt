@@ -1,7 +1,7 @@
-# BSNL Sales & Work App
+# BSNL Sales & Task App
 
 ## Overview
-BSNL Sales & Work App is a mobile-first application for managing work assignments and tracking performance for BSNL (Bharat Sanchar Nigam Limited). Built with Expo (React Native) and a Hono/tRPC backend, the app supports web deployment. The app uses "Work" terminology throughout (not "Event").
+BSNL Sales & Task App is a mobile-first application for managing task assignments and tracking performance for BSNL (Bharat Sanchar Nigam Limited). Built with Expo (React Native) and a Hono/tRPC backend, the app supports web deployment. The app uses "Task" terminology throughout (not "Event").
 
 ## Tech Stack
 - **Frontend**: React Native with Expo SDK 54, React Native Web
@@ -42,7 +42,7 @@ The app uses the following main tables:
 - **employees**: Staff members with roles (GM, CGM, DGM, AGM, SD_JTO, SALES_STAFF)
 - **employee_master**: Official employee records imported from CSV with hierarchy (purse_id, name, circle, zone, reporting_purse_id)
 - **events**: Sales events with targets and assignments
-- **sales_reports**: Sales submissions with approval workflow
+- **sales_reports**: Sales submissions with approval taskflow
 - **resources**: SIM and FTTH resource inventory
 - **issues**: Event-related issues and escalations
 - **event_assignments**: Employee-to-event assignments with targets
@@ -81,16 +81,56 @@ The app implements a production-grade notification system:
 - Admins can import official employee master data via CSV upload at /admin
 - CSV format matches BSNL HR export: circle, ba_name, Employee pers no, emp_name, emp_group, employee designation, controller_officer Pers no, controller_officer_name, controller_designation, shift_group of employee, division of employee, building Name, office Name, distance_limit for attendance, sort_order
 - Large files (60K+ records) are processed in batches of 500 with progress indicator
-- Users link their accounts to official records via "Link My Purse ID" in /profile
+- Users link their accounts to official records via "Link My Pers No" in /profile
 - After linking, users see their reporting manager and subordinates in the hierarchy view
 - Backfill mechanism: When managers link after subordinates, the system automatically updates reporting relationships
 
-## Work Categories
-The app supports 8 work categories that can be selected individually or in combination:
+## Organization Hierarchy Feature
+
+### Two-Part UI Design
+1. **Profile Screen Preview Card** - Compact "My Organization" card showing:
+   - Stats: Levels up (managers) and Direct reports count
+   - Mini tree: Immediate manager → You → Top 2 subordinates
+   - Tap to open full hierarchy page
+
+2. **Dedicated Hierarchy Page** (/hierarchy) - Full interactive org chart with:
+   - Level indicators (L-2, L-1, YOU, L+1, L+2)
+   - 2 levels up (managers) and 2 levels down (subordinates)
+   - Professional card design with colored avatars
+   - Tree connectors between nodes
+   - Expandable subordinate tree view
+   - Search by name or Pers No
+   - Quick actions: Call/email registered colleagues
+
+### UI Components
+- **Colored Avatars**: Initials-based avatars with consistent color per employee name
+- **Level Pills**: Color-coded level indicators (orange=managers, blue=you, green=team)
+- **Manager Section**: Yellow-highlighted manager cards showing reporting chain
+- **Subordinates Tree**: Expandable tree with visual connecting lines
+- **Status Indicators**: Green dot for registered, badges for unregistered
+- **Contact Actions**: Phone/email buttons for quick communication
+
+### Production-Grade Backend Optimizations
+- **Batch Fetching**: Uses inArray to fetch linked employees in single query (avoids N+1)
+- **Cycle Detection**: visited Set prevents infinite loops in corrupted hierarchy data
+- **Depth Limits**: maxDepth=3 for subordinates, depth>10 for search to prevent excessive queries
+- **Batch Counting**: GROUP BY query for direct reports count instead of individual queries
+- **Error Handling**: Try-catch with user-friendly error messages
+- **Caching**: 30-second staleTime for hierarchy data
+
+### Frontend Optimizations
+- **Search Debouncing**: 300ms delay before API call to reduce server load
+- **Loading States**: Visual indicators while searching/loading
+- **Error Recovery**: Retry button for failed hierarchy loads
+- **Pull-to-Refresh**: Refresh hierarchy data with pull gesture
+- **Accessibility**: Labels and hints on interactive elements
+
+## Task Categories
+The app supports 8 task categories that can be selected individually or in combination:
 1. **SIM** - SIM card sales (shows SIM target field)
 2. **FTTH** - Fiber to the Home installations (shows FTTH target field)
 3. **Lease Circuit** - Leased line connections (shows Lease Circuit target field)
-4. **EB** - Exchange based work
+4. **EB** - Exchange based task
 5. **BTS-Down** - Base station maintenance (maintenance type)
 6. **FTTH-Down** - FTTH maintenance (maintenance type)
 7. **Route-Fail** - Route failure resolution (maintenance type)
@@ -98,37 +138,37 @@ The app supports 8 work categories that can be selected individually or in combi
 
 Categories are stored as comma-separated values when multiple are selected.
 
-## Work Manager Assignment
+## Task Manager Assignment
 - Mobile number lookup: Enter 10-digit mobile to auto-populate Purse ID
 - Purse ID lookup: Directly enter Purse ID to find registered employee
 - Two-step confirmation: Found employee card with Cancel/Confirm buttons
 - Confirmed employee shows verified badge with "Change" option
 - Professional card UI with avatar initials, designation, and circle
 
-## Time-Based Work Status Management
-- **Automatic completion**: Works with status 'active' automatically change to 'completed' when end date passes
+## Time-Based Task Status Management
+- **Automatic completion**: Tasks with status 'active' automatically change to 'completed' when end date passes
 - Applied consistently across all API endpoints (getAll, getByCircle, getActiveEvents, getUpcomingEvents)
 - Status updates happen on data fetch, ensuring real-time accuracy
 
-## Dashboard Work Progress Display
-- **Date indicators**: Each work card shows start/end date range
+## Dashboard Task Progress Display
+- **Date indicators**: Each task card shows start/end date range
 - **Visual status badges** with color coding:
   - Green: "X days left" (active)
   - Yellow: "Ends tomorrow" or "Ends in 2 days" (ending soon)
   - Red: "Ends today" (urgent)
   - Gray: "Ended X days ago" (completed)
   - Blue: "Starts in X days" (upcoming)
-- **Limited display**: Shows top 3 active works by default
-- **"See More" button**: Expands to show all works when more than 3 available
-- **Work counts**: Shows total count next to section headers
+- **Limited display**: Shows top 3 active tasks by default
+- **"See More" button**: Expands to show all tasks when more than 3 available
+- **Task counts**: Shows total count next to section headers
 
-## Works CSV Upload (Admin Feature)
-- Admins can bulk upload works via CSV at /admin page
-- Required CSV columns: Work Name, Location, Category
+## Tasks CSV Upload (Admin Feature)
+- Admins can bulk upload tasks via CSV at /admin page
+- Required CSV columns: Task Name, Location, Category
 - Optional CSV columns: Circle (auto-detected from location), Date Range, Zone, Key Insight
 - Date Range format: "2025-10-15 to 2025-10-20" or single date "2025-10-15"
-- Duplicate handling: Works with same name + location + circle are updated instead of duplicated
-- Uploaded works are created in "draft" status, ready for managers to activate and assign teams
+- Duplicate handling: Tasks with same name + location + circle are updated instead of duplicated
+- Uploaded tasks are created in "draft" status, ready for managers to activate and assign teams
 
 ### Production-Grade Features
 - **Proper CSV parsing**: Handles quoted fields with commas (e.g., "Mumbai, Central")
@@ -153,7 +193,7 @@ Categories are stored as comma-separated values when multiple are selected.
 ### Hierarchy
 1. **Event Creator**: Creates events and assigns an Event Manager
 2. **Event Manager** (assignedTo): Manages the event, creates field team, assigns tasks to field officers
-3. **Field Officers** (team members): Do the actual field work, sales, and report progress
+3. **Field Officers** (team members): Do the actual field task, sales, and report progress
 
 ### Features
 - Events have a team of assigned employees stored in both `events.assignedTeam` (JSONB array) and `eventAssignments` table (with targets)

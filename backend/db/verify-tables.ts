@@ -1,4 +1,4 @@
-import postgres from 'postgres';
+import postgres from "postgres";
 
 const connectionString = process.env.DATABASE_URL!;
 
@@ -13,9 +13,9 @@ async function verifyTables() {
       AND table_type = 'BASE TABLE'
       ORDER BY table_name
     `;
-    
-    console.log('✅ Created Tables in Database:');
-    tables.forEach(t => console.log('  -', t.table_name));
+
+    console.log("✅ Created Tables in Database:");
+    tables.forEach((t) => console.log("  -", t.table_name));
     console.log(`\nTotal: ${tables.length} tables`);
 
     const enums = await sql`
@@ -25,13 +25,13 @@ async function verifyTables() {
       WHERE t.typtype = 'e' AND n.nspname = 'public'
       ORDER BY t.typname
     `;
-    
-    console.log('\n✅ Created Enums:');
-    enums.forEach(e => console.log('  -', e.enum_name));
+
+    console.log("\n✅ Created Enums:");
+    enums.forEach((e) => console.log("  -", e.enum_name));
 
     await sql.end();
   } catch (error) {
-    console.error('Error:', error);
+    console.error("Error:", error);
     await sql.end();
   }
 }

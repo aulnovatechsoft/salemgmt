@@ -2,7 +2,6 @@ import { z } from "zod";
 import { eq, and, desc, gte, lte, sql } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
 import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations } from "@/backend/db";
-import { notifyEventAssignment, notifySubtaskAssigned, notifySubtaskCompleted } from "@/backend/services/notification.service";
 
 async function autoCompleteExpiredEvents(eventsList: typeof events.$inferSelect[]) {
   const today = new Date();
@@ -672,13 +671,6 @@ export const eventsRouter = createTRPCRouter({
         details: { employeeId: input.employeeId, simTarget: input.simTarget, ftthTarget: input.ftthTarget },
       });
 
-      // Send notification to the assigned team member
-      if (!existing) {
-        const assignedByEmployee = await db.select().from(employees).where(eq(employees.id, input.assignedBy));
-        const assignerName = assignedByEmployee[0]?.name || 'Manager';
-        await notifyEventAssignment(input.employeeId, event[0].name, input.eventId, assignerName);
-      }
-
       return { success: true };
     }),
 
@@ -1042,22 +1034,6 @@ export const eventsRouter = createTRPCRouter({
         details: { subtaskId: result[0].id, title: input.title, assignedTo: assignedEmployeeId },
       });
 
-      // Send notification to assignee
-      if (assignedEmployeeId) {
-        const creatorEmployee = await db.select().from(employees).where(eq(employees.id, input.createdBy));
-        const event = await db.select().from(events).where(eq(events.id, input.eventId));
-        const creatorName = creatorEmployee[0]?.name || 'Manager';
-        const eventName = event[0]?.name || 'Unknown Event';
-        await notifySubtaskAssigned(
-          assignedEmployeeId, 
-          result[0].id, 
-          input.title, 
-          eventName, 
-          creatorName, 
-          input.dueDate
-        );
-      }
-
       return result[0];
     }),
 
@@ -1104,13 +1080,6 @@ export const eventsRouter = createTRPCRouter({
           performedBy: updatedBy,
           details: { subtaskId, changes: updateData },
         });
-
-        // Notify task creator when subtask is completed
-        if (input.status === 'completed' && result[0].createdBy && result[0].createdBy !== updatedBy) {
-          const completedByEmployee = await db.select().from(employees).where(eq(employees.id, updatedBy));
-          const completedByName = completedByEmployee[0]?.name || 'Team Member';
-          await notifySubtaskCompleted(result[0].createdBy, subtaskId, result[0].title, completedByName);
-        }
       }
 
       return result[0];
