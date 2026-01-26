@@ -36,7 +36,7 @@ jobs:
       - name: Prepare files to deploy (copy .env + ensure folders exist)
         run: |
           # Copy .env to the deploy root (or move it to build/ or dist/ if you prefer)
-          cp .env .                    # already there, but explicit
+          # cp .env .                    # already there, but explicit
 
           # Optional: if you want .env inside build/ or dist/ instead
           cp .env build/
