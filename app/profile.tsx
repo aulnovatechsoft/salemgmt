@@ -13,7 +13,7 @@ export default function ProfileScreen() {
   
   const [refreshing, setRefreshing] = useState(false);
   const [showLinkModal, setShowLinkModal] = useState(false);
-  const [purseId, setPurseId] = useState('');
+  const [persNo, setPersNo] = useState('');
   const [linking, setLinking] = useState(false);
   
   const trpcUtils = trpc.useUtils();
@@ -25,9 +25,9 @@ export default function ProfileScreen() {
   
   const linkMutation = trpc.admin.linkEmployeeProfile.useMutation({
     onSuccess: (result) => {
-      Alert.alert('Success', `Your profile has been linked to Purse ID: ${result.masterData.purseId}`);
+      Alert.alert('Success', `Your profile has been linked to Purse ID: ${result.masterData.persNo}`);
       setShowLinkModal(false);
-      setPurseId('');
+      setPersNo('');
       refetch();
       trpcUtils.employees.getById.invalidate();
     },
@@ -43,7 +43,7 @@ export default function ProfileScreen() {
   }, [refetch]);
   
   const handleLinkProfile = () => {
-    if (!purseId.trim()) {
+    if (!persNo.trim()) {
       Alert.alert('Error', 'Please enter your Purse ID');
       return;
     }
@@ -51,7 +51,7 @@ export default function ProfileScreen() {
     if (!employee?.id) return;
     
     setLinking(true);
-    linkMutation.mutate({ purseId: purseId.trim(), employeeId: employee.id }, {
+    linkMutation.mutate({ persNo: persNo.trim(), employeeId: employee.id }, {
       onSettled: () => setLinking(false),
     });
   };
@@ -143,7 +143,7 @@ export default function ProfileScreen() {
           {hierarchy?.isLinked ? (
             <View style={styles.linkedInfo}>
               <Text style={styles.linkedLabel}>Purse ID</Text>
-              <Text style={styles.linkedValue}>{hierarchy.masterData?.purseId}</Text>
+              <Text style={styles.linkedValue}>{hierarchy.masterData?.persNo}</Text>
               {hierarchy.masterData?.designation && (
                 <>
                   <Text style={styles.linkedLabel}>Official Designation</Text>
@@ -173,7 +173,7 @@ export default function ProfileScreen() {
                   </View>
                   <View style={styles.personInfo}>
                     <Text style={styles.personName}>{hierarchy.manager.name}</Text>
-                    <Text style={styles.personDetail}>Purse ID: {hierarchy.manager.purseId}</Text>
+                    <Text style={styles.personDetail}>Purse ID: {hierarchy.manager.persNo}</Text>
                     {hierarchy.manager.designation && (
                       <Text style={styles.personDetail}>{hierarchy.manager.designation}</Text>
                     )}
@@ -211,7 +211,7 @@ export default function ProfileScreen() {
                     </View>
                     <View style={styles.personInfo}>
                       <Text style={styles.personName}>{sub.name}</Text>
-                      <Text style={styles.personDetail}>Purse ID: {sub.purseId}</Text>
+                      <Text style={styles.personDetail}>Purse ID: {sub.persNo}</Text>
                       {sub.designation && (
                         <Text style={styles.personDetail}>{sub.designation}</Text>
                       )}
@@ -279,8 +279,8 @@ export default function ProfileScreen() {
               <TextInput
                 style={styles.input}
                 placeholder="e.g., 101"
-                value={purseId}
-                onChangeText={setPurseId}
+                value={persNo}
+                onChangeText={setPersNo}
                 autoCapitalize="characters"
               />
               
@@ -291,7 +291,7 @@ export default function ProfileScreen() {
             </View>
             
             <View style={styles.modalFooter}>
-              <TouchableOpacity style={styles.cancelButton} onPress={() => { setShowLinkModal(false); setPurseId(''); }}>
+              <TouchableOpacity style={styles.cancelButton} onPress={() => { setShowLinkModal(false); setPersNo(''); }}>
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity 

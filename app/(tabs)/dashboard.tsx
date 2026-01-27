@@ -35,7 +35,7 @@ export default function DashboardScreen() {
       const isCreatedByMe = e.createdBy === employee?.id;
       const isInMyTeam = Array.isArray(e.assignedTeam) && (
         e.assignedTeam.includes(employee?.id || '') || 
-        e.assignedTeam.includes(employee?.employeeNo || '')
+        e.assignedTeam.includes(employee?.persNo || '')
       );
       
       // SALES_STAFF only sees events they're specifically assigned to
@@ -506,7 +506,7 @@ const TASK_TYPE_LABELS: Record<string, string> = {
   'OFC_FAIL': 'OFC-Fail',
 };
 
-function EventProgressMeter({ event, onPress, isCompleted }: { event: Event & { teamMembers?: { purseId: string; name: string; designation: string | null }[]; creatorName?: string | null; assigneeName?: string | null; targetEb?: number; targetLease?: number; ebCompleted?: number; leaseCompleted?: number }; onPress: () => void; isCompleted?: boolean }) {
+function EventProgressMeter({ event, onPress, isCompleted }: { event: Event & { teamMembers?: { persNo: string; name: string; designation: string | null }[]; creatorName?: string | null; assigneeName?: string | null; targetEb?: number; targetLease?: number; ebCompleted?: number; leaseCompleted?: number }; onPress: () => void; isCompleted?: boolean }) {
   const simTarget = event.allocatedSim || event.targetSim || 0;
   const ftthTarget = event.allocatedFtth || event.targetFtth || 0;
   const ebTarget = (event as any).targetEb || 0;

@@ -20,7 +20,7 @@ const useDebounce = <T,>(value: T, delay: number): T => {
 
 type HierarchyNode = {
   id: string;
-  purseId: string;
+  persNo: string;
   name: string;
   designation: string | null;
   circle: string | null;
@@ -28,7 +28,7 @@ type HierarchyNode = {
   division: string | null;
   officeName: string | null;
   sortOrder: number | null;
-  reportingPurseId: string | null;
+  reportingPersNo: string | null;
   isLinked: boolean | null;
   linkedEmployee: {
     id: string;
@@ -209,7 +209,7 @@ export default function HierarchyScreen() {
     { enabled: !!employee?.id, retry: 2 }
   );
 
-  const userPurseId = hierarchy?.masterData?.purseId;
+  const userPurseId = hierarchy?.masterData?.persNo;
   const isLinked = hierarchy?.isLinked;
 
   const { 
@@ -219,7 +219,7 @@ export default function HierarchyScreen() {
     isError: isHierarchyError,
     error: hierarchyError,
   } = trpc.admin.getFullHierarchy.useQuery(
-    { purseId: userPurseId || '' },
+    { persNo: userPurseId || '' },
     { enabled: !!userPurseId && isLinked, retry: 2, staleTime: 30000 }
   );
 
@@ -228,7 +228,7 @@ export default function HierarchyScreen() {
     isLoading: searchLoading,
     isFetching: isSearchFetching,
   } = trpc.admin.searchHierarchy.useQuery(
-    { purseId: userPurseId || '', searchQuery: debouncedSearchQuery },
+    { persNo: userPurseId || '', searchQuery: debouncedSearchQuery },
     { enabled: !!userPurseId && debouncedSearchQuery.length >= 2, retry: 1 }
   );
 

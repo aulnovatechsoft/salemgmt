@@ -7,13 +7,13 @@ export const adminRouter = createTRPCRouter({
   importEmployeeMaster: publicProcedure
     .input(z.object({
       data: z.array(z.object({
-        purseId: z.string().min(1),
+        persNo: z.string().min(1),
         name: z.string().min(1),
         circle: z.string().optional(),
         zone: z.string().optional(),
         designation: z.string().optional(),
         empGroup: z.string().optional(),
-        reportingPurseId: z.string().optional(),
+        reportingPersNo: z.string().optional(),
         reportingOfficerName: z.string().optional(),
         reportingOfficerDesignation: z.string().optional(),
         division: z.string().optional(),
@@ -36,7 +36,7 @@ export const adminRouter = createTRPCRouter({
       for (const record of input.data) {
         try {
           const existing = await db.select().from(employeeMaster)
-            .where(eq(employeeMaster.purseId, record.purseId));
+            .where(eq(employeeMaster.persNo, record.persNo));
           
           if (existing[0]) {
             await db.update(employeeMaster)
@@ -46,7 +46,7 @@ export const adminRouter = createTRPCRouter({
                 zone: record.zone || null,
                 designation: record.designation || null,
                 empGroup: record.empGroup || null,
-                reportingPurseId: record.reportingPurseId || null,
+                reportingPersNo: record.reportingPersNo || null,
                 reportingOfficerName: record.reportingOfficerName || null,
                 reportingOfficerDesignation: record.reportingOfficerDesignation || null,
                 division: record.division || null,
@@ -58,17 +58,17 @@ export const adminRouter = createTRPCRouter({
                 employeeId: record.employeeId || null,
                 updatedAt: new Date(),
               })
-              .where(eq(employeeMaster.purseId, record.purseId));
+              .where(eq(employeeMaster.persNo, record.persNo));
             updated++;
           } else {
             await db.insert(employeeMaster).values({
-              purseId: record.purseId,
+              persNo: record.persNo,
               name: record.name,
               circle: record.circle || null,
               zone: record.zone || null,
               designation: record.designation || null,
               empGroup: record.empGroup || null,
-              reportingPurseId: record.reportingPurseId || null,
+              reportingPersNo: record.reportingPersNo || null,
               reportingOfficerName: record.reportingOfficerName || null,
               reportingOfficerDesignation: record.reportingOfficerDesignation || null,
               division: record.division || null,
@@ -82,7 +82,7 @@ export const adminRouter = createTRPCRouter({
             imported++;
           }
         } catch (error: any) {
-          errors.push(`Row ${record.purseId}: ${error.message}`);
+          errors.push(`Row ${record.persNo}: ${error.message}`);
         }
       }
       
@@ -127,19 +127,19 @@ export const adminRouter = createTRPCRouter({
     }),
 
   getEmployeeMasterByPurseId: publicProcedure
-    .input(z.object({ purseId: z.string() }))
+    .input(z.object({ persNo: z.string() }))
     .query(async ({ input }) => {
-      console.log("Fetching employee master by purse ID:", input.purseId);
+      console.log("Fetching employee master by purse ID:", input.persNo);
       
       const result = await db.select().from(employeeMaster)
-        .where(eq(employeeMaster.purseId, input.purseId));
+        .where(eq(employeeMaster.persNo, input.persNo));
       
       if (!result[0]) return null;
       
       let manager = null;
-      if (result[0].reportingPurseId) {
+      if (result[0].reportingPersNo) {
         const managerResult = await db.select().from(employeeMaster)
-          .where(eq(employeeMaster.purseId, result[0].reportingPurseId));
+          .where(eq(employeeMaster.persNo, result[0].reportingPersNo));
         manager = managerResult[0] || null;
       }
       
@@ -148,14 +148,14 @@ export const adminRouter = createTRPCRouter({
 
   linkEmployeeProfile: publicProcedure
     .input(z.object({
-      purseId: z.string(),
+      persNo: z.string(),
       employeeId: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Linking employee profile:", input.purseId, "to", input.employeeId);
+      console.log("Linking employee profile:", input.persNo, "to", input.employeeId);
       
       const masterRecord = await db.select().from(employeeMaster)
-        .where(eq(employeeMaster.purseId, input.purseId));
+        .where(eq(employeeMaster.persNo, input.persNo));
       
       if (!masterRecord[0]) {
         throw new Error("Purse ID not found in employee master data. Please contact admin.");
@@ -172,29 +172,29 @@ export const adminRouter = createTRPCRouter({
           linkedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(eq(employeeMaster.purseId, input.purseId));
+        .where(eq(employeeMaster.persNo, input.persNo));
       
-      let reportingOfficerId = null;
-      if (masterRecord[0].reportingPurseId) {
+      let reportingPersNo = null;
+      if (masterRecord[0].reportingPersNo) {
         const managerMaster = await db.select().from(employeeMaster)
-          .where(eq(employeeMaster.purseId, masterRecord[0].reportingPurseId));
+          .where(eq(employeeMaster.persNo, masterRecord[0].reportingPersNo));
         
         if (managerMaster[0]?.linkedEmployeeId) {
-          reportingOfficerId = managerMaster[0].linkedEmployeeId;
+          reportingPersNo = managerMaster[0].linkedEmployeeId;
         }
       }
       
       await db.update(employees)
         .set({
-          employeeNo: input.purseId,
-          reportingOfficerId: reportingOfficerId,
+          persNo: input.persNo,
+          reportingPersNo: reportingPersNo,
           updatedAt: new Date(),
         })
         .where(eq(employees.id, input.employeeId));
       
       const subordinateMasters = await db.select().from(employeeMaster)
         .where(and(
-          eq(employeeMaster.reportingPurseId, input.purseId),
+          eq(employeeMaster.reportingPersNo, input.persNo),
           eq(employeeMaster.isLinked, true)
         ));
       
@@ -202,7 +202,7 @@ export const adminRouter = createTRPCRouter({
         if (sub.linkedEmployeeId) {
           await db.update(employees)
             .set({
-              reportingOfficerId: input.employeeId,
+              reportingPersNo: input.employeeId,
               updatedAt: new Date(),
             })
             .where(eq(employees.id, sub.linkedEmployeeId));
@@ -214,7 +214,7 @@ export const adminRouter = createTRPCRouter({
         entityType: 'EMPLOYEE',
         entityId: input.employeeId,
         performedBy: input.employeeId,
-        details: { purseId: input.purseId, subordinatesUpdated: subordinateMasters.length },
+        details: { persNo: input.persNo, subordinatesUpdated: subordinateMasters.length },
       });
       
       return { success: true, masterData: masterRecord[0] };
@@ -228,21 +228,21 @@ export const adminRouter = createTRPCRouter({
       const employee = await db.select().from(employees)
         .where(eq(employees.id, input.employeeId));
       
-      if (!employee[0]?.employeeNo) {
+      if (!employee[0]?.persNo) {
         return { manager: null, subordinates: [], isLinked: false };
       }
       
       const masterRecord = await db.select().from(employeeMaster)
-        .where(eq(employeeMaster.purseId, employee[0].employeeNo));
+        .where(eq(employeeMaster.persNo, employee[0].persNo));
       
       if (!masterRecord[0]) {
         return { manager: null, subordinates: [], isLinked: false };
       }
       
       let manager = null;
-      if (masterRecord[0].reportingPurseId) {
+      if (masterRecord[0].reportingPersNo) {
         const managerMaster = await db.select().from(employeeMaster)
-          .where(eq(employeeMaster.purseId, masterRecord[0].reportingPurseId));
+          .where(eq(employeeMaster.persNo, masterRecord[0].reportingPersNo));
         
         if (managerMaster[0]) {
           if (managerMaster[0].linkedEmployeeId) {
@@ -259,7 +259,7 @@ export const adminRouter = createTRPCRouter({
       }
       
       const subordinateMasters = await db.select().from(employeeMaster)
-        .where(eq(employeeMaster.reportingPurseId, employee[0].employeeNo));
+        .where(eq(employeeMaster.reportingPersNo, employee[0].persNo));
       
       const subordinates = await Promise.all(
         subordinateMasters.map(async (sub) => {
@@ -282,28 +282,28 @@ export const adminRouter = createTRPCRouter({
 
   deleteEmployeeMaster: publicProcedure
     .input(z.object({
-      purseId: z.string(),
+      persNo: z.string(),
       deletedBy: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Deleting employee master:", input.purseId);
+      console.log("Deleting employee master:", input.persNo);
       
       const record = await db.select().from(employeeMaster)
-        .where(eq(employeeMaster.purseId, input.purseId));
+        .where(eq(employeeMaster.persNo, input.persNo));
       
       if (record[0]?.isLinked) {
         throw new Error("Cannot delete linked employee. Unlink first.");
       }
       
       await db.delete(employeeMaster)
-        .where(eq(employeeMaster.purseId, input.purseId));
+        .where(eq(employeeMaster.persNo, input.persNo));
       
       await db.insert(auditLogs).values({
         action: 'DELETE_EMPLOYEE_MASTER',
         entityType: 'EMPLOYEE',
         entityId: input.deletedBy,
         performedBy: input.deletedBy,
-        details: { purseId: input.purseId },
+        details: { persNo: input.persNo },
       });
       
       return { success: true };
@@ -793,7 +793,7 @@ export const adminRouter = createTRPCRouter({
 
   getFullHierarchy: publicProcedure
     .input(z.object({
-      purseId: z.string(),
+      persNo: z.string(),
     }))
     .query(async ({ input }) => {
       try {
@@ -808,15 +808,15 @@ export const adminRouter = createTRPCRouter({
           }
         };
 
-        const getManagerChain = async (purseId: string, visited: Set<string> = new Set()): Promise<any[]> => {
-          if (visited.has(purseId)) {
-            console.warn(`Cycle detected in hierarchy at purseId: ${purseId}`);
+        const getManagerChain = async (persNo: string, visited: Set<string> = new Set()): Promise<any[]> => {
+          if (visited.has(persNo)) {
+            console.warn(`Cycle detected in hierarchy at persNo: ${persNo}`);
             return [];
           }
-          visited.add(purseId);
+          visited.add(persNo);
           
           const current = await db.select().from(employeeMaster)
-            .where(eq(employeeMaster.purseId, purseId));
+            .where(eq(employeeMaster.persNo, persNo));
           
           if (!current[0]) return [];
           
@@ -828,7 +828,7 @@ export const adminRouter = createTRPCRouter({
           
           const node = {
             id: emp.id,
-            purseId: emp.purseId,
+            persNo: emp.persNo,
             name: emp.name,
             designation: emp.designation,
             circle: emp.circle,
@@ -836,7 +836,7 @@ export const adminRouter = createTRPCRouter({
             division: emp.division,
             officeName: emp.officeName,
             sortOrder: emp.sortOrder,
-            reportingPurseId: emp.reportingPurseId,
+            reportingPersNo: emp.reportingPersNo,
             isLinked: emp.isLinked,
             linkedEmployee: linkedEmployee ? {
               id: linkedEmployee.id,
@@ -846,8 +846,8 @@ export const adminRouter = createTRPCRouter({
             } : null,
           };
           
-          if (emp.reportingPurseId) {
-            const managers = await getManagerChain(emp.reportingPurseId, visited);
+          if (emp.reportingPersNo) {
+            const managers = await getManagerChain(emp.reportingPersNo, visited);
             return [node, ...managers];
           }
           
@@ -855,20 +855,20 @@ export const adminRouter = createTRPCRouter({
         };
 
         const getSubordinates = async (
-          purseId: string, 
+          persNo: string, 
           depth: number = 0, 
           maxDepth: number = 3,
           visited: Set<string> = new Set()
         ): Promise<any[]> => {
           if (depth >= maxDepth) return [];
-          if (visited.has(purseId)) {
-            console.warn(`Cycle detected in subordinates at purseId: ${purseId}`);
+          if (visited.has(persNo)) {
+            console.warn(`Cycle detected in subordinates at persNo: ${persNo}`);
             return [];
           }
-          visited.add(purseId);
+          visited.add(persNo);
           
           const directReports = await db.select().from(employeeMaster)
-            .where(eq(employeeMaster.reportingPurseId, purseId))
+            .where(eq(employeeMaster.reportingPersNo, persNo))
             .orderBy(desc(employeeMaster.sortOrder));
           
           if (directReports.length === 0) return [];
@@ -878,24 +878,24 @@ export const adminRouter = createTRPCRouter({
             .map(emp => emp.linkedEmployeeId!);
           await batchFetchLinkedEmployees(linkedIds);
           
-          const directReportPurseIds = directReports.map(emp => emp.purseId);
+          const directReportPurseIds = directReports.map(emp => emp.persNo);
           const countResults = await db.select({
-            reportingPurseId: employeeMaster.reportingPurseId,
+            reportingPersNo: employeeMaster.reportingPersNo,
             count: sql<number>`count(*)`,
           })
             .from(employeeMaster)
-            .where(inArray(employeeMaster.reportingPurseId, directReportPurseIds))
-            .groupBy(employeeMaster.reportingPurseId);
+            .where(inArray(employeeMaster.reportingPersNo, directReportPurseIds))
+            .groupBy(employeeMaster.reportingPersNo);
           
-          const countMap = new Map(countResults.map(r => [r.reportingPurseId, Number(r.count)]));
+          const countMap = new Map(countResults.map(r => [r.reportingPersNo, Number(r.count)]));
           
           const subordinates = await Promise.all(directReports.map(async (emp) => {
             const linkedEmployee = emp.linkedEmployeeId ? linkedEmployeeCache.get(emp.linkedEmployeeId) : null;
-            const children = await getSubordinates(emp.purseId, depth + 1, maxDepth, visited);
+            const children = await getSubordinates(emp.persNo, depth + 1, maxDepth, visited);
             
             return {
               id: emp.id,
-              purseId: emp.purseId,
+              persNo: emp.persNo,
               name: emp.name,
               designation: emp.designation,
               circle: emp.circle,
@@ -903,7 +903,7 @@ export const adminRouter = createTRPCRouter({
               division: emp.division,
               officeName: emp.officeName,
               sortOrder: emp.sortOrder,
-              reportingPurseId: emp.reportingPurseId,
+              reportingPersNo: emp.reportingPersNo,
               isLinked: emp.isLinked,
               linkedEmployee: linkedEmployee ? {
                 id: linkedEmployee.id,
@@ -911,7 +911,7 @@ export const adminRouter = createTRPCRouter({
                 phone: linkedEmployee.phone,
                 role: linkedEmployee.role,
               } : null,
-              directReportsCount: countMap.get(emp.purseId) || 0,
+              directReportsCount: countMap.get(emp.persNo) || 0,
               children: children,
             };
           }));
@@ -920,7 +920,7 @@ export const adminRouter = createTRPCRouter({
         };
 
         const current = await db.select().from(employeeMaster)
-          .where(eq(employeeMaster.purseId, input.purseId));
+          .where(eq(employeeMaster.persNo, input.persNo));
         
         if (!current[0]) {
           return { managers: [], currentUser: null, subordinates: [] };
@@ -934,11 +934,11 @@ export const adminRouter = createTRPCRouter({
         
         const directReportsCount = await db.select({ count: sql<number>`count(*)` })
           .from(employeeMaster)
-          .where(eq(employeeMaster.reportingPurseId, emp.purseId));
+          .where(eq(employeeMaster.reportingPersNo, emp.persNo));
         
         const currentUser = {
           id: emp.id,
-          purseId: emp.purseId,
+          persNo: emp.persNo,
           name: emp.name,
           designation: emp.designation,
           circle: emp.circle,
@@ -946,7 +946,7 @@ export const adminRouter = createTRPCRouter({
           division: emp.division,
           officeName: emp.officeName,
           sortOrder: emp.sortOrder,
-          reportingPurseId: emp.reportingPurseId,
+          reportingPersNo: emp.reportingPersNo,
           isLinked: emp.isLinked,
           linkedEmployee: linkedEmployee ? {
             id: linkedEmployee.id,
@@ -958,11 +958,11 @@ export const adminRouter = createTRPCRouter({
         };
         
         let managers: any[] = [];
-        if (emp.reportingPurseId) {
-          managers = await getManagerChain(emp.reportingPurseId);
+        if (emp.reportingPersNo) {
+          managers = await getManagerChain(emp.reportingPersNo);
         }
         
-        const subordinates = await getSubordinates(input.purseId);
+        const subordinates = await getSubordinates(input.persNo);
         
         return { managers, currentUser, subordinates };
       } catch (error) {
@@ -973,7 +973,7 @@ export const adminRouter = createTRPCRouter({
 
   getSubordinatesPage: publicProcedure
     .input(z.object({
-      purseId: z.string(),
+      persNo: z.string(),
       page: z.number().default(1),
       limit: z.number().default(20),
       search: z.string().optional(),
@@ -983,14 +983,14 @@ export const adminRouter = createTRPCRouter({
         const offset = (input.page - 1) * input.limit;
         
         const directReports = await db.select().from(employeeMaster)
-          .where(eq(employeeMaster.reportingPurseId, input.purseId))
+          .where(eq(employeeMaster.reportingPersNo, input.persNo))
           .orderBy(desc(employeeMaster.sortOrder))
           .limit(input.limit)
           .offset(offset);
         
         const totalCount = await db.select({ count: sql<number>`count(*)` })
           .from(employeeMaster)
-          .where(eq(employeeMaster.reportingPurseId, input.purseId));
+          .where(eq(employeeMaster.reportingPersNo, input.persNo));
         
         if (directReports.length === 0) {
           return {
@@ -1012,23 +1012,23 @@ export const adminRouter = createTRPCRouter({
           linkedEmps.forEach(emp => linkedEmployeeMap.set(emp.id, emp));
         }
         
-        const purseIds = directReports.map(emp => emp.purseId);
+        const persNos = directReports.map(emp => emp.persNo);
         const countResults = await db.select({
-          reportingPurseId: employeeMaster.reportingPurseId,
+          reportingPersNo: employeeMaster.reportingPersNo,
           count: sql<number>`count(*)`,
         })
           .from(employeeMaster)
-          .where(inArray(employeeMaster.reportingPurseId, purseIds))
-          .groupBy(employeeMaster.reportingPurseId);
+          .where(inArray(employeeMaster.reportingPersNo, persNos))
+          .groupBy(employeeMaster.reportingPersNo);
         
-        const countMap = new Map(countResults.map(r => [r.reportingPurseId, Number(r.count)]));
+        const countMap = new Map(countResults.map(r => [r.reportingPersNo, Number(r.count)]));
         
         const subordinates = directReports.map((emp) => {
           const linkedEmployee = emp.linkedEmployeeId ? linkedEmployeeMap.get(emp.linkedEmployeeId) : null;
           
           return {
             id: emp.id,
-            purseId: emp.purseId,
+            persNo: emp.persNo,
             name: emp.name,
             designation: emp.designation,
             circle: emp.circle,
@@ -1043,7 +1043,7 @@ export const adminRouter = createTRPCRouter({
               phone: linkedEmployee.phone,
               role: linkedEmployee.role,
             } : null,
-            directReportsCount: countMap.get(emp.purseId) || 0,
+            directReportsCount: countMap.get(emp.persNo) || 0,
           };
         });
         
@@ -1061,32 +1061,32 @@ export const adminRouter = createTRPCRouter({
 
   searchHierarchy: publicProcedure
     .input(z.object({
-      purseId: z.string(),
+      persNo: z.string(),
       searchQuery: z.string().min(2),
     }))
     .query(async ({ input }) => {
       try {
-        const getAllSubordinatePurseIds = async (purseId: string, visited: Set<string> = new Set(), depth: number = 0): Promise<string[]> => {
-          if (visited.has(purseId) || depth > 10) return [];
-          visited.add(purseId);
+        const getAllSubordinatePurseIds = async (persNo: string, visited: Set<string> = new Set(), depth: number = 0): Promise<string[]> => {
+          if (visited.has(persNo) || depth > 10) return [];
+          visited.add(persNo);
           
-          const directReports = await db.select({ purseId: employeeMaster.purseId })
+          const directReports = await db.select({ persNo: employeeMaster.persNo })
             .from(employeeMaster)
-            .where(eq(employeeMaster.reportingPurseId, purseId));
+            .where(eq(employeeMaster.reportingPersNo, persNo));
           
-          const allIds = [purseId];
+          const allIds = [persNo];
           for (const report of directReports) {
-            const childIds = await getAllSubordinatePurseIds(report.purseId, visited, depth + 1);
+            const childIds = await getAllSubordinatePurseIds(report.persNo, visited, depth + 1);
             allIds.push(...childIds);
           }
           return allIds;
         };
 
-        const subordinatePurseIds = await getAllSubordinatePurseIds(input.purseId);
+        const subordinatePurseIds = await getAllSubordinatePurseIds(input.persNo);
         
         const searchPattern = `%${input.searchQuery}%`;
         const results = await db.select().from(employeeMaster)
-          .where(sql`(${employeeMaster.name} ILIKE ${searchPattern} OR ${employeeMaster.purseId} ILIKE ${searchPattern}) AND ${employeeMaster.purseId} = ANY(${subordinatePurseIds})`)
+          .where(sql`(${employeeMaster.name} ILIKE ${searchPattern} OR ${employeeMaster.persNo} ILIKE ${searchPattern}) AND ${employeeMaster.persNo} = ANY(${subordinatePurseIds})`)
           .orderBy(desc(employeeMaster.sortOrder))
           .limit(50);
         
@@ -1108,7 +1108,7 @@ export const adminRouter = createTRPCRouter({
           
           return {
             id: emp.id,
-            purseId: emp.purseId,
+            persNo: emp.persNo,
             name: emp.name,
             designation: emp.designation,
             circle: emp.circle,
@@ -1141,24 +1141,24 @@ export const adminRouter = createTRPCRouter({
         const employee = await db.select().from(employees)
           .where(eq(employees.id, input.employeeId));
         
-        if (!employee[0]?.employeeNo) {
+        if (!employee[0]?.persNo) {
           return { subordinates: [], managerPurseId: null };
         }
         
-        const managerPurseId = employee[0].employeeNo;
+        const managerPurseId = employee[0].persNo;
         
         // Get Level 1 subordinates (direct reports)
         const level1Reports = await db.select().from(employeeMaster)
-          .where(eq(employeeMaster.reportingPurseId, managerPurseId))
+          .where(eq(employeeMaster.reportingPersNo, managerPurseId))
           .orderBy(desc(employeeMaster.sortOrder));
         
         // Get Level 2 subordinates (reports of direct reports)
-        const level1PurseIds = level1Reports.map(r => r.purseId);
+        const level1PurseIds = level1Reports.map(r => r.persNo);
         let level2Reports: typeof level1Reports = [];
         
         if (level1PurseIds.length > 0) {
           level2Reports = await db.select().from(employeeMaster)
-            .where(inArray(employeeMaster.reportingPurseId, level1PurseIds))
+            .where(inArray(employeeMaster.reportingPersNo, level1PurseIds))
             .orderBy(desc(employeeMaster.sortOrder));
         }
         
@@ -1175,19 +1175,19 @@ export const adminRouter = createTRPCRouter({
         }
         
         // Get subordinate counts for each employee
-        const allPurseIds = [...level1PurseIds, ...level2Reports.map(r => r.purseId)];
+        const allPurseIds = [...level1PurseIds, ...level2Reports.map(r => r.persNo)];
         const countMap = new Map<string, number>();
         
         if (allPurseIds.length > 0) {
           const countResults = await db.select({
-            reportingPurseId: employeeMaster.reportingPurseId,
+            reportingPersNo: employeeMaster.reportingPersNo,
             count: sql<number>`count(*)`,
           })
             .from(employeeMaster)
-            .where(inArray(employeeMaster.reportingPurseId, allPurseIds))
-            .groupBy(employeeMaster.reportingPurseId);
+            .where(inArray(employeeMaster.reportingPersNo, allPurseIds))
+            .groupBy(employeeMaster.reportingPersNo);
           
-          countResults.forEach(r => countMap.set(r.reportingPurseId!, Number(r.count)));
+          countResults.forEach(r => countMap.set(r.reportingPersNo!, Number(r.count)));
         }
         
         // Format subordinates with hierarchy structure
@@ -1195,7 +1195,7 @@ export const adminRouter = createTRPCRouter({
           const linkedEmployee = emp.linkedEmployeeId ? linkedEmployeeMap.get(emp.linkedEmployeeId) : null;
           return {
             id: emp.id,
-            purseId: emp.purseId,
+            persNo: emp.persNo,
             name: emp.name,
             designation: emp.designation,
             circle: emp.circle,
@@ -1204,14 +1204,14 @@ export const adminRouter = createTRPCRouter({
             officeName: emp.officeName,
             isLinked: emp.isLinked,
             level,
-            reportingPurseId: emp.reportingPurseId,
+            reportingPersNo: emp.reportingPersNo,
             linkedEmployee: linkedEmployee ? {
               id: linkedEmployee.id,
               email: linkedEmployee.email,
               phone: linkedEmployee.phone,
               role: linkedEmployee.role,
             } : null,
-            directReportsCount: countMap.get(emp.purseId) || 0,
+            directReportsCount: countMap.get(emp.persNo) || 0,
           };
         };
         
@@ -1219,7 +1219,7 @@ export const adminRouter = createTRPCRouter({
         const level1Formatted = level1Reports.map(emp => ({
           ...formatSubordinate(emp, 1),
           subordinates: level2Reports
-            .filter(l2 => l2.reportingPurseId === emp.purseId)
+            .filter(l2 => l2.reportingPersNo === emp.persNo)
             .map(l2 => formatSubordinate(l2, 2)),
         }));
         
@@ -1234,5 +1234,167 @@ export const adminRouter = createTRPCRouter({
         console.error('Error fetching 2-level subordinates:', error);
         throw new Error('Failed to fetch team hierarchy. Please try again.');
       }
+    }),
+
+  bulkActivateEmployees: publicProcedure
+    .input(z.object({
+      circle: z.string().optional(),
+      adminId: z.string().uuid(),
+    }))
+    .mutation(async ({ input }) => {
+      console.log("=== BULK ACTIVATE EMPLOYEES ===");
+      console.log("Circle filter:", input.circle || "All circles");
+      
+      let unlinkedQuery = db.select().from(employeeMaster)
+        .where(isNull(employeeMaster.linkedEmployeeId));
+      
+      if (input.circle) {
+        unlinkedQuery = db.select().from(employeeMaster)
+          .where(and(
+            isNull(employeeMaster.linkedEmployeeId),
+            eq(employeeMaster.circle, input.circle)
+          ));
+      }
+      
+      const unlinkedEmployees = await unlinkedQuery;
+      console.log(`Found ${unlinkedEmployees.length} unlinked employees to activate`);
+      
+      let activated = 0;
+      let skipped = 0;
+      const errors: string[] = [];
+      
+      const generateDefaultPassword = (persNo: string): string => {
+        const last4 = persNo.slice(-4);
+        return `BSNL@${last4}`;
+      };
+      
+      const mapCircleToEnum = (circle: string | null): string => {
+        if (!circle) return 'KARNATAKA';
+        const circleMap: Record<string, string> = {
+          'ANDAMAN_NICOBAR': 'ANDAMAN_NICOBAR',
+          'ANDHRA_PRADESH': 'ANDHRA_PRADESH',
+          'ASSAM': 'ASSAM',
+          'BIHAR': 'BIHAR',
+          'CHHATTISGARH': 'CHHATTISGARH',
+          'GUJARAT': 'GUJARAT',
+          'HARYANA': 'HARYANA',
+          'HIMACHAL_PRADESH': 'HIMACHAL_PRADESH',
+          'JAMMU_KASHMIR': 'JAMMU_KASHMIR',
+          'JHARKHAND': 'JHARKHAND',
+          'KARNATAKA': 'KARNATAKA',
+          'KERALA': 'KERALA',
+          'MADHYA_PRADESH': 'MADHYA_PRADESH',
+          'MAHARASHTRA': 'MAHARASHTRA',
+          'NORTH_EAST_I': 'NORTH_EAST_I',
+          'NORTH_EAST_II': 'NORTH_EAST_II',
+          'ODISHA': 'ODISHA',
+          'PUNJAB': 'PUNJAB',
+          'RAJASTHAN': 'RAJASTHAN',
+          'TAMIL_NADU': 'TAMIL_NADU',
+          'TELANGANA': 'TELANGANA',
+          'UTTARAKHAND': 'UTTARAKHAND',
+          'UTTAR_PRADESH_EAST': 'UTTAR_PRADESH_EAST',
+          'UTTAR_PRADESH_WEST': 'UTTAR_PRADESH_WEST',
+          'WEST_BENGAL': 'WEST_BENGAL',
+        };
+        
+        const normalized = circle.toUpperCase().replace(/[\s-]+/g, '_');
+        return circleMap[normalized] || 'KARNATAKA';
+      };
+      
+      const mapDesignationToRole = (designation: string | null): 'GM' | 'CGM' | 'DGM' | 'AGM' | 'SD_JTO' | 'SALES_STAFF' => {
+        if (!designation) return 'SALES_STAFF';
+        const upper = designation.toUpperCase();
+        if (upper.includes('GM') && !upper.includes('AGM') && !upper.includes('DGM') && !upper.includes('CGM')) return 'GM';
+        if (upper.includes('CGM')) return 'CGM';
+        if (upper.includes('DGM')) return 'DGM';
+        if (upper.includes('AGM')) return 'AGM';
+        if (upper.includes('JTO') || upper.includes('SDE')) return 'SD_JTO';
+        return 'SALES_STAFF';
+      };
+      
+      for (const emp of unlinkedEmployees) {
+        try {
+          const existingEmployee = await db.select().from(employees)
+            .where(eq(employees.persNo, emp.persNo));
+          
+          if (existingEmployee.length > 0) {
+            await db.update(employeeMaster)
+              .set({ 
+                linkedEmployeeId: existingEmployee[0].id,
+                updatedAt: new Date()
+              })
+              .where(eq(employeeMaster.id, emp.id));
+            skipped++;
+            continue;
+          }
+          
+          const password = generateDefaultPassword(emp.persNo);
+          const circleEnum = mapCircleToEnum(emp.circle) as any;
+          const role = mapDesignationToRole(emp.designation);
+          
+          const newEmployee = await db.insert(employees).values({
+            name: emp.name,
+            email: null,
+            phone: null,
+            password: password,
+            role: role,
+            circle: circleEnum,
+            zone: emp.zone || 'Default',
+            persNo: emp.persNo,
+            designation: emp.designation || 'Staff',
+            isActive: true,
+            needsPasswordChange: true,
+          }).returning();
+          
+          await db.update(employeeMaster)
+            .set({ 
+              linkedEmployeeId: newEmployee[0].id,
+              updatedAt: new Date()
+            })
+            .where(eq(employeeMaster.id, emp.id));
+          
+          activated++;
+        } catch (error: any) {
+          errors.push(`${emp.persNo}: ${error.message}`);
+        }
+      }
+      
+      await db.insert(auditLogs).values({
+        action: 'BULK_ACTIVATE_EMPLOYEES',
+        entityType: 'EMPLOYEE',
+        entityId: input.adminId,
+        performedBy: input.adminId,
+        details: { 
+          circle: input.circle || 'All', 
+          activated, 
+          skipped,
+          errors: errors.length 
+        },
+      });
+      
+      console.log(`Bulk activation complete: ${activated} activated, ${skipped} skipped, ${errors.length} errors`);
+      
+      return { 
+        activated, 
+        skipped, 
+        errors,
+        passwordFormula: "BSNL@ + last 4 digits of Pers No (e.g., Pers No 198012345 → Password: BSNL@2345)"
+      };
+    }),
+
+  getCirclesWithUnlinkedCount: publicProcedure
+    .query(async () => {
+      const result = await db.execute(sql`
+        SELECT 
+          COALESCE(circle, 'Unknown') as circle,
+          COUNT(*) as count
+        FROM employee_master
+        WHERE linked_employee_id IS NULL
+        GROUP BY circle
+        ORDER BY count DESC
+      `);
+      
+      return result as unknown as { circle: string; count: string }[];
     }),
 });

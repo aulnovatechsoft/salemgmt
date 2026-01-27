@@ -20,7 +20,7 @@ interface TaskType {
 
 interface SubordinateEmployee {
   id: string;
-  purseId: string;
+  persNo: string;
   name: string;
   designation: string | null;
   circle: string | null;
@@ -40,7 +40,7 @@ interface SubordinateEmployee {
 }
 
 interface TaskAssignment {
-  employeePurseId: string;
+  employeePersNo: string;
   employeeName: string;
   employeeDesignation: string | null;
   linkedEmployeeId: string | null;
@@ -78,7 +78,7 @@ export default function TeamHierarchyPicker({
   useEffect(() => {
     if (visible && existingAssignments.length > 0) {
       const map = new Map<string, TaskAssignment>();
-      existingAssignments.forEach(a => map.set(a.employeePurseId, a));
+      existingAssignments.forEach(a => map.set(a.employeePersNo, a));
       setAssignments(map);
     }
   }, [visible, existingAssignments]);
@@ -89,13 +89,13 @@ export default function TeamHierarchyPicker({
     }
   }, [visible]);
 
-  const toggleExpand = (purseId: string) => {
+  const toggleExpand = (persNo: string) => {
     setExpandedNodes(prev => {
       const next = new Set(prev);
-      if (next.has(purseId)) {
-        next.delete(purseId);
+      if (next.has(persNo)) {
+        next.delete(persNo);
       } else {
-        next.add(purseId);
+        next.add(persNo);
       }
       return next;
     });
@@ -104,7 +104,7 @@ export default function TeamHierarchyPicker({
   const toggleTaskForEmployee = (employee: SubordinateEmployee, taskId: string) => {
     setAssignments(prev => {
       const next = new Map(prev);
-      const existing = next.get(employee.purseId);
+      const existing = next.get(employee.persNo);
       
       if (existing) {
         const taskIds = existing.taskIds.includes(taskId)
@@ -112,13 +112,13 @@ export default function TeamHierarchyPicker({
           : [...existing.taskIds, taskId];
         
         if (taskIds.length === 0) {
-          next.delete(employee.purseId);
+          next.delete(employee.persNo);
         } else {
-          next.set(employee.purseId, { ...existing, taskIds });
+          next.set(employee.persNo, { ...existing, taskIds });
         }
       } else {
-        next.set(employee.purseId, {
-          employeePurseId: employee.purseId,
+        next.set(employee.persNo, {
+          employeePersNo: employee.persNo,
           employeeName: employee.name,
           employeeDesignation: employee.designation,
           linkedEmployeeId: employee.linkedEmployee?.id || null,
@@ -130,13 +130,13 @@ export default function TeamHierarchyPicker({
     });
   };
 
-  const isTaskAssignedToEmployee = (purseId: string, taskId: string) => {
-    const assignment = assignments.get(purseId);
+  const isTaskAssignedToEmployee = (persNo: string, taskId: string) => {
+    const assignment = assignments.get(persNo);
     return assignment?.taskIds.includes(taskId) || false;
   };
 
-  const getAssignedTaskCount = (purseId: string) => {
-    return assignments.get(purseId)?.taskIds.length || 0;
+  const getAssignedTaskCount = (persNo: string) => {
+    return assignments.get(persNo)?.taskIds.length || 0;
   };
 
   const handleConfirm = () => {
@@ -157,12 +157,12 @@ export default function TeamHierarchyPicker({
 
   const renderEmployeeCard = (employee: SubordinateEmployee, isLevel2 = false) => {
     const hasSubordinates = employee.subordinates && employee.subordinates.length > 0;
-    const isExpanded = expandedNodes.has(employee.purseId);
-    const assignedCount = getAssignedTaskCount(employee.purseId);
-    const isSelected = selectedEmployee?.purseId === employee.purseId;
+    const isExpanded = expandedNodes.has(employee.persNo);
+    const assignedCount = getAssignedTaskCount(employee.persNo);
+    const isSelected = selectedEmployee?.persNo === employee.persNo;
 
     return (
-      <View key={employee.purseId} style={[styles.employeeContainer, isLevel2 && styles.level2Container]}>
+      <View key={employee.persNo} style={[styles.employeeContainer, isLevel2 && styles.level2Container]}>
         <TouchableOpacity
           style={[
             styles.employeeCard,
@@ -176,7 +176,7 @@ export default function TeamHierarchyPicker({
             {hasSubordinates && (
               <TouchableOpacity
                 style={styles.expandButton}
-                onPress={() => toggleExpand(employee.purseId)}
+                onPress={() => toggleExpand(employee.persNo)}
               >
                 {isExpanded ? (
                   <ChevronDown size={18} color={Colors.light.textSecondary} />
@@ -194,7 +194,7 @@ export default function TeamHierarchyPicker({
             <View style={styles.employeeInfo}>
               <Text style={styles.employeeName} numberOfLines={1}>{employee.name}</Text>
               <Text style={styles.employeeMeta} numberOfLines={1}>
-                {employee.purseId} {employee.designation ? `• ${employee.designation}` : ''}
+                {employee.persNo} {employee.designation ? `• ${employee.designation}` : ''}
               </Text>
               {employee.directReportsCount > 0 && (
                 <View style={styles.teamBadge}>
@@ -217,7 +217,7 @@ export default function TeamHierarchyPicker({
             <Text style={styles.taskSelectionTitle}>Assign Tasks:</Text>
             <View style={styles.taskChipsContainer}>
               {selectedTasks.map(task => {
-                const isAssigned = isTaskAssignedToEmployee(employee.purseId, task.id);
+                const isAssigned = isTaskAssignedToEmployee(employee.persNo, task.id);
                 return (
                   <TouchableOpacity
                     key={task.id}

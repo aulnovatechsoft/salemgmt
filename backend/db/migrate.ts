@@ -114,8 +114,8 @@ async function createTables() {
         role user_role NOT NULL,
         circle bsnl_circle NOT NULL,
         zone VARCHAR(100) NOT NULL,
-        reporting_officer_id UUID,
-        employee_no VARCHAR(50),
+        reporting_pers_no VARCHAR(50),
+        pers_no VARCHAR(50),
         designation VARCHAR(100) NOT NULL,
         is_active BOOLEAN DEFAULT true,
         created_at TIMESTAMP DEFAULT NOW() NOT NULL,
@@ -540,12 +540,12 @@ async function createTables() {
     await sql`
       CREATE TABLE IF NOT EXISTS employee_master (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        purse_id VARCHAR(50) NOT NULL UNIQUE,
+        pers_no VARCHAR(50) NOT NULL UNIQUE,
         name VARCHAR(255) NOT NULL,
         circle VARCHAR(100),
         zone VARCHAR(100),
         designation VARCHAR(100),
-        reporting_purse_id VARCHAR(50),
+        reporting_pers_no VARCHAR(50),
         employee_id VARCHAR(50),
         is_linked BOOLEAN DEFAULT false,
         linked_employee_id UUID REFERENCES employees(id),
@@ -556,8 +556,8 @@ async function createTables() {
     `;
     console.log("employee_master table created");
 
-    await sql`CREATE INDEX IF NOT EXISTS idx_employee_master_purse_id ON employee_master(purse_id);`;
-    await sql`CREATE INDEX IF NOT EXISTS idx_employee_master_reporting ON employee_master(reporting_purse_id);`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_employee_master_pers_no ON employee_master(pers_no);`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_employee_master_reporting ON employee_master(reporting_pers_no);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_employee_master_linked ON employee_master(linked_employee_id);`;
 
     console.log("All tables created successfully!");

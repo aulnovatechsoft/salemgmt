@@ -55,11 +55,35 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     }
   }, []);
 
+  const refreshEmployee = useCallback(async () => {
+    if (!employee?.id) return;
+    try {
+      const response = await fetch(`/api/trpc/employees.getById?input=${encodeURIComponent(JSON.stringify({ id: employee.id }))}`);
+      const result = await response.json();
+      if (result?.result?.data) {
+        const updatedEmployee = result.result.data;
+        await AsyncStorage.setItem(EMPLOYEE_KEY, JSON.stringify(updatedEmployee));
+        setEmployee(updatedEmployee);
+      }
+    } catch (error) {
+      console.error('Failed to refresh employee:', error);
+    }
+  }, [employee?.id]);
+
+  const updateEmployee = useCallback(async (updates: Partial<Employee>) => {
+    if (!employee) return;
+    const updatedEmployee = { ...employee, ...updates };
+    await AsyncStorage.setItem(EMPLOYEE_KEY, JSON.stringify(updatedEmployee));
+    setEmployee(updatedEmployee);
+  }, [employee]);
+
   return {
     employee,
     isAuthenticated,
     isLoading,
     login,
     logout,
+    refreshEmployee,
+    updateEmployee,
   };
 });
