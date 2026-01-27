@@ -105,7 +105,7 @@ export default function EventDetailScreen() {
   }
   
   const managerPurseId = eventData?.assignedToEmployee ? 
-    (eventData.assignedToEmployee as any).purseId || null : null;
+    (eventData.assignedToEmployee as any).persNo || null : null;
   
   const { data: availableMembers } = trpc.events.getAvailableTeamMembers.useQuery(
     { circle: eventData?.circle as Circle, eventId: id, managerPurseId: managerPurseId || undefined },
@@ -275,7 +275,7 @@ export default function EventDetailScreen() {
     setSubtaskTitle(subtask.title);
     setSubtaskDescription(subtask.description || '');
     setSubtaskAssignee(subtask.assignedTo || '');
-    setSubtaskStaffId(subtask.assignedEmployee?.employeeNo || '');
+    setSubtaskStaffId(subtask.assignedEmployee?.persNo || '');
     setSubtaskPriority(subtask.priority);
     setSubtaskDueDate(subtask.dueDate ? new Date(subtask.dueDate).toISOString().split('T')[0] : '');
     setSubtaskSimAllocated(subtask.simAllocated?.toString() || '');
@@ -1118,7 +1118,7 @@ export default function EventDetailScreen() {
                   <Text style={styles.memberName}>{eventData.assignedToEmployee.name}</Text>
                   <Text style={styles.memberRole}>
                     {eventData.assignedToEmployee.designation || eventData.assignedToEmployee.role}
-                    {(eventData.assignedToEmployee as any).purseId ? ` | ${(eventData.assignedToEmployee as any).purseId}` : ''}
+                    {(eventData.assignedToEmployee as any).persNo ? ` | ${(eventData.assignedToEmployee as any).persNo}` : ''}
                   </Text>
                   <Text style={[styles.memberRole, { color: Colors.light.primary, fontWeight: '600' }]}>
                     Manages team & assigns tasks
@@ -1159,7 +1159,7 @@ export default function EventDetailScreen() {
                     </View>
                     <View>
                       <Text style={styles.memberName}>{member.employee?.name || 'Unknown'}</Text>
-                      <Text style={styles.memberRole}>{member.employee?.designation || member.employee?.role}{member.employee?.purseId ? ` | ${member.employee.purseId}` : ''}</Text>
+                      <Text style={styles.memberRole}>{member.employee?.designation || member.employee?.role}{member.employee?.persNo ? ` | ${member.employee.persNo}` : ''}</Text>
                     </View>
                   </View>
                   {canManageTeam && dbStatus !== 'completed' && dbStatus !== 'cancelled' && (
@@ -1300,7 +1300,7 @@ export default function EventDetailScreen() {
                     >
                       <View style={styles.memberOptionInfo}>
                         <Text style={styles.memberOptionName}>{member.name}</Text>
-                        <Text style={styles.memberOptionRole}>{member.designation || member.role}{member.purseId ? ` | ${member.purseId}` : ''}</Text>
+                        <Text style={styles.memberOptionRole}>{member.designation || member.role}{member.persNo ? ` | ${member.persNo}` : ''}</Text>
                       </View>
                       {selectedMemberId === member.id && (
                         <View style={styles.checkmark}><Text style={styles.checkmarkText}>✓</Text></View>
@@ -1412,9 +1412,9 @@ export default function EventDetailScreen() {
               <TextInput style={[styles.input, styles.textArea]} value={subtaskDescription} onChangeText={setSubtaskDescription} placeholder="Description (optional)" multiline numberOfLines={3} />
               
               <Text style={styles.inputLabel}>Assign To (Pers No) *</Text>
-              <View style={styles.purseIdRow}>
+              <View style={styles.persNoRow}>
                 <TextInput 
-                  style={[styles.input, styles.purseIdInput]} 
+                  style={[styles.input, styles.persNoInput]} 
                   value={subtaskStaffId} 
                   onChangeText={(text) => {
                     setSubtaskStaffId(text);
@@ -1815,8 +1815,8 @@ const styles = StyleSheet.create({
   statusOptionText: { fontSize: 16, color: Colors.light.text, marginBottom: 2 },
   statusOptionDesc: { fontSize: 12, color: Colors.light.textSecondary },
   noTransitionsText: { fontSize: 14, color: Colors.light.textSecondary, textAlign: 'center', paddingVertical: 16 },
-  purseIdRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  purseIdInput: { flex: 1 },
+  persNoRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  persNoInput: { flex: 1 },
   verifyButton: { backgroundColor: Colors.light.primary, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 8 },
   verifyButtonText: { color: Colors.light.background, fontSize: 14, fontWeight: '600' as const },
   foundEmployeeCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E8F5E9', padding: 12, borderRadius: 8, marginTop: 8, gap: 10 },

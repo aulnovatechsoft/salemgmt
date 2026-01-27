@@ -11,13 +11,13 @@ import { trpc } from '@/lib/trpc';
 
 type MasterRecord = {
   id: string;
-  purseId: string;
+  persNo: string;
   name: string;
   circle: string | null;
   zone: string | null;
   designation: string | null;
   empGroup: string | null;
-  reportingPurseId: string | null;
+  reportingPersNo: string | null;
   reportingOfficerName: string | null;
   reportingOfficerDesignation: string | null;
   division: string | null;
@@ -27,7 +27,7 @@ type MasterRecord = {
   manager?: {
     name: string;
     designation: string | null;
-    purseId: string;
+    persNo: string;
   } | null;
 };
 
@@ -37,7 +37,7 @@ export default function RegisterScreen() {
   const { addEmployees } = useApp();
   
   const [step, setStep] = useState<'verify' | 'register'>('verify');
-  const [purseId, setPurseId] = useState('');
+  const [persNo, setPurseId] = useState('');
   const [masterData, setMasterData] = useState<MasterRecord | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
   
@@ -54,14 +54,14 @@ export default function RegisterScreen() {
   const trpcUtils = trpc.useUtils();
 
   const verifyPurseId = async () => {
-    if (!purseId.trim()) {
+    if (!persNo.trim()) {
       Alert.alert('Error', 'Please enter your Employee Pers No');
       return;
     }
     
     setIsVerifying(true);
     try {
-      const result = await trpcUtils.admin.getEmployeeMasterByPurseId.fetch({ purseId: purseId.trim() });
+      const result = await trpcUtils.admin.getEmployeeMasterByPurseId.fetch({ persNo: persNo.trim() });
       
       if (!result) {
         Alert.alert(
@@ -133,7 +133,7 @@ export default function RegisterScreen() {
       
       try {
         await linkMutation.mutateAsync({
-          purseId: masterData!.purseId,
+          persNo: masterData!.persNo,
           employeeId: data.id,
         });
         console.log('Employee linked to master record');
@@ -159,8 +159,8 @@ export default function RegisterScreen() {
         division: masterData?.zone || '',
         buildingName: masterData?.buildingName || undefined,
         officeName: masterData?.officeName || undefined,
-        reportingOfficerId: data.reportingOfficerId || undefined,
-        employeeNo: data.employeeNo || '',
+        reportingPersNo: data.reportingPersNo || undefined,
+        persNo: data.persNo || '',
         designation: data.designation,
         createdAt: data.createdAt?.toISOString() || new Date().toISOString(),
       };
@@ -205,7 +205,7 @@ export default function RegisterScreen() {
     
     // Auto-admin: Specific purse IDs get full admin (GM) role
     const adminPurseIds = ['60010032']; // SURESH KUMAR - OSD to CMD
-    if (adminPurseIds.includes(masterData.purseId)) {
+    if (adminPurseIds.includes(masterData.persNo)) {
       role = 'GM';
     } 
     // Auto-admin: High-level designations get GM role
@@ -272,7 +272,7 @@ export default function RegisterScreen() {
         role: role,
         circle: circle,
         zone: masterData.zone || masterData.division || '',
-        employeeNo: masterData.purseId,
+        persNo: masterData.persNo,
         designation: masterData.designation || 'Staff',
       });
     } catch (error) {
@@ -315,7 +315,7 @@ export default function RegisterScreen() {
                   <TextInput
                     style={styles.input}
                     placeholder="Enter your Employee Pers No"
-                    value={purseId}
+                    value={persNo}
                     onChangeText={setPurseId}
                     autoCapitalize="none"
                   />
@@ -372,7 +372,7 @@ export default function RegisterScreen() {
                 </View>
                 <View style={styles.employeeDetail}>
                   <Text style={styles.detailLabel}>Employee Pers No</Text>
-                  <Text style={styles.detailValue}>{masterData?.purseId}</Text>
+                  <Text style={styles.detailValue}>{masterData?.persNo}</Text>
                 </View>
                 <View style={styles.employeeDetail}>
                   <Text style={styles.detailLabel}>Designation</Text>

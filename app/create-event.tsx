@@ -11,7 +11,7 @@ import { Calendar, ChevronLeft, ChevronRight, Check, Phone, CheckCircle, User, X
 import TeamHierarchyPicker from '@/components/TeamHierarchyPicker';
 
 interface TaskAssignment {
-  employeePurseId: string;
+  employeePersNo: string;
   employeeName: string;
   employeeDesignation: string | null;
   linkedEmployeeId: string | null;
@@ -95,8 +95,8 @@ export default function CreateEventScreen() {
   );
   const [mobileNumber, setMobileNumber] = useState('');
   const [assignedToStaffId, setAssignedToStaffId] = useState('');
-  const [foundEmployee, setFoundEmployee] = useState<{ id: string; name: string; employeeNo: string; designation?: string; circle?: string; phone?: string } | null>(null);
-  const [assignedEmployee, setAssignedEmployee] = useState<{ id: string; name: string; employeeNo: string; designation?: string; circle?: string } | null>(null);
+  const [foundEmployee, setFoundEmployee] = useState<{ id: string; name: string; persNo: string; designation?: string; circle?: string; phone?: string } | null>(null);
+  const [assignedEmployee, setAssignedEmployee] = useState<{ id: string; name: string; persNo: string; designation?: string; circle?: string } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSearchingStaff, setIsSearchingStaff] = useState(false);
   const [isSearchingByMobile, setIsSearchingByMobile] = useState(false);
@@ -233,11 +233,11 @@ export default function CreateEventScreen() {
     if (mobileSearchQuery.isSuccess && mobileNumber.length === 10) {
       const data = mobileSearchQuery.data;
       if (data) {
-        setAssignedToStaffId(data.employeeNo || '');
+        setAssignedToStaffId(data.persNo || '');
         setFoundEmployee({ 
           id: data.id, 
           name: data.name, 
-          employeeNo: data.employeeNo || '',
+          persNo: data.persNo || '',
           designation: data.designation || '',
           circle: data.circle || '',
           phone: data.phone || '',
@@ -258,7 +258,7 @@ export default function CreateEventScreen() {
         setFoundEmployee({ 
           id: data.id, 
           name: data.name, 
-          employeeNo: data.employeeNo || '',
+          persNo: data.persNo || '',
           designation: data.designation || '',
           circle: data.circle || '',
           phone: data.phone || '',
@@ -291,7 +291,7 @@ export default function CreateEventScreen() {
       setAssignedEmployee({
         id: foundEmployee.id,
         name: foundEmployee.name,
-        employeeNo: foundEmployee.employeeNo,
+        persNo: foundEmployee.persNo,
         designation: foundEmployee.designation,
         circle: foundEmployee.circle,
       });
@@ -461,7 +461,7 @@ export default function CreateEventScreen() {
     try {
       const categoryString = selectedCategories.join(',');
       
-      const teamMemberPurseIds = teamAssignments.map(a => a.employeePurseId);
+      const teamMemberPurseIds = teamAssignments.map(a => a.employeePersNo);
       
       createEventMutation.mutate({
         name: getTaskName(),
@@ -583,7 +583,7 @@ export default function CreateEventScreen() {
                     <View style={styles.employeeDetails}>
                       <Text style={styles.employeeName}>{foundEmployee.name}</Text>
                       <View style={styles.employeeMetaRow}>
-                        <Text style={styles.employeeMeta}>Pers No: {foundEmployee.employeeNo}</Text>
+                        <Text style={styles.employeeMeta}>Pers No: {foundEmployee.persNo}</Text>
                       </View>
                       {foundEmployee.designation && (
                         <Text style={styles.employeeDesignation}>{foundEmployee.designation}</Text>
@@ -627,7 +627,7 @@ export default function CreateEventScreen() {
                     </View>
                     <View style={styles.confirmedDetails}>
                       <Text style={styles.confirmedName}>{assignedEmployee.name}</Text>
-                      <Text style={styles.confirmedMeta}>Pers No: {assignedEmployee.employeeNo}</Text>
+                      <Text style={styles.confirmedMeta}>Pers No: {assignedEmployee.persNo}</Text>
                       {assignedEmployee.designation && (
                         <Text style={styles.confirmedDesignation}>{assignedEmployee.designation}</Text>
                       )}
@@ -675,7 +675,7 @@ export default function CreateEventScreen() {
               <View style={styles.teamAssignmentsList}>
                 <Text style={styles.teamAssignmentsTitle}>Team Assignments</Text>
                 {teamAssignments.map((assignment) => (
-                  <View key={assignment.employeePurseId} style={styles.teamAssignmentCard}>
+                  <View key={assignment.employeePersNo} style={styles.teamAssignmentCard}>
                     <View style={styles.teamAssignmentLeft}>
                       <View style={styles.teamAssignmentAvatar}>
                         <Text style={styles.teamAssignmentAvatarText}>
@@ -684,7 +684,7 @@ export default function CreateEventScreen() {
                       </View>
                       <View style={styles.teamAssignmentInfo}>
                         <Text style={styles.teamAssignmentName}>{assignment.employeeName}</Text>
-                        <Text style={styles.teamAssignmentMeta}>{assignment.employeePurseId}</Text>
+                        <Text style={styles.teamAssignmentMeta}>{assignment.employeePersNo}</Text>
                         <View style={styles.teamAssignmentTasks}>
                           {assignment.taskIds.map(taskId => {
                             const taskLabel = TASK_TYPES.find(t => t.id === taskId)?.label || taskId;
@@ -699,7 +699,7 @@ export default function CreateEventScreen() {
                     </View>
                     <TouchableOpacity
                       style={styles.removeAssignmentBtn}
-                      onPress={() => setTeamAssignments(prev => prev.filter(a => a.employeePurseId !== assignment.employeePurseId))}
+                      onPress={() => setTeamAssignments(prev => prev.filter(a => a.employeePersNo !== assignment.employeePersNo))}
                     >
                       <Trash2 size={16} color={Colors.light.error} />
                     </TouchableOpacity>

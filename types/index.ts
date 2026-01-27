@@ -41,16 +41,16 @@ export type IssueStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
 export interface Employee {
   id: string;
   name: string;
-  email: string;
-  phone: string;
+  email: string | null;
+  phone: string | null;
   password?: string;
   role: UserRole;
   circle: Circle;
   division: string;
   buildingName?: string;
   officeName?: string;
-  reportingOfficerId?: string;
-  employeeNo?: string;
+  reportingPersNo?: string;
+  persNo?: string;
   designation: string;
   createdAt: string;
 }
@@ -77,7 +77,7 @@ export interface Event {
   createdAt: string;
   keyInsight?: string;
   status?: EventStatus;
-  teamMembers?: { purseId: string; name: string; designation: string | null }[];
+  teamMembers?: { persNo: string; name: string; designation: string | null }[];
   creatorName?: string | null;
   assigneeName?: string | null;
   assigneeDesignation?: string | null;

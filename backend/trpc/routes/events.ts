@@ -47,11 +47,11 @@ export const eventsRouter = createTRPCRouter({
       
       // Get all employee master records for resolving team member names
       const allMasterRecords = await db.select({
-        purseId: employeeMaster.purseId,
+        persNo: employeeMaster.persNo,
         name: employeeMaster.name,
         designation: employeeMaster.designation,
       }).from(employeeMaster);
-      const masterMap = new Map(allMasterRecords.map(m => [m.purseId, m]));
+      const masterMap = new Map(allMasterRecords.map(m => [m.persNo, m]));
       
       // Get creator and assignee details
       const allEmployeeIds = [...new Set([
@@ -77,11 +77,11 @@ export const eventsRouter = createTRPCRouter({
         const simSold = eventAssigns.reduce((sum, a) => sum + a.simSold, 0);
         const ftthSold = eventAssigns.reduce((sum, a) => sum + a.ftthSold, 0);
         
-        // Resolve team member names from purseIds
+        // Resolve team member names from persNos
         const assignedTeamPurseIds = (event.assignedTeam || []) as string[];
-        const teamMembers = assignedTeamPurseIds.map(purseId => {
-          const member = masterMap.get(purseId);
-          return member ? { purseId, name: member.name, designation: member.designation } : { purseId, name: purseId, designation: null };
+        const teamMembers = assignedTeamPurseIds.map(persNo => {
+          const member = masterMap.get(persNo);
+          return member ? { persNo, name: member.name, designation: member.designation } : { persNo, name: persNo, designation: null };
         });
         
         // Get creator and assignee info
@@ -147,7 +147,7 @@ export const eventsRouter = createTRPCRouter({
       
       if (input.assignedToStaffId && !assignedToId) {
         const masterRecord = await db.select().from(employeeMaster)
-          .where(eq(employeeMaster.purseId, input.assignedToStaffId));
+          .where(eq(employeeMaster.persNo, input.assignedToStaffId));
         if (masterRecord[0]?.linkedEmployeeId) {
           assignedToId = masterRecord[0].linkedEmployeeId;
         }
@@ -276,7 +276,7 @@ export const eventsRouter = createTRPCRouter({
             
             if (!employeeId) {
               const masterRecord = await db.select().from(employeeMaster)
-                .where(eq(employeeMaster.purseId, assignment.employeePurseId));
+                .where(eq(employeeMaster.persNo, assignment.employeePurseId));
               employeeId = masterRecord[0]?.linkedEmployeeId || null;
             }
             
@@ -601,16 +601,16 @@ export const eventsRouter = createTRPCRouter({
       let masterRecords: any[] = [];
       if (allEmployeeIds.length > 0 || assignedTeamPurseIds.length > 0) {
         masterRecords = await db.select().from(employeeMaster)
-          .where(sql`${employeeMaster.linkedEmployeeId} IN ${allEmployeeIds.length > 0 ? allEmployeeIds : ['00000000-0000-0000-0000-000000000000']} OR ${employeeMaster.purseId} IN ${assignedTeamPurseIds.length > 0 ? assignedTeamPurseIds : ['__none__']}`);
+          .where(sql`${employeeMaster.linkedEmployeeId} IN ${allEmployeeIds.length > 0 ? allEmployeeIds : ['00000000-0000-0000-0000-000000000000']} OR ${employeeMaster.persNo} IN ${assignedTeamPurseIds.length > 0 ? assignedTeamPurseIds : ['__none__']}`);
       }
       
-      const purseIdMap = new Map<string, string>();
+      const persNoMap = new Map<string, string>();
       const masterByPurseId = new Map<string, typeof masterRecords[0]>();
       masterRecords.forEach((m: any) => {
         if (m.linkedEmployeeId) {
-          purseIdMap.set(m.linkedEmployeeId, m.purseId);
+          persNoMap.set(m.linkedEmployeeId, m.persNo);
         }
-        masterByPurseId.set(m.purseId, m);
+        masterByPurseId.set(m.persNo, m);
       });
       
       const teamWithAllocations = assignments.map(assignment => {
@@ -619,17 +619,17 @@ export const eventsRouter = createTRPCRouter({
         const totalSimsSold = memberSales.reduce((sum, s) => sum + s.simsSold, 0);
         const totalFtthSold = memberSales.reduce((sum, s) => sum + s.ftthSold, 0);
         
-        let employeeData = employee ? { ...employee, purseId: purseIdMap.get(employee.id) || null } : undefined;
+        let employeeData = employee ? { ...employee, persNo: persNoMap.get(employee.id) || null } : undefined;
         
         if (!employeeData) {
-          const purseId = purseIdMap.get(assignment.employeeId);
-          const master = purseId ? masterByPurseId.get(purseId) : null;
+          const persNo = persNoMap.get(assignment.employeeId);
+          const master = persNo ? masterByPurseId.get(persNo) : null;
           if (master) {
             employeeData = {
               id: assignment.employeeId,
               name: master.name,
               designation: master.designation,
-              purseId: master.purseId,
+              persNo: master.persNo,
               role: 'SALES_STAFF',
             };
           }
@@ -644,15 +644,17 @@ export const eventsRouter = createTRPCRouter({
         };
       });
       
-      for (const purseId of assignedTeamPurseIds) {
-        const alreadyIncluded = teamWithAllocations.some(t => t.employee?.purseId === purseId);
+      for (const persNo of assignedTeamPurseIds) {
+        const alreadyIncluded = teamWithAllocations.some(t => t.employee?.persNo === persNo);
         if (!alreadyIncluded) {
-          const master = masterByPurseId.get(purseId);
+          const master = masterByPurseId.get(persNo);
           if (master) {
+            // Use persNo as employeeId for unlinked employees - frontend will handle this
+            const employeeIdToUse = master.linkedEmployeeId || persNo;
             teamWithAllocations.push({
-              id: `temp-${purseId}`,
+              id: `temp-${persNo}`,
               eventId: input.id,
-              employeeId: master.linkedEmployeeId || purseId,
+              employeeId: employeeIdToUse,
               simTarget: 0,
               ftthTarget: 0,
               simSold: 0,
@@ -661,11 +663,12 @@ export const eventsRouter = createTRPCRouter({
               assignedAt: new Date(),
               updatedAt: new Date(),
               employee: {
-                id: master.linkedEmployeeId || purseId,
+                id: employeeIdToUse,
                 name: master.name,
                 designation: master.designation,
-                purseId: master.purseId,
+                persNo: master.persNo,
                 role: 'SALES_STAFF',
+                isLinked: !!master.linkedEmployeeId,
               },
               actualSimSold: 0,
               actualFtthSold: 0,
@@ -679,7 +682,7 @@ export const eventsRouter = createTRPCRouter({
         const emp = subtask.assignedTo ? teamMembers.find(e => e.id === subtask.assignedTo) : undefined;
         return {
           ...subtask,
-          assignedEmployee: emp ? { ...emp, purseId: purseIdMap.get(emp.id) || null } : undefined,
+          assignedEmployee: emp ? { ...emp, persNo: persNoMap.get(emp.id) || null } : undefined,
         };
       });
       
@@ -698,8 +701,8 @@ export const eventsRouter = createTRPCRouter({
         const assignee = await db.select().from(employees)
           .where(eq(employees.id, eventResult[0].assignedTo));
         if (assignee[0]) {
-          const managerPurseId = purseIdMap.get(assignee[0].id) || null;
-          assignedToEmployee = { ...assignee[0], purseId: managerPurseId };
+          const managerPurseId = persNoMap.get(assignee[0].id) || null;
+          assignedToEmployee = { ...assignee[0], persNo: managerPurseId };
         }
       }
       
@@ -1040,20 +1043,20 @@ export const eventsRouter = createTRPCRouter({
       console.log("Fetching available team members for circle:", input.circle, "manager:", input.managerPurseId);
       
       const masterRecords = await db.select().from(employeeMaster);
-      const purseIdMap = new Map<string, string>();
+      const persNoMap = new Map<string, string>();
       const linkedEmployeeMap = new Map<string, string>();
       masterRecords.forEach(m => {
         if (m.linkedEmployeeId) {
-          purseIdMap.set(m.linkedEmployeeId, m.purseId);
-          linkedEmployeeMap.set(m.purseId, m.linkedEmployeeId);
+          persNoMap.set(m.linkedEmployeeId, m.persNo);
+          linkedEmployeeMap.set(m.persNo, m.linkedEmployeeId);
         }
       });
       
       let directReportPurseIds: string[] = [];
       if (input.managerPurseId) {
         directReportPurseIds = masterRecords
-          .filter(m => m.reportingPurseId === input.managerPurseId)
-          .map(m => m.purseId);
+          .filter(m => m.reportingPersNo === input.managerPurseId)
+          .map(m => m.persNo);
         console.log("Direct reports of", input.managerPurseId, ":", directReportPurseIds.length);
       }
       
@@ -1082,7 +1085,7 @@ export const eventsRouter = createTRPCRouter({
       
       return circleEmployees.map(emp => ({
         ...emp,
-        purseId: purseIdMap.get(emp.id) || null,
+        persNo: persNoMap.get(emp.id) || null,
         isAssigned: assignedIds.includes(emp.id),
       }));
     }),
@@ -1213,7 +1216,7 @@ export const eventsRouter = createTRPCRouter({
       
       if (input.staffId && !assignedEmployeeId) {
         const masterRecord = await db.select().from(employeeMaster)
-          .where(eq(employeeMaster.purseId, input.staffId));
+          .where(eq(employeeMaster.persNo, input.staffId));
         if (masterRecord[0]?.linkedEmployeeId) {
           assignedEmployeeId = masterRecord[0].linkedEmployeeId;
         }
@@ -1354,7 +1357,7 @@ export const eventsRouter = createTRPCRouter({
   updateTeamMemberTargets: publicProcedure
     .input(z.object({
       eventId: z.string().uuid(),
-      employeeId: z.string().uuid(),
+      employeeId: z.string(), // Can be UUID or persNo
       simTarget: z.number().min(0),
       ftthTarget: z.number().min(0),
       updatedBy: z.string().uuid(),
@@ -1365,11 +1368,71 @@ export const eventsRouter = createTRPCRouter({
       const event = await db.select().from(events).where(eq(events.id, input.eventId));
       if (!event[0]) throw new Error("Event not found");
       
+      // Check if employeeId is a UUID or persNo
+      const isUUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(input.employeeId);
+      
+      let actualEmployeeId = input.employeeId;
+      
+      // If it's a persNo, look up the linked employee
+      if (!isUUID) {
+        const masterRecord = await db.select().from(employeeMaster)
+          .where(eq(employeeMaster.persNo, input.employeeId));
+        
+        if (!masterRecord[0]) {
+          throw new Error("Employee not found in master data");
+        }
+        
+        if (!masterRecord[0].linkedEmployeeId) {
+          throw new Error("Employee is not linked to a user account. Please activate the employee first.");
+        }
+        
+        actualEmployeeId = masterRecord[0].linkedEmployeeId;
+      }
+      
       const allAssignments = await db.select().from(eventAssignments)
         .where(eq(eventAssignments.eventId, input.eventId));
       
-      const currentAssignment = allAssignments.find(a => a.employeeId === input.employeeId);
-      if (!currentAssignment) throw new Error("Team member assignment not found");
+      let currentAssignment = allAssignments.find(a => a.employeeId === actualEmployeeId);
+      
+      // If no assignment exists, create one (upsert behavior)
+      if (!currentAssignment) {
+        // Validate targets against event allocation
+        const otherAssignments = allAssignments;
+        const currentSimDistributed = otherAssignments.reduce((sum, a) => sum + a.simTarget, 0);
+        const currentFtthDistributed = otherAssignments.reduce((sum, a) => sum + a.ftthTarget, 0);
+        
+        const newTotalSim = currentSimDistributed + input.simTarget;
+        const newTotalFtth = currentFtthDistributed + input.ftthTarget;
+        
+        if (newTotalSim > event[0].allocatedSim) {
+          const available = event[0].allocatedSim - currentSimDistributed;
+          throw new Error(`Cannot assign ${input.simTarget} SIMs. Only ${available} SIMs available for distribution.`);
+        }
+        
+        if (newTotalFtth > event[0].allocatedFtth) {
+          const available = event[0].allocatedFtth - currentFtthDistributed;
+          throw new Error(`Cannot assign ${input.ftthTarget} FTTH. Only ${available} FTTH available for distribution.`);
+        }
+        
+        // Create new assignment
+        const newAssignment = await db.insert(eventAssignments).values({
+          eventId: input.eventId,
+          employeeId: actualEmployeeId,
+          simTarget: input.simTarget,
+          ftthTarget: input.ftthTarget,
+          assignedBy: input.updatedBy,
+        }).returning();
+        
+        await db.insert(auditLogs).values({
+          action: 'CREATE_TEAM_TARGETS',
+          entityType: 'EVENT',
+          entityId: input.eventId,
+          performedBy: input.updatedBy,
+          details: { employeeId: actualEmployeeId, simTarget: input.simTarget, ftthTarget: input.ftthTarget },
+        });
+        
+        return newAssignment[0];
+      }
       
       if (input.simTarget < currentAssignment.simSold) {
         throw new Error(`Cannot set SIM target below already sold amount (${currentAssignment.simSold})`);
@@ -1378,7 +1441,7 @@ export const eventsRouter = createTRPCRouter({
         throw new Error(`Cannot set FTTH target below already sold amount (${currentAssignment.ftthSold})`);
       }
       
-      const otherAssignments = allAssignments.filter(a => a.employeeId !== input.employeeId);
+      const otherAssignments = allAssignments.filter(a => a.employeeId !== actualEmployeeId);
       const currentSimDistributed = otherAssignments.reduce((sum, a) => sum + a.simTarget, 0);
       const currentFtthDistributed = otherAssignments.reduce((sum, a) => sum + a.ftthTarget, 0);
       
@@ -1403,7 +1466,7 @@ export const eventsRouter = createTRPCRouter({
         })
         .where(and(
           eq(eventAssignments.eventId, input.eventId),
-          eq(eventAssignments.employeeId, input.employeeId)
+          eq(eventAssignments.employeeId, actualEmployeeId)
         ))
         .returning();
 
@@ -1412,7 +1475,7 @@ export const eventsRouter = createTRPCRouter({
         entityType: 'EVENT',
         entityId: input.eventId,
         performedBy: input.updatedBy,
-        details: { employeeId: input.employeeId, simTarget: input.simTarget, ftthTarget: input.ftthTarget },
+        details: { employeeId: actualEmployeeId, simTarget: input.simTarget, ftthTarget: input.ftthTarget },
       });
 
       return result[0];

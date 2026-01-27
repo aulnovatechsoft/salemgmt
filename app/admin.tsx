@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, RefreshControl, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, RefreshControl, Platform, Modal, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { Upload, Users, Search, Trash2, Link, ChevronLeft, FileText, CheckCircle, XCircle, BarChart3, Calendar } from 'lucide-react-native';
+import { Upload, Users, Search, Trash2, Link, ChevronLeft, FileText, CheckCircle, XCircle, BarChart3, Calendar, UserPlus, X } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
@@ -24,10 +24,18 @@ export default function AdminScreen() {
   const [importingEvents, setImportingEvents] = useState(false);
   const [eventsImportProgress, setEventsImportProgress] = useState({ current: 0, total: 0, imported: 0, updated: 0, errors: 0 });
   
+  const [showBulkActivateModal, setShowBulkActivateModal] = useState(false);
+  const [selectedCircle, setSelectedCircle] = useState<string | undefined>(undefined);
+  const [activating, setActivating] = useState(false);
+  const [activationResult, setActivationResult] = useState<{ activated: number; skipped: number; errors: string[]; passwordFormula: string } | null>(null);
+  
   const trpcUtils = trpc.useUtils();
   
   const { data: stats, refetch: refetchStats } = trpc.admin.getEmployeeMasterStats.useQuery();
   const { data: eventStats, refetch: refetchEventStats } = trpc.admin.getEventStats.useQuery();
+  const { data: circlesWithCount } = trpc.admin.getCirclesWithUnlinkedCount.useQuery(undefined, {
+    enabled: showBulkActivateModal,
+  });
   const { data: employeeList, isLoading, refetch } = trpc.admin.getEmployeeMasterList.useQuery({
     linked: filterLinked,
     limit: 100,
@@ -78,6 +86,19 @@ export default function AdminScreen() {
     },
   });
   
+  const bulkActivateMutation = trpc.admin.bulkActivateEmployees.useMutation({
+    onSuccess: (result) => {
+      setActivating(false);
+      setActivationResult(result);
+      refetch();
+      refetchStats();
+    },
+    onError: (error) => {
+      setActivating(false);
+      Alert.alert('Activation Error', error.message);
+    },
+  });
+  
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.all([refetch(), refetchStats(), refetchEventStats()]);
@@ -112,7 +133,7 @@ export default function AdminScreen() {
     
     const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
     
-    const purseIdIdx = headers.findIndex(h => h.includes('employee_pers_no') || h.includes('pers_no') || h.includes('purse') || h.includes('purse_id'));
+    const persNoIdx = headers.findIndex(h => h.includes('employee_pers_no') || h.includes('pers_no') || h.includes('purse') || h.includes('purse_id'));
     const nameIdx = headers.findIndex(h => h.includes('emp_name') || h.includes('employee_name') || h === 'name');
     const circleIdx = headers.findIndex(h => h === 'circle');
     const zoneIdx = headers.findIndex(h => h.includes('ba_name') || h.includes('zone'));
@@ -128,7 +149,7 @@ export default function AdminScreen() {
     const distanceIdx = headers.findIndex(h => h.includes('distance_limit'));
     const sortOrderIdx = headers.findIndex(h => h.includes('sort_order'));
     
-    if (purseIdIdx === -1 || nameIdx === -1) {
+    if (persNoIdx === -1 || nameIdx === -1) {
       throw new Error('CSV must have Employee Pers No and Name columns');
     }
     
@@ -137,19 +158,19 @@ export default function AdminScreen() {
       const values = lines[i].split(',').map(v => v.trim());
       if (values.length < 2) continue;
       
-      const purseId = values[purseIdIdx];
+      const persNo = values[persNoIdx];
       const name = values[nameIdx];
       
-      if (!purseId || !name) continue;
+      if (!persNo || !name) continue;
       
       data.push({
-        purseId,
+        persNo,
         name,
         circle: circleIdx >= 0 ? values[circleIdx] : undefined,
         zone: zoneIdx >= 0 ? values[zoneIdx] : undefined,
         designation: designationIdx >= 0 ? values[designationIdx] : undefined,
         empGroup: empGroupIdx >= 0 ? values[empGroupIdx] : undefined,
-        reportingPurseId: reportingIdx >= 0 ? values[reportingIdx] : undefined,
+        reportingPersNo: reportingIdx >= 0 ? values[reportingIdx] : undefined,
         reportingOfficerName: reportingNameIdx >= 0 ? values[reportingNameIdx] : undefined,
         reportingOfficerDesignation: reportingDesigIdx >= 0 ? values[reportingDesigIdx] : undefined,
         division: divisionIdx >= 0 ? values[divisionIdx] : undefined,
@@ -468,7 +489,7 @@ export default function AdminScreen() {
     if (!searchQuery) return true;
     const query = searchQuery.toLowerCase();
     return (
-      item.purseId.toLowerCase().includes(query) ||
+      item.persNo.toLowerCase().includes(query) ||
       item.name.toLowerCase().includes(query) ||
       item.circle?.toLowerCase().includes(query) ||
       item.zone?.toLowerCase().includes(query)
@@ -524,6 +545,20 @@ export default function AdminScreen() {
           </TouchableOpacity>
           
           <TouchableOpacity 
+            style={[styles.actionButton, styles.successAction]}
+            onPress={() => {
+              setShowBulkActivateModal(true);
+              setActivationResult(null);
+              setSelectedCircle(undefined);
+            }}
+          >
+            <UserPlus size={20} color={Colors.light.background} />
+            <Text style={styles.actionButtonText}>Bulk Activate</Text>
+          </TouchableOpacity>
+        </View>
+        
+        <View style={styles.actionsSection}>
+          <TouchableOpacity 
             style={[styles.actionButton, styles.dangerAction]}
             onPress={handleClearUnlinked}
           >
@@ -544,7 +579,7 @@ export default function AdminScreen() {
               style={styles.csvInput}
               multiline
               numberOfLines={10}
-              placeholder="purse_id,name,circle,zone,designation,reporting_purse_id
+              placeholder="pers_no,name,circle,zone,designation,reporting_pers_no
 101,John Doe,KARNATAKA,Bangalore,AGM,100
 102,Jane Smith,KARNATAKA,Mysore,SD_JTO,101"
               value={csvText}
@@ -717,7 +752,7 @@ Harvest Fair,Bangalore,KARNATAKA,Agri-Tourism,2025-11-01 to 2025-11-05,Agricultu
                 <View style={styles.itemHeader}>
                   <View style={styles.itemMain}>
                     <Text style={styles.itemName}>{item.name}</Text>
-                    <Text style={styles.itemPurseId}>Pers No: {item.purseId}</Text>
+                    <Text style={styles.itemPurseId}>Pers No: {item.persNo}</Text>
                   </View>
                   <View style={[styles.statusBadge, item.isLinked ? styles.linkedBadge : styles.unlinkedBadge]}>
                     {item.isLinked ? <Link size={12} color={Colors.light.success} /> : null}
@@ -730,7 +765,7 @@ Harvest Fair,Bangalore,KARNATAKA,Agri-Tourism,2025-11-01 to 2025-11-05,Agricultu
                   {item.circle && <Text style={styles.itemDetail}>Circle: {item.circle}</Text>}
                   {item.zone && <Text style={styles.itemDetail}>Zone: {item.zone}</Text>}
                   {item.designation && <Text style={styles.itemDetail}>Designation: {item.designation}</Text>}
-                  {item.reportingPurseId && <Text style={styles.itemDetail}>Reports to: {item.reportingPurseId}</Text>}
+                  {item.reportingPersNo && <Text style={styles.itemDetail}>Reports to: {item.reportingPersNo}</Text>}
                 </View>
               </View>
             ))
@@ -739,6 +774,136 @@ Harvest Fair,Bangalore,KARNATAKA,Agri-Tourism,2025-11-01 to 2025-11-05,Agricultu
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
+
+      <Modal
+        visible={showBulkActivateModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowBulkActivateModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Bulk Activate Employees</Text>
+              <TouchableOpacity onPress={() => setShowBulkActivateModal(false)}>
+                <X size={24} color={Colors.light.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {activationResult ? (
+              <View style={styles.resultSection}>
+                <View style={styles.resultCard}>
+                  <CheckCircle size={48} color={Colors.light.success} />
+                  <Text style={styles.resultTitle}>Activation Complete!</Text>
+                  <Text style={styles.resultText}>
+                    Activated: {activationResult.activated} employees{'\n'}
+                    Skipped (already linked): {activationResult.skipped}{'\n'}
+                    Errors: {activationResult.errors.length}
+                  </Text>
+                </View>
+                
+                <View style={styles.passwordInfoCard}>
+                  <Text style={styles.passwordInfoTitle}>Default Password Formula</Text>
+                  <Text style={styles.passwordFormula}>{activationResult.passwordFormula}</Text>
+                  <Text style={styles.passwordNote}>
+                    Share this with employees. They will be prompted to change their password on first login.
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.doneButton}
+                  onPress={() => setShowBulkActivateModal(false)}
+                >
+                  <Text style={styles.doneButtonText}>Done</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <>
+                <Text style={styles.modalDescription}>
+                  This will create user accounts for unlinked employees with default passwords.
+                  Employees can then login using their Pers Number.
+                </Text>
+
+                <View style={styles.circleSelection}>
+                  <Text style={styles.circleSelectionLabel}>Select Circle (Optional)</Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.circleOption,
+                      selectedCircle === undefined && styles.circleOptionSelected
+                    ]}
+                    onPress={() => setSelectedCircle(undefined)}
+                  >
+                    <Text style={[
+                      styles.circleOptionText,
+                      selectedCircle === undefined && styles.circleOptionTextSelected
+                    ]}>
+                      All Circles ({stats?.unlinked || 0} unlinked)
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  <ScrollView style={styles.circleList}>
+                    {circlesWithCount?.map((item: { circle: string; count: string }) => (
+                      <TouchableOpacity
+                        key={item.circle}
+                        style={[
+                          styles.circleOption,
+                          selectedCircle === item.circle && styles.circleOptionSelected
+                        ]}
+                        onPress={() => setSelectedCircle(item.circle)}
+                      >
+                        <Text style={[
+                          styles.circleOptionText,
+                          selectedCircle === item.circle && styles.circleOptionTextSelected
+                        ]}>
+                          {item.circle} ({item.count} unlinked)
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+
+                <View style={styles.passwordPreview}>
+                  <Text style={styles.passwordPreviewTitle}>Password Formula</Text>
+                  <Text style={styles.passwordPreviewText}>
+                    BSNL@ + last 4 digits of Pers No{'\n'}
+                    Example: Pers No 198012345 → Password: BSNL@2345
+                  </Text>
+                </View>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={styles.cancelModalBtn}
+                    onPress={() => setShowBulkActivateModal(false)}
+                    disabled={activating}
+                  >
+                    <Text style={styles.cancelModalBtnText}>Cancel</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={[styles.activateBtn, activating && styles.buttonDisabled]}
+                    onPress={() => {
+                      setActivating(true);
+                      bulkActivateMutation.mutate({
+                        circle: selectedCircle,
+                        adminId: employee?.id || '',
+                      });
+                    }}
+                    disabled={activating}
+                  >
+                    {activating ? (
+                      <ActivityIndicator color={Colors.light.background} />
+                    ) : (
+                      <Text style={styles.activateBtnText}>
+                        Activate {selectedCircle ? 'Selected' : 'All'} Employees
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }
@@ -807,6 +972,9 @@ const styles = StyleSheet.create({
   },
   dangerAction: {
     backgroundColor: Colors.light.error,
+  },
+  successAction: {
+    backgroundColor: Colors.light.success,
   },
   actionButtonText: {
     color: Colors.light.background,
@@ -1054,5 +1222,170 @@ const styles = StyleSheet.create({
   },
   bottomSpacer: {
     height: 40,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: Colors.light.background,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: Colors.light.text,
+  },
+  modalDescription: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  circleSelection: {
+    marginBottom: 16,
+  },
+  circleSelectionLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.light.text,
+    marginBottom: 12,
+  },
+  circleList: {
+    maxHeight: 200,
+  },
+  circleOption: {
+    padding: 12,
+    backgroundColor: Colors.light.backgroundSecondary,
+    borderRadius: 8,
+    marginBottom: 8,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  circleOptionSelected: {
+    borderColor: Colors.light.primary,
+    backgroundColor: '#E3F2FD',
+  },
+  circleOptionText: {
+    fontSize: 14,
+    color: Colors.light.text,
+  },
+  circleOptionTextSelected: {
+    color: Colors.light.primary,
+    fontWeight: '600',
+  },
+  passwordPreview: {
+    backgroundColor: '#FFF3E0',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 20,
+  },
+  passwordPreviewTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#E65100',
+    marginBottom: 8,
+  },
+  passwordPreviewText: {
+    fontSize: 13,
+    color: '#E65100',
+    lineHeight: 20,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  cancelModalBtn: {
+    flex: 1,
+    padding: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    alignItems: 'center',
+  },
+  cancelModalBtnText: {
+    color: Colors.light.textSecondary,
+    fontWeight: '600',
+  },
+  activateBtn: {
+    flex: 2,
+    padding: 16,
+    borderRadius: 8,
+    backgroundColor: Colors.light.success,
+    alignItems: 'center',
+  },
+  activateBtnText: {
+    color: Colors.light.background,
+    fontWeight: '600',
+  },
+  resultSection: {
+    alignItems: 'center',
+  },
+  resultCard: {
+    alignItems: 'center',
+    padding: 24,
+    backgroundColor: '#E8F5E9',
+    borderRadius: 16,
+    marginBottom: 20,
+    width: '100%',
+  },
+  resultTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: Colors.light.success,
+    marginTop: 16,
+  },
+  resultText: {
+    fontSize: 14,
+    color: Colors.light.text,
+    textAlign: 'center',
+    marginTop: 12,
+    lineHeight: 22,
+  },
+  passwordInfoCard: {
+    backgroundColor: '#FFF8E1',
+    padding: 16,
+    borderRadius: 12,
+    width: '100%',
+    marginBottom: 20,
+  },
+  passwordInfoTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#F57C00',
+    marginBottom: 8,
+  },
+  passwordFormula: {
+    fontSize: 12,
+    color: Colors.light.text,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    lineHeight: 20,
+  },
+  passwordNote: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginTop: 12,
+    lineHeight: 18,
+  },
+  doneButton: {
+    backgroundColor: Colors.light.primary,
+    paddingVertical: 16,
+    paddingHorizontal: 48,
+    borderRadius: 8,
+  },
+  doneButtonText: {
+    color: Colors.light.background,
+    fontWeight: '600',
+    fontSize: 16,
   },
 });

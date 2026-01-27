@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, RefreshControl, Modal, TextInput } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { User, Mail, Phone, Briefcase, MapPin, LogOut, FileText, Settings, ChevronRight, Users, Building2 } from 'lucide-react-native';
+import { User, Mail, Phone, Briefcase, MapPin, LogOut, FileText, Settings, ChevronRight, Users, Building2, Edit2, X, Lock } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
@@ -50,9 +50,15 @@ const TreeLine = () => (
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { employee, logout } = useAuth();
+  const { employee, logout, updateEmployee } = useAuth();
   const { clearAllData } = useApp();
   const [refreshing, setRefreshing] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editForm, setEditForm] = useState({
+    email: '',
+    phone: '',
+  });
+  const [saving, setSaving] = useState(false);
 
   const { 
     data: hierarchy, 
@@ -63,7 +69,61 @@ export default function ProfileScreen() {
     { enabled: !!employee?.id, retry: 2 }
   );
 
-  const userPurseId = hierarchy?.masterData?.purseId;
+  const updateMutation = trpc.employees.update.useMutation({
+    onSuccess: async (updatedData) => {
+      Alert.alert('Success', 'Profile updated successfully');
+      setShowEditModal(false);
+      if (updateEmployee && updatedData) {
+        await updateEmployee({
+          email: updatedData.email,
+          phone: updatedData.phone,
+        });
+      }
+    },
+    onError: (error) => {
+      Alert.alert('Error', error.message);
+    },
+  });
+
+  const handleOpenEditModal = () => {
+    setEditForm({
+      email: employee?.email || '',
+      phone: employee?.phone || '',
+    });
+    setShowEditModal(true);
+  };
+
+  const handleSaveProfile = async () => {
+    if (!employee?.id) return;
+    
+    const updateData: any = { id: employee.id };
+    
+    if (editForm.email.trim()) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(editForm.email.trim())) {
+        Alert.alert('Error', 'Please enter a valid email address');
+        return;
+      }
+      updateData.email = editForm.email.trim();
+    }
+    
+    if (editForm.phone.trim()) {
+      if (editForm.phone.trim().length < 10) {
+        Alert.alert('Error', 'Phone number must be at least 10 digits');
+        return;
+      }
+      updateData.phone = editForm.phone.trim();
+    }
+    
+    setSaving(true);
+    try {
+      await updateMutation.mutateAsync(updateData);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const userPersNo = hierarchy?.masterData?.persNo;
   const isLinked = hierarchy?.isLinked;
 
   const { 
@@ -71,8 +131,8 @@ export default function ProfileScreen() {
     isLoading: fullHierarchyLoading, 
     refetch: refetchFullHierarchy,
   } = trpc.admin.getFullHierarchy.useQuery(
-    { purseId: userPurseId || '' },
-    { enabled: !!userPurseId && isLinked, retry: 2, staleTime: 30000 }
+    { persNo: userPersNo || '' },
+    { enabled: !!userPersNo && isLinked, retry: 2, staleTime: 30000 }
   );
 
   const handleLogout = () => {
@@ -156,23 +216,29 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Personal Information</Text>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Personal Information</Text>
+            <TouchableOpacity style={styles.editButton} onPress={handleOpenEditModal}>
+              <Edit2 size={16} color={Colors.light.primary} />
+              <Text style={styles.editButtonText}>Edit</Text>
+            </TouchableOpacity>
+          </View>
           
           <View style={styles.infoCard}>
             <InfoItem
               icon={<Mail size={20} color={Colors.light.primary} />}
               label="Email"
-              value={employee.email}
+              value={employee.email || 'Not set'}
             />
             <InfoItem
               icon={<Phone size={20} color={Colors.light.primary} />}
               label="Phone"
-              value={employee.phone}
+              value={employee.phone || 'Not set'}
             />
             <InfoItem
               icon={<Briefcase size={20} color={Colors.light.primary} />}
-              label="Employee Number"
-              value={employee.employeeNo || 'N/A'}
+              label="Pers Number"
+              value={employee.persNo || 'N/A'}
             />
           </View>
         </View>
@@ -321,6 +387,76 @@ export default function ProfileScreen() {
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
+
+      <Modal
+        visible={showEditModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowEditModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Edit Profile</Text>
+              <TouchableOpacity onPress={() => setShowEditModal(false)}>
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Pers Number</Text>
+              <View style={styles.readOnlyInput}>
+                <Lock size={16} color={Colors.light.textSecondary} />
+                <Text style={styles.readOnlyText}>{employee?.persNo || 'N/A'}</Text>
+              </View>
+              <Text style={styles.formHint}>Pers Number cannot be changed</Text>
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Email</Text>
+              <TextInput
+                style={styles.formInput}
+                value={editForm.email}
+                onChangeText={(text) => setEditForm(prev => ({ ...prev, email: text }))}
+                placeholder="Enter email address"
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Phone</Text>
+              <TextInput
+                style={styles.formInput}
+                value={editForm.phone}
+                onChangeText={(text) => setEditForm(prev => ({ ...prev, phone: text }))}
+                placeholder="Enter phone number"
+                keyboardType="phone-pad"
+              />
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity 
+                style={styles.cancelModalButton} 
+                onPress={() => setShowEditModal(false)}
+              >
+                <Text style={styles.cancelModalButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.saveButton, saving && styles.saveButtonDisabled]} 
+                onPress={handleSaveProfile}
+                disabled={saving}
+              >
+                {saving ? (
+                  <ActivityIndicator size="small" color={Colors.light.background} />
+                ) : (
+                  <Text style={styles.saveButtonText}>Save Changes</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }
@@ -628,5 +764,118 @@ const styles = StyleSheet.create({
   },
   bottomSpacer: {
     height: 20,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  editButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: Colors.light.primary + '15',
+  },
+  editButtonText: {
+    fontSize: 14,
+    color: Colors.light.primary,
+    fontWeight: '500' as const,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: Colors.light.background,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold' as const,
+    color: Colors.light.text,
+  },
+  formGroup: {
+    marginBottom: 20,
+  },
+  formLabel: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+    marginBottom: 8,
+  },
+  formInput: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    color: Colors.light.text,
+  },
+  readOnlyInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    padding: 12,
+    backgroundColor: Colors.light.backgroundSecondary,
+  },
+  readOnlyText: {
+    fontSize: 16,
+    color: Colors.light.textSecondary,
+  },
+  formHint: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+  },
+  cancelModalButton: {
+    flex: 1,
+    padding: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    alignItems: 'center',
+  },
+  cancelModalButtonText: {
+    fontSize: 16,
+    color: Colors.light.text,
+    fontWeight: '600' as const,
+  },
+  saveButton: {
+    flex: 1,
+    padding: 14,
+    borderRadius: 8,
+    backgroundColor: Colors.light.primary,
+    alignItems: 'center',
+  },
+  saveButtonDisabled: {
+    opacity: 0.6,
+  },
+  saveButtonText: {
+    fontSize: 16,
+    color: Colors.light.background,
+    fontWeight: '600' as const,
   },
 });

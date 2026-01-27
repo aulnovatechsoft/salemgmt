@@ -38,7 +38,7 @@ export default function RaiseIssueScreen() {
 
     setIsSubmitting(true);
 
-    const escalateTo = employee?.reportingOfficerId || employees.find(emp => 
+    const escalateTo = employee?.reportingPersNo || employees.find(emp => 
       emp.role === 'AGM' || emp.role === 'DGM'
     )?.id;
 

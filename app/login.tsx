@@ -1,83 +1,67 @@
 import { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Image } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Mail, Phone, Eye, EyeOff } from 'lucide-react-native';
+import { User, Eye, EyeOff, Phone, MessageSquare } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
 
+type LoginMethod = 'password' | 'otp';
+
 export default function LoginScreen() {
   const router = useRouter();
   const { login } = useAuth();
-  const [loginType, setLoginType] = useState<'email' | 'mobile'>('email');
-  const [identifier, setIdentifier] = useState('');
+  const [loginMethod, setLoginMethod] = useState<LoginMethod>('password');
+  
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [otp, setOtp] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   const loginMutation = trpc.employees.login.useMutation();
-  const getByPhoneQuery = trpc.employees.getByPhone.useQuery(
-    { phone: identifier },
-    { enabled: false }
-  );
+  const changePasswordMutation = trpc.employees.changePassword.useMutation();
 
-  const sendOtp = async () => {
-    if (!identifier.trim()) {
-      Alert.alert('Error', 'Please enter your mobile number');
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [pendingEmployee, setPendingEmployee] = useState<any>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+
+  const handleLogin = async () => {
+    if (!username.trim() || !password.trim()) {
+      Alert.alert('Error', 'Please enter both username and password');
       return;
     }
 
     setIsLoading(true);
-    
-    setTimeout(() => {
-      setOtpSent(true);
-      setIsLoading(false);
-      Alert.alert('OTP Sent', `OTP sent to ${identifier}\n\nFor demo, use OTP: 123456`);
-    }, 1000);
-  };
-
-  const loginWithPassword = async () => {
-    if (!identifier.trim() || !password.trim()) {
-      Alert.alert('Error', 'Please enter both email and password');
-      return;
-    }
-
-    // Validate email format on client side
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(identifier.trim())) {
-      Alert.alert('Invalid Email', 'Please enter a valid email address (e.g., yourname@example.com)');
-      return;
-    }
-
-    setIsLoading(true);
-
-    const normalizedEmail = identifier.trim().toLowerCase();
-    console.log('=== CLIENT LOGIN ATTEMPT ===' );
-    console.log('Email:', normalizedEmail);
-    console.log('Password length:', password.length);
 
     loginMutation.mutate(
       {
-        email: normalizedEmail,
+        username: username.trim(),
         password: password,
       },
       {
         onSuccess: async (employee) => {
-          console.log('Login mutation success, employee ID:', employee.id);
+          console.log('Login success, employee ID:', employee.id);
+          
+          if (employee.needsPasswordChange) {
+            setIsLoading(false);
+            setPendingEmployee(employee);
+            setShowChangePassword(true);
+            return;
+          }
+          
           try {
             await login({
               id: employee.id,
               name: employee.name,
-              email: employee.email,
-              phone: employee.phone,
+              email: employee.email || '',
+              phone: employee.phone || '',
               role: employee.role,
               circle: employee.circle,
               division: employee.zone,
               designation: employee.designation,
-              employeeNo: employee.employeeNo || undefined,
-              reportingOfficerId: employee.reportingOfficerId || undefined,
+              persNo: employee.persNo || undefined,
+              reportingPersNo: employee.reportingPersNo || undefined,
               createdAt: employee.createdAt?.toString() || new Date().toISOString(),
             });
             setIsLoading(false);
@@ -90,162 +74,113 @@ export default function LoginScreen() {
         },
         onError: (error: any) => {
           setIsLoading(false);
-          console.log('=== LOGIN ERROR ===' );
-          console.log('Error type:', typeof error);
-          console.log('Error name:', error?.name);
-          console.log('Error message:', error?.message);
-          console.log('Error shape:', error?.shape);
-          console.log('Error data:', JSON.stringify(error?.data));
-          console.log('Full error:', JSON.stringify(error, null, 2));
+          console.log('Login error:', error?.message);
           
           let message = 'Login failed. Please try again.';
           
-          // Handle tRPC error format
           if (error?.message) {
             message = error.message;
-          } else if (error?.shape?.message) {
-            message = error.shape.message;
-          } else if (error?.data?.message) {
-            message = error.data.message;
-          } else if (typeof error === 'string') {
-            message = error;
           }
           
-          // Check for network/connection errors
-          if (message.includes('JSON') || message.includes('Unexpected') || message.includes('parse') || message.includes('fetch') || message.includes('network')) {
-            console.error('Network or parsing error detected');
-            Alert.alert('Connection Error', 'Unable to connect to server. Please check your internet connection and try again.');
+          if (message.includes('JSON') || message.includes('fetch') || message.includes('network')) {
+            Alert.alert('Connection Error', 'Unable to connect to server. Please check your internet connection.');
             return;
           }
           
-          console.log('Final error message:', message);
-          
-          // Handle Zod validation errors with user-friendly messages
-          if (message.toLowerCase().includes('invalid_format') || 
-              message.toLowerCase().includes('invalid email') ||
-              message.toLowerCase().includes('invalid_string')) {
-            Alert.alert('Invalid Email', 'Please enter a valid email address (e.g., yourname@example.com)');
-          } else if (message.toLowerCase().includes('not found')) {
-            Alert.alert('Error', 'Email not found. Please register first.');
-          } else if (message.toLowerCase().includes('deactivated')) {
-            Alert.alert('Account Deactivated', 'Your account has been deactivated. Please contact your administrator.');
-          } else if (message.toLowerCase().includes('invalid password')) {
-            Alert.alert('Error', 'Invalid password. Please try again.');
-          } else if (message.toLowerCase().includes('too_small') || message.toLowerCase().includes('required')) {
-            Alert.alert('Error', 'Please fill in all required fields.');
-          } else {
-            Alert.alert('Error', message);
-          }
+          Alert.alert('Error', message);
         },
       }
     );
   };
 
-  const verifyOtp = async () => {
-    if (otp !== '123456') {
-      Alert.alert('Error', 'Invalid OTP. Please use 123456 for demo.');
+  const handleChangePassword = async () => {
+    if (!newPassword || !confirmPassword) {
+      Alert.alert('Error', 'Please fill in both password fields');
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      Alert.alert('Error', 'Password must be at least 6 characters');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      Alert.alert('Error', 'Passwords do not match');
+      return;
+    }
+
+    if (newPassword === password) {
+      Alert.alert('Error', 'New password must be different from current password');
       return;
     }
 
     setIsLoading(true);
 
-    try {
-      const result = await getByPhoneQuery.refetch();
-      const employee = result.data;
-      
-      if (!employee) {
-        setIsLoading(false);
-        Alert.alert('Error', 'Phone number not found. Please register first.');
-        return;
+    changePasswordMutation.mutate(
+      {
+        employeeId: pendingEmployee.id,
+        currentPassword: password,
+        newPassword: newPassword,
+      },
+      {
+        onSuccess: async () => {
+          try {
+            await login({
+              id: pendingEmployee.id,
+              name: pendingEmployee.name,
+              email: pendingEmployee.email || '',
+              phone: pendingEmployee.phone || '',
+              role: pendingEmployee.role,
+              circle: pendingEmployee.circle,
+              division: pendingEmployee.zone,
+              designation: pendingEmployee.designation,
+              persNo: pendingEmployee.persNo || undefined,
+              reportingPersNo: pendingEmployee.reportingPersNo || undefined,
+              createdAt: pendingEmployee.createdAt?.toString() || new Date().toISOString(),
+            });
+            setIsLoading(false);
+            Alert.alert('Success', 'Password changed successfully!', [
+              { text: 'OK', onPress: () => router.replace('/(tabs)/dashboard') }
+            ]);
+          } catch (error) {
+            setIsLoading(false);
+            Alert.alert('Error', 'Failed to complete login. Please try again.');
+          }
+        },
+        onError: (error: any) => {
+          setIsLoading(false);
+          Alert.alert('Error', error?.message || 'Failed to change password');
+        },
       }
-
-      await login({
-        id: employee.id,
-        name: employee.name,
-        email: employee.email,
-        phone: employee.phone,
-        role: employee.role,
-        circle: employee.circle,
-        division: employee.zone,
-        designation: employee.designation,
-        employeeNo: employee.employeeNo || undefined,
-        reportingOfficerId: employee.reportingOfficerId || undefined,
-        createdAt: employee.createdAt?.toString() || new Date().toISOString(),
-      });
-      setIsLoading(false);
-      router.replace('/(tabs)/dashboard');
-    } catch {
-      setIsLoading(false);
-      Alert.alert('Error', 'Login failed. Please try again.');
-    }
+    );
   };
 
-  return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Image
-          source={{ uri: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3d/BSNL_Logo.svg/1200px-BSNL_Logo.svg.png' }}
-          style={styles.logo}
-          resizeMode="contain"
-        />
-        <Text style={styles.subtitle}>Event & Sales Management</Text>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.title}>Login</Text>
-        
-        <View style={styles.switchContainer}>
-          <TouchableOpacity
-            style={[styles.switchButton, loginType === 'email' && styles.switchButtonActive]}
-            onPress={() => {
-              setLoginType('email');
-              setOtpSent(false);
-              setIdentifier('');
-              setPassword('');
-              setOtp('');
-            }}
-          >
-            <Mail size={20} color={loginType === 'email' ? Colors.light.background : Colors.light.textSecondary} />
-            <Text style={[styles.switchText, loginType === 'email' && styles.switchTextActive]}>Email</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={[styles.switchButton, loginType === 'mobile' && styles.switchButtonActive]}
-            onPress={() => {
-              setLoginType('mobile');
-              setOtpSent(false);
-              setIdentifier('');
-              setPassword('');
-              setOtp('');
-            }}
-          >
-            <Phone size={20} color={loginType === 'mobile' ? Colors.light.background : Colors.light.textSecondary} />
-            <Text style={[styles.switchText, loginType === 'mobile' && styles.switchTextActive]}>Mobile</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>{loginType === 'email' ? 'Email Address' : 'Mobile Number'}</Text>
-          <TextInput
-            style={styles.input}
-            placeholder={loginType === 'email' ? 'Enter your email' : 'Enter your mobile number'}
-            value={identifier}
-            onChangeText={setIdentifier}
-            keyboardType={loginType === 'email' ? 'email-address' : 'phone-pad'}
-            autoCapitalize="none"
-            editable={loginType === 'email' || !otpSent}
+  if (showChangePassword) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <Image
+            source={{ uri: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3d/BSNL_Logo.svg/1200px-BSNL_Logo.svg.png' }}
+            style={styles.logo}
+            resizeMode="contain"
           />
+          <Text style={styles.subtitle}>Event & Sales Management</Text>
         </View>
 
-        {loginType === 'email' ? (
+        <View style={styles.card}>
+          <Text style={styles.title}>Change Password</Text>
+          <Text style={styles.changePasswordInfo}>
+            Welcome {pendingEmployee?.name}! Please set a new password to continue.
+          </Text>
+          
           <View style={styles.inputContainer}>
-            <Text style={styles.label}>Password</Text>
+            <Text style={styles.label}>New Password</Text>
             <View style={styles.passwordContainer}>
               <TextInput
                 style={styles.passwordInput}
-                placeholder="Enter your password"
-                value={password}
-                onChangeText={setPassword}
+                placeholder="Enter new password (min 6 chars)"
+                value={newPassword}
+                onChangeText={setNewPassword}
                 secureTextEntry={!showPassword}
                 autoCapitalize="none"
               />
@@ -261,38 +196,134 @@ export default function LoginScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        ) : (
-          otpSent && (
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Confirm Password</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Re-enter new password"
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+            />
+          </View>
+
+          <TouchableOpacity
+            style={styles.button}
+            onPress={handleChangePassword}
+            disabled={isLoading}
+          >
+            {isLoading ? (
+              <ActivityIndicator color={Colors.light.background} />
+            ) : (
+              <Text style={styles.buttonText}>Set Password & Login</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.footer}>BSNL - Connecting India</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Image
+          source={{ uri: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3d/BSNL_Logo.svg/1200px-BSNL_Logo.svg.png' }}
+          style={styles.logo}
+          resizeMode="contain"
+        />
+        <Text style={styles.subtitle}>Event & Sales Management</Text>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.title}>Login</Text>
+        
+        <View style={styles.tabContainer}>
+          <TouchableOpacity
+            style={[styles.tab, loginMethod === 'password' && styles.activeTab]}
+            onPress={() => setLoginMethod('password')}
+          >
+            <User size={16} color={loginMethod === 'password' ? Colors.light.primary : Colors.light.textSecondary} />
+            <Text style={[styles.tabText, loginMethod === 'password' && styles.activeTabText]}>Password</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tab, loginMethod === 'otp' && styles.activeTab]}
+            onPress={() => setLoginMethod('otp')}
+          >
+            <Phone size={16} color={loginMethod === 'otp' ? Colors.light.primary : Colors.light.textSecondary} />
+            <Text style={[styles.tabText, loginMethod === 'otp' && styles.activeTabText]}>OTP</Text>
+          </TouchableOpacity>
+        </View>
+
+        {loginMethod === 'password' ? (
+          <>
+            <View style={styles.loginHint}>
+              <User size={16} color={Colors.light.primary} />
+              <Text style={styles.loginHintText}>Use Email or Pers Number</Text>
+            </View>
+
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Enter OTP</Text>
+              <Text style={styles.label}>Email / Pers Number</Text>
               <TextInput
                 style={styles.input}
-                placeholder="Enter 6-digit OTP"
-                value={otp}
-                onChangeText={setOtp}
-                keyboardType="number-pad"
-                maxLength={6}
+                placeholder="Enter email or Pers Number"
+                value={username}
+                onChangeText={setUsername}
+                autoCapitalize="none"
               />
-              <TouchableOpacity onPress={sendOtp} style={styles.resendButton}>
-                <Text style={styles.resendText}>Resend OTP</Text>
-              </TouchableOpacity>
             </View>
-          )
-        )}
 
-        <TouchableOpacity
-          style={styles.button}
-          onPress={loginType === 'email' ? loginWithPassword : (otpSent ? verifyOtp : sendOtp)}
-          disabled={isLoading}
-        >
-          {isLoading ? (
-            <ActivityIndicator color={Colors.light.background} />
-          ) : (
-            <Text style={styles.buttonText}>
-              {loginType === 'email' ? 'Login' : (otpSent ? 'Verify OTP' : 'Send OTP')}
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Password</Text>
+              <View style={styles.passwordContainer}>
+                <TextInput
+                  style={styles.passwordInput}
+                  placeholder="Enter your password"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry={!showPassword}
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity
+                  style={styles.eyeIcon}
+                  onPress={() => setShowPassword(!showPassword)}
+                >
+                  {showPassword ? (
+                    <EyeOff size={20} color={Colors.light.textSecondary} />
+                  ) : (
+                    <Eye size={20} color={Colors.light.textSecondary} />
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.button}
+              onPress={handleLogin}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <ActivityIndicator color={Colors.light.background} />
+              ) : (
+                <Text style={styles.buttonText}>Login</Text>
+              )}
+            </TouchableOpacity>
+          </>
+        ) : (
+          <View style={styles.otpNotImplemented}>
+            <MessageSquare size={48} color={Colors.light.textSecondary} />
+            <Text style={styles.otpNotImplementedTitle}>OTP Login</Text>
+            <Text style={styles.otpNotImplementedText}>
+              OTP functionality not yet implemented.
             </Text>
-          )}
-        </TouchableOpacity>
+            <Text style={styles.otpNotImplementedSubtext}>
+              SMS gateway integration is pending. Please use Password login for now.
+            </Text>
+          </View>
+        )}
 
         <TouchableOpacity
           style={styles.registerLink}
@@ -345,35 +376,63 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold' as const,
     color: Colors.light.text,
-    marginBottom: 24,
+    marginBottom: 16,
     textAlign: 'center',
   },
-  switchContainer: {
+  tabContainer: {
     flexDirection: 'row',
-    marginBottom: 24,
     backgroundColor: Colors.light.backgroundSecondary,
     borderRadius: 8,
     padding: 4,
+    marginBottom: 20,
   },
-  switchButton: {
+  tab: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
+    paddingVertical: 10,
     borderRadius: 6,
-    gap: 8,
+    gap: 6,
   },
-  switchButtonActive: {
-    backgroundColor: Colors.light.primary,
+  activeTab: {
+    backgroundColor: Colors.light.background,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
   },
-  switchText: {
+  tabText: {
     fontSize: 14,
-    fontWeight: '600' as const,
+    fontWeight: '500',
     color: Colors.light.textSecondary,
   },
-  switchTextActive: {
-    color: Colors.light.background,
+  activeTabText: {
+    color: Colors.light.primary,
+  },
+  loginHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.light.backgroundSecondary,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginBottom: 20,
+    gap: 8,
+  },
+  loginHintText: {
+    fontSize: 14,
+    color: Colors.light.primary,
+    fontWeight: '500',
+  },
+  changePasswordInfo: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 20,
   },
   inputContainer: {
     marginBottom: 20,
@@ -410,15 +469,6 @@ const styles = StyleSheet.create({
   eyeIcon: {
     padding: 14,
   },
-  resendButton: {
-    marginTop: 8,
-    alignSelf: 'flex-end',
-  },
-  resendText: {
-    fontSize: 14,
-    color: Colors.light.primary,
-    fontWeight: '600' as const,
-  },
   button: {
     backgroundColor: Colors.light.primary,
     borderRadius: 8,
@@ -449,5 +499,50 @@ const styles = StyleSheet.create({
   registerLinkTextBold: {
     color: Colors.light.primary,
     fontWeight: '600' as const,
+  },
+  resendContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  countdownText: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+  },
+  resendText: {
+    fontSize: 14,
+    color: Colors.light.primary,
+    fontWeight: '600',
+  },
+  changeNumberText: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+    textDecorationLine: 'underline',
+  },
+  otpNotImplemented: {
+    alignItems: 'center',
+    paddingVertical: 32,
+  },
+  otpNotImplementedTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: Colors.light.text,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  otpNotImplementedText: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: Colors.light.warning,
+    textAlign: 'center',
+  },
+  otpNotImplementedSubtext: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+    textAlign: 'center',
+    marginTop: 8,
+    paddingHorizontal: 16,
+    lineHeight: 18,
   },
 });

@@ -31,7 +31,8 @@ jobs:
             --minify \
             --sourcemap=inline  # optional – remove for smaller final size
 
-  
+      - name: Build web frontend (Expo)
+        run: bunx expo export --platform web  
 
       - name: Prepare files to deploy (copy .env + ensure folders exist)
         run: |
