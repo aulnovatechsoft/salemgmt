@@ -1350,6 +1350,8 @@ export const adminRouter = createTRPCRouter({
           await db.update(employeeMaster)
             .set({ 
               linkedEmployeeId: newEmployee[0].id,
+              isLinked: true,
+              linkedAt: new Date(),
               updatedAt: new Date()
             })
             .where(eq(employeeMaster.id, emp.id));
