@@ -15,7 +15,19 @@ export const employeesRouter = createTRPCRouter({
       let query = db.select().from(employees);
       
       const results = await query.orderBy(desc(employees.createdAt));
-      return results;
+      
+      // Apply correction factor for outstanding amounts
+      // Database values were imported with 100× inflation (10^9 instead of 10^7)
+      const CORRECTION_FACTOR = 100;
+      return results.map(employee => ({
+        ...employee,
+        outstandingFtth: employee.outstandingFtth 
+          ? (parseFloat(employee.outstandingFtth) / CORRECTION_FACTOR).toString() 
+          : employee.outstandingFtth,
+        outstandingLc: employee.outstandingLc 
+          ? (parseFloat(employee.outstandingLc) / CORRECTION_FACTOR).toString() 
+          : employee.outstandingLc,
+      }));
     }),
 
   getById: publicProcedure
@@ -23,7 +35,21 @@ export const employeesRouter = createTRPCRouter({
     .query(async ({ input }) => {
       console.log("Fetching employee by id:", input.id);
       const result = await db.select().from(employees).where(eq(employees.id, input.id));
-      return result[0] || null;
+      const employee = result[0] || null;
+      
+      // Apply correction factor for outstanding amounts
+      // Database values were imported with 100× inflation (10^9 instead of 10^7)
+      if (employee) {
+        const CORRECTION_FACTOR = 100;
+        if (employee.outstandingFtth) {
+          employee.outstandingFtth = (parseFloat(employee.outstandingFtth) / CORRECTION_FACTOR).toString();
+        }
+        if (employee.outstandingLc) {
+          employee.outstandingLc = (parseFloat(employee.outstandingLc) / CORRECTION_FACTOR).toString();
+        }
+      }
+      
+      return employee;
     }),
 
   getByEmail: publicProcedure
@@ -31,7 +57,20 @@ export const employeesRouter = createTRPCRouter({
     .query(async ({ input }) => {
       console.log("Fetching employee by email:", input.email);
       const result = await db.select().from(employees).where(eq(employees.email, input.email));
-      return result[0] || null;
+      const employee = result[0] || null;
+      
+      // Apply correction factor for outstanding amounts
+      if (employee) {
+        const CORRECTION_FACTOR = 100;
+        if (employee.outstandingFtth) {
+          employee.outstandingFtth = (parseFloat(employee.outstandingFtth) / CORRECTION_FACTOR).toString();
+        }
+        if (employee.outstandingLc) {
+          employee.outstandingLc = (parseFloat(employee.outstandingLc) / CORRECTION_FACTOR).toString();
+        }
+      }
+      
+      return employee;
     }),
 
   getByPhone: publicProcedure
@@ -39,7 +78,20 @@ export const employeesRouter = createTRPCRouter({
     .query(async ({ input }) => {
       console.log("Fetching employee by phone:", input.phone);
       const result = await db.select().from(employees).where(eq(employees.phone, input.phone));
-      return result[0] || null;
+      const employee = result[0] || null;
+      
+      // Apply correction factor for outstanding amounts
+      if (employee) {
+        const CORRECTION_FACTOR = 100;
+        if (employee.outstandingFtth) {
+          employee.outstandingFtth = (parseFloat(employee.outstandingFtth) / CORRECTION_FACTOR).toString();
+        }
+        if (employee.outstandingLc) {
+          employee.outstandingLc = (parseFloat(employee.outstandingLc) / CORRECTION_FACTOR).toString();
+        }
+      }
+      
+      return employee;
     }),
 
   create: publicProcedure
@@ -57,6 +109,27 @@ export const employeesRouter = createTRPCRouter({
     }))
     .mutation(async ({ input }) => {
       console.log("Creating employee:", input.name);
+      
+      // Check for duplicate Pers Number
+      if (input.persNo) {
+        const existing = await db.select({ id: employees.id })
+          .from(employees)
+          .where(eq(employees.persNo, input.persNo));
+        
+        if (existing.length > 0) {
+          throw new Error("An account with this Pers Number already exists. Please login instead.");
+        }
+      }
+      
+      // Check for duplicate email
+      const existingEmail = await db.select({ id: employees.id })
+        .from(employees)
+        .where(eq(employees.email, input.email));
+      
+      if (existingEmail.length > 0) {
+        throw new Error("An account with this email already exists. Please login instead.");
+      }
+      
       const result = await db.insert(employees).values({
         name: input.name,
         email: input.email,

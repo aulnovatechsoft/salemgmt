@@ -7,6 +7,7 @@ import Colors from '@/constants/colors';
 import { Event, Circle } from '@/types';
 import { CIRCLES_FALLBACK } from '@/constants/app';
 import { trpc } from '@/lib/trpc';
+import { mapCircleNameToEnum } from '@/lib/circleUtils';
 import { Calendar, ChevronLeft, ChevronRight, Check, Phone, CheckCircle, User, X, BadgeCheck, Users, Trash2 } from 'lucide-react-native';
 import TeamHierarchyPicker from '@/components/TeamHierarchyPicker';
 
@@ -59,7 +60,7 @@ export default function CreateEventScreen() {
   const [pinCode, setPinCode] = useState('');
   const [location, setLocation] = useState('');
   const [city, setCity] = useState('');
-  const [circle, setCircle] = useState<string>(employee?.circle || 'MAHARASHTRA');
+  const [circle, setCircle] = useState<string>(mapCircleNameToEnum(employee?.circle));
   const [zone, setZone] = useState('');
   const [startDate, setStartDate] = useState(todayStr);
   const [endDate, setEndDate] = useState('');

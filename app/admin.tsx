@@ -865,8 +865,9 @@ Harvest Fair,Bangalore,KARNATAKA,Agri-Tourism,2025-11-01 to 2025-11-05,Agricultu
                 <View style={styles.passwordPreview}>
                   <Text style={styles.passwordPreviewTitle}>Password Formula</Text>
                   <Text style={styles.passwordPreviewText}>
-                    BSNL@ + last 4 digits of Pers No{'\n'}
-                    Example: Pers No 198012345 → Password: BSNL@2345
+                    BSNL@ + last 4 digits of Pers No (padded with zeros){'\n'}
+                    Example: Pers No 198012345 → BSNL@2345{'\n'}
+                    Example: Pers No 223 → BSNL@0223
                   </Text>
                 </View>
 

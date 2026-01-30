@@ -1,11 +1,13 @@
 import { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, RefreshControl, Modal, TextInput } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { User, Mail, Phone, Briefcase, MapPin, LogOut, FileText, Settings, ChevronRight, Users, Building2, Edit2, X, Lock } from 'lucide-react-native';
+import { User, Mail, Phone, Briefcase, MapPin, LogOut, FileText, Settings, ChevronRight, Users, Building2, Edit2, X, Lock, AlertTriangle, IndianRupee } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
+import { safeNumber, formatINRAmount, formatINRCrore, hasOutstandingAmount, getTotalOutstanding } from '@/lib/currency';
+import { dangerShadow } from '@/lib/styles';
 import React from "react";
 
 const getInitials = (name: string) => {
@@ -242,6 +244,63 @@ export default function ProfileScreen() {
             />
           </View>
         </View>
+
+        {hasOutstandingAmount(employee.outstandingFtth, employee.outstandingLc) && (
+          <View style={styles.section}>
+            <View style={styles.outstandingHeader}>
+              <AlertTriangle size={20} color="#D32F2F" />
+              <Text style={styles.outstandingTitle}>Outstanding Dues</Text>
+            </View>
+            
+            <View style={[styles.outstandingCard, dangerShadow]}>
+              {safeNumber(employee.outstandingFtth) > 0 && (
+                <View style={styles.outstandingItem}>
+                  <View style={styles.outstandingLabelRow}>
+                    <IndianRupee size={18} color="#D32F2F" />
+                    <Text style={styles.outstandingLabel}>FTTH Outstanding</Text>
+                  </View>
+                  <Text style={styles.outstandingAmount}>
+                    {formatINRCrore(employee.outstandingFtth)}
+                  </Text>
+                  <Text style={styles.outstandingAmountFull}>
+                    {formatINRAmount(employee.outstandingFtth)}
+                  </Text>
+                </View>
+              )}
+              
+              {safeNumber(employee.outstandingFtth) > 0 && safeNumber(employee.outstandingLc) > 0 && (
+                <View style={styles.outstandingDivider} />
+              )}
+              
+              {safeNumber(employee.outstandingLc) > 0 && (
+                <View style={styles.outstandingItem}>
+                  <View style={styles.outstandingLabelRow}>
+                    <IndianRupee size={18} color="#D32F2F" />
+                    <Text style={styles.outstandingLabel}>LC Outstanding</Text>
+                  </View>
+                  <Text style={styles.outstandingAmount}>
+                    {formatINRCrore(employee.outstandingLc)}
+                  </Text>
+                  <Text style={styles.outstandingAmountFull}>
+                    {formatINRAmount(employee.outstandingLc)}
+                  </Text>
+                </View>
+              )}
+              
+              <View style={styles.outstandingTotalRow}>
+                <View>
+                  <Text style={styles.outstandingTotalLabel}>Total Outstanding</Text>
+                  <Text style={styles.outstandingTotalAmountFull}>
+                    {formatINRAmount(getTotalOutstanding(employee.outstandingFtth, employee.outstandingLc))}
+                  </Text>
+                </View>
+                <Text style={styles.outstandingTotalAmount}>
+                  {formatINRCrore(getTotalOutstanding(employee.outstandingFtth, employee.outstandingLc))}
+                </Text>
+              </View>
+            </View>
+          </View>
+        )}
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Task Information</Text>
@@ -545,6 +604,81 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.light.text,
     fontWeight: '600' as const,
+  },
+  outstandingHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  outstandingTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#D32F2F',
+  },
+  outstandingCard: {
+    backgroundColor: '#FFF5F5',
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 2,
+    borderColor: '#FFCDD2',
+  },
+  outstandingItem: {
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  outstandingLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+  },
+  outstandingLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#B71C1C',
+  },
+  outstandingAmount: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#D32F2F',
+    letterSpacing: 0.5,
+  },
+  outstandingAmountFull: {
+    fontSize: 12,
+    color: '#757575',
+    marginTop: 4,
+  },
+  outstandingDivider: {
+    height: 1,
+    backgroundColor: '#FFCDD2',
+    marginVertical: 12,
+  },
+  outstandingTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#FFEBEE',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#FFCDD2',
+  },
+  outstandingTotalLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#B71C1C',
+  },
+  outstandingTotalAmount: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#D32F2F',
+  },
+  outstandingTotalAmountFull: {
+    fontSize: 11,
+    color: '#757575',
+    marginTop: 2,
   },
   orgCard: {
     backgroundColor: '#fff',

@@ -1,6 +1,6 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, Modal, FlatList, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, Clock, CalendarCheck, AlertTriangle } from 'lucide-react-native';
+import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, Clock, CalendarCheck, AlertTriangle, IndianRupee, X } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
@@ -8,6 +8,8 @@ import { useMemo, useState } from 'react';
 import React from "react";
 import { Event } from '@/types';
 import Svg, { Circle } from 'react-native-svg';
+import { trpc } from '@/lib/trpc';
+import { formatINRCrore, formatINRAmount, formatINRCompact, safeNumber } from '@/lib/currency';
 
 const MAX_DISPLAYED_WORKS = 3;
 
@@ -19,6 +21,19 @@ export default function DashboardScreen() {
   const { events, salesReports, resources, issues } = useApp();
   const [showAllActive, setShowAllActive] = useState(false);
   const [showAllCompleted, setShowAllCompleted] = useState(false);
+  const [outstandingModal, setOutstandingModal] = useState<{ visible: boolean; type: 'ftth' | 'lc' }>({ visible: false, type: 'ftth' });
+
+  const isManagementRole = ['GM', 'CGM', 'DGM', 'AGM'].includes(employee?.role || '');
+
+  const { data: outstandingSummary } = trpc.admin.getOutstandingSummary.useQuery(
+    undefined,
+    { enabled: isManagementRole }
+  );
+
+  const { data: outstandingEmployees, isLoading: loadingEmployees } = trpc.admin.getOutstandingEmployees.useQuery(
+    { type: outstandingModal.type, limit: 200 },
+    { enabled: outstandingModal.visible && isManagementRole }
+  );
 
   const stats = useMemo(() => {
     // Management roles see all events
@@ -182,6 +197,57 @@ export default function DashboardScreen() {
           />
         </View>
 
+        {isManagementRole && outstandingSummary && (safeNumber(outstandingSummary.ftth.totalAmount) > 0 || safeNumber(outstandingSummary.lc.totalAmount) > 0) && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Outstanding Dues Overview</Text>
+            <View style={styles.outstandingCardsRow}>
+              {safeNumber(outstandingSummary.ftth.totalAmount) > 0 && (
+                <TouchableOpacity 
+                  style={styles.outstandingCard}
+                  onPress={() => setOutstandingModal({ visible: true, type: 'ftth' })}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.outstandingCardHeader}>
+                    <View style={[styles.outstandingIconContainer, { backgroundColor: '#FFEBEE' }]}>
+                      <IndianRupee size={20} color="#D32F2F" />
+                    </View>
+                    <AlertTriangle size={16} color="#D32F2F" />
+                  </View>
+                  <Text style={styles.outstandingCardTitle}>FTTH Outstanding</Text>
+                  <Text style={styles.outstandingCardAmount} numberOfLines={1} adjustsFontSizeToFit>{formatINRCompact(outstandingSummary.ftth.totalAmount)}</Text>
+                  <Text style={styles.outstandingCardCount}>{outstandingSummary.ftth.employeeCount} employees</Text>
+                  <View style={styles.outstandingCardAction}>
+                    <Text style={styles.outstandingCardActionText}>View Details</Text>
+                    <ChevronRight size={14} color="#D32F2F" />
+                  </View>
+                </TouchableOpacity>
+              )}
+              
+              {safeNumber(outstandingSummary.lc.totalAmount) > 0 && (
+                <TouchableOpacity 
+                  style={styles.outstandingCard}
+                  onPress={() => setOutstandingModal({ visible: true, type: 'lc' })}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.outstandingCardHeader}>
+                    <View style={[styles.outstandingIconContainer, { backgroundColor: '#FFF3E0' }]}>
+                      <IndianRupee size={20} color="#E65100" />
+                    </View>
+                    <AlertTriangle size={16} color="#E65100" />
+                  </View>
+                  <Text style={styles.outstandingCardTitle}>LC Outstanding</Text>
+                  <Text style={[styles.outstandingCardAmount, { color: '#E65100' }]} numberOfLines={1} adjustsFontSizeToFit>{formatINRCompact(outstandingSummary.lc.totalAmount)}</Text>
+                  <Text style={styles.outstandingCardCount}>{outstandingSummary.lc.employeeCount} employees</Text>
+                  <View style={styles.outstandingCardAction}>
+                    <Text style={[styles.outstandingCardActionText, { color: '#E65100' }]}>View Details</Text>
+                    <ChevronRight size={14} color="#E65100" />
+                  </View>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        )}
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Task Status Overview</Text>
           <View style={styles.eventStatusGrid}>
@@ -310,6 +376,91 @@ export default function DashboardScreen() {
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
+
+      <Modal
+        visible={outstandingModal.visible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setOutstandingModal({ ...outstandingModal, visible: false })}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>
+              {outstandingModal.type === 'ftth' ? 'FTTH' : 'LC'} Outstanding - Employees
+            </Text>
+            <TouchableOpacity 
+              style={styles.modalCloseBtn}
+              onPress={() => setOutstandingModal({ ...outstandingModal, visible: false })}
+            >
+              <X size={24} color={Colors.light.text} />
+            </TouchableOpacity>
+          </View>
+          
+          {outstandingSummary && (
+            <View style={styles.modalSummary}>
+              <View style={styles.modalSummaryItem}>
+                <Text style={styles.modalSummaryLabel}>Total Outstanding</Text>
+                <Text style={styles.modalSummaryValue}>
+                  {formatINRCrore(outstandingModal.type === 'ftth' ? outstandingSummary.ftth.totalAmount : outstandingSummary.lc.totalAmount)}
+                </Text>
+              </View>
+              <View style={styles.modalSummaryDivider} />
+              <View style={styles.modalSummaryItem}>
+                <Text style={styles.modalSummaryLabel}>Employees</Text>
+                <Text style={styles.modalSummaryValue}>
+                  {outstandingModal.type === 'ftth' ? outstandingSummary.ftth.employeeCount : outstandingSummary.lc.employeeCount}
+                </Text>
+              </View>
+            </View>
+          )}
+          
+          {loadingEmployees ? (
+            <View style={styles.modalLoading}>
+              <ActivityIndicator size="large" color={Colors.light.primary} />
+              <Text style={styles.modalLoadingText}>Loading employees...</Text>
+            </View>
+          ) : (
+            <FlatList
+              data={outstandingEmployees?.employees || []}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={styles.modalListContent}
+              renderItem={({ item }) => (
+                <TouchableOpacity 
+                  style={styles.employeeRow}
+                  onPress={() => {
+                    setOutstandingModal({ ...outstandingModal, visible: false });
+                    router.push(`/employee-profile?id=${item.id}`);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.employeeRowLeft}>
+                    <View style={styles.employeeAvatar}>
+                      <Text style={styles.employeeAvatarText}>
+                        {item.name?.substring(0, 2).toUpperCase() || '??'}
+                      </Text>
+                    </View>
+                    <View style={styles.employeeInfo}>
+                      <Text style={styles.employeeName} numberOfLines={1}>{item.name}</Text>
+                      <Text style={styles.employeePersNo}>Pers No: {item.pers_no}</Text>
+                      {item.circle && <Text style={styles.employeeCircle}>{item.circle}</Text>}
+                    </View>
+                  </View>
+                  <View style={styles.employeeRowRight}>
+                    <Text style={styles.employeeAmount}>{formatINRCrore(item.outstanding_amount)}</Text>
+                    <Text style={styles.employeeAmountFull}>{formatINRAmount(item.outstanding_amount)}</Text>
+                    <ChevronRight size={16} color={Colors.light.textSecondary} />
+                  </View>
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <View style={styles.modalEmpty}>
+                  <Text style={styles.modalEmptyText}>No employees with outstanding amounts</Text>
+                </View>
+              }
+            />
+          )}
+        </View>
+      </Modal>
     </>
   );
 }
@@ -1047,5 +1198,191 @@ const styles = StyleSheet.create({
   },
   bottomSpacer: {
     height: 20,
+  },
+  outstandingCardsRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  outstandingCard: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#FFCDD2',
+  },
+  outstandingCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  outstandingIconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  outstandingCardTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.light.textSecondary,
+    marginBottom: 4,
+  },
+  outstandingCardAmount: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#D32F2F',
+    marginBottom: 4,
+  },
+  outstandingCardCount: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginBottom: 12,
+  },
+  outstandingCardAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  outstandingCardActionText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#D32F2F',
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: Colors.light.background,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    backgroundColor: '#FFFFFF',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  modalCloseBtn: {
+    padding: 4,
+  },
+  modalSummary: {
+    flexDirection: 'row',
+    backgroundColor: '#FFF5F5',
+    padding: 16,
+    marginHorizontal: 16,
+    marginTop: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FFCDD2',
+  },
+  modalSummaryItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  modalSummaryLabel: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginBottom: 4,
+  },
+  modalSummaryValue: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#D32F2F',
+  },
+  modalSummaryDivider: {
+    width: 1,
+    backgroundColor: '#FFCDD2',
+    marginHorizontal: 16,
+  },
+  modalLoading: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+  },
+  modalLoadingText: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+  },
+  modalListContent: {
+    padding: 16,
+    gap: 8,
+  },
+  employeeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  employeeRowLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: 12,
+  },
+  employeeAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.light.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  employeeAvatarText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  employeeInfo: {
+    flex: 1,
+  },
+  employeeName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.light.text,
+    marginBottom: 2,
+  },
+  employeePersNo: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+  },
+  employeeCircle: {
+    fontSize: 11,
+    color: Colors.light.textSecondary,
+    marginTop: 2,
+  },
+  employeeRowRight: {
+    alignItems: 'flex-end',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  employeeAmount: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#D32F2F',
+  },
+  employeeAmountFull: {
+    fontSize: 10,
+    color: Colors.light.textSecondary,
+    display: 'none',
+  },
+  modalEmpty: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  modalEmptyText: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
   },
 });
