@@ -7,7 +7,7 @@ import type { AppRouter } from "@/backend/trpc/app-router";
 
 export const trpc = createTRPCReact<AppRouter>();
 
-const API_BASE_URL = 'https://0f579411-6452-4f34-a09b-bceba9c28ac4-00-ai5gp1yoo93b.kirk.replit.dev';
+const API_BASE_URL = 'http://117.251.72.195:5000';
 
 const getBaseUrl = () => {
   // For native mobile apps (iOS/Android), always use the hardcoded API URL

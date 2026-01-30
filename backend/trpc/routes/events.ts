@@ -3,8 +3,19 @@ import { eq, and, desc, gte, lte, sql } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
 import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations } from "@/backend/db";
 
+function getISTDate(): Date {
+  const now = new Date();
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60 * 1000);
+  return new Date(utc + istOffset);
+}
+
+function getISTDateString(): string {
+  return getISTDate().toISOString().split('T')[0];
+}
+
 async function autoCompleteExpiredEvents(eventsList: typeof events.$inferSelect[]) {
-  const today = new Date();
+  const today = getISTDate();
   today.setHours(0, 0, 0, 0);
   
   const expiredEventIds: string[] = [];
@@ -1159,7 +1170,11 @@ export const eventsRouter = createTRPCRouter({
       
       const currentCompleted = (event[0] as any)[completedColumn] || 0;
       const target = (event[0] as any)[targetColumn] || 0;
-      const newCompleted = Math.min(currentCompleted + input.increment, target);
+      
+      // Support both increment (+1) and decrement (-1) for undo
+      let newCompleted = currentCompleted + input.increment;
+      // Ensure value stays within bounds (0 to target)
+      newCompleted = Math.max(0, Math.min(newCompleted, target));
       
       const result = await db.update(events)
         .set({ [completedColumn]: newCompleted, updatedAt: new Date() } as any)

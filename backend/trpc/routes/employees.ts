@@ -17,7 +17,7 @@ export const employeesRouter = createTRPCRouter({
       const results = await query.orderBy(desc(employees.createdAt));
       
       // Apply correction factor for outstanding amounts
-      // Database values were imported with 100× inflation (10^9 instead of 10^7)
+      // Database values were imported with 100 inflation (10^9 instead of 10^7)
       const CORRECTION_FACTOR = 100;
       return results.map(employee => ({
         ...employee,
@@ -38,7 +38,7 @@ export const employeesRouter = createTRPCRouter({
       const employee = result[0] || null;
       
       // Apply correction factor for outstanding amounts
-      // Database values were imported with 100× inflation (10^9 instead of 10^7)
+      // Database values were imported with 100 inflation (10^9 instead of 10^7)
       if (employee) {
         const CORRECTION_FACTOR = 100;
         if (employee.outstandingFtth) {
@@ -241,7 +241,7 @@ export const employeesRouter = createTRPCRouter({
           throw new Error("Invalid password");
         }
         
-        console.log("Login successful for employee:", employee.id);
+        console.log("Login successful for employee:", employee.id, "role:", employee.role, "outstanding_ftth:", employee.outstandingFtth, "outstanding_lc:", employee.outstandingLc);
         
         const needsChange = (employee as any).needsPasswordChange ?? false;
         
@@ -409,5 +409,51 @@ export const employeesRouter = createTRPCRouter({
         };
       }
       return null;
+    }),
+
+  getMasterByPersNo: publicProcedure
+    .input(z.object({ persNo: z.string() }))
+    .query(async ({ input }) => {
+      const normalizedPersNo = input.persNo.trim().replace(/^0+/, '') || input.persNo.trim();
+      console.log('getMasterByPersNo called with:', input.persNo, '-> normalized:', normalizedPersNo);
+      
+      // First try to find in employees table (registered users with updated profiles)
+      const employeeRecord = await db.select().from(employees)
+        .where(eq(employees.persNo, normalizedPersNo));
+      
+      if (employeeRecord[0]) {
+        console.log('Found in employees table:', employeeRecord[0].name);
+        return {
+          id: employeeRecord[0].id,
+          persNo: employeeRecord[0].persNo || normalizedPersNo,
+          name: employeeRecord[0].name,
+          circle: employeeRecord[0].circle,
+          zone: employeeRecord[0].zone,
+          designation: employeeRecord[0].designation,
+          division: employeeRecord[0].division,
+          empGroup: null,
+          reportingPersNo: employeeRecord[0].managerId,
+          reportingOfficerName: null,
+          reportingOfficerDesignation: null,
+          buildingName: null,
+          officeName: null,
+          shiftGroup: null,
+          distanceLimit: null,
+          sortOrder: null,
+          employeeId: null,
+          isLinked: true,
+          linkedEmployeeId: employeeRecord[0].id,
+          linkedAt: null,
+          createdAt: employeeRecord[0].createdAt,
+          updatedAt: employeeRecord[0].updatedAt,
+        };
+      }
+      
+      // Fallback to employee_master table (static import data)
+      const masterRecord = await db.select().from(employeeMaster)
+        .where(eq(employeeMaster.persNo, normalizedPersNo));
+      
+      console.log('Employee master lookup result:', masterRecord[0]?.name || 'NOT FOUND');
+      return masterRecord[0] || null;
     }),
 });

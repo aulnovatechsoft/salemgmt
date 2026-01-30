@@ -4,6 +4,8 @@ import { trpcServer } from '@hono/trpc-server';
 import { appRouter } from './backend/trpc/app-router';
 import { createContext } from './backend/trpc/create-context';
 import { join } from 'path';
+import { db, employees } from './backend/db';
+import { sql } from 'drizzle-orm';
 
 const distDir = join(import.meta.dir, 'dist');
 
@@ -82,3 +84,32 @@ Bun.serve({
 });
 
 console.log(`Server running at http://0.0.0.0:${port}`);
+
+// Debug: Check outstanding dues data at startup
+(async () => {
+  try {
+    const ftthResult = await db.execute(sql`
+      SELECT COUNT(*) as count, COALESCE(SUM(CAST(outstanding_ftth AS NUMERIC)), 0) as total
+      FROM employees
+      WHERE outstanding_ftth IS NOT NULL AND CAST(outstanding_ftth AS NUMERIC) > 0
+    `);
+    const lcResult = await db.execute(sql`
+      SELECT COUNT(*) as count, COALESCE(SUM(CAST(outstanding_lc AS NUMERIC)), 0) as total
+      FROM employees
+      WHERE outstanding_lc IS NOT NULL AND CAST(outstanding_lc AS NUMERIC) > 0
+    `);
+    console.log("=== OUTSTANDING DUES DATA CHECK ===");
+    console.log("FTTH Outstanding:", ftthResult);
+    console.log("LC Outstanding:", lcResult);
+    
+    // Also check management role users
+    const mgmtResult = await db.execute(sql`
+      SELECT role, COUNT(*) as count FROM employees 
+      WHERE role IN ('GM', 'CGM', 'DGM', 'AGM')
+      GROUP BY role
+    `);
+    console.log("Management users:", mgmtResult);
+  } catch (error) {
+    console.error("Debug query error:", error);
+  }
+})();

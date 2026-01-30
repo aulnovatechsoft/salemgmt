@@ -303,3 +303,12 @@ export const pushTokens = pgTable('push_tokens', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
+
+export const ftthOrderPending = pgTable('ftth_order_pending', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  persNo: varchar('pers_no', { length: 50 }).notNull(),
+  ba: varchar('ba', { length: 50 }).notNull(),
+  totalFtthOrdersPending: integer('total_ftth_orders_pending').default(0).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});

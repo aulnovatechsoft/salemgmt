@@ -836,11 +836,20 @@ export default function EventDetailScreen() {
                   <View style={styles.progressBar}>
                     <View style={[styles.progressFill, { width: `${Math.min(((eventData.ebCompleted || 0) / eventData.targetEb) * 100, 100)}%`, backgroundColor: '#7B1FA2' }]} />
                   </View>
-                  {canManageTeam && (eventData.ebCompleted || 0) < eventData.targetEb && (
-                    <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#F3E5F5' }]} onPress={() => handleMarkTaskComplete('EB')}>
-                      <CheckCircle size={14} color="#7B1FA2" />
-                      <Text style={[styles.markCompleteBtnText, { color: '#7B1FA2' }]}>+1 Complete</Text>
-                    </TouchableOpacity>
+                  {canManageTeam && (
+                    <View style={styles.taskButtonRow}>
+                      {(eventData.ebCompleted || 0) > 0 && (
+                        <TouchableOpacity style={[styles.undoBtn, { borderColor: '#7B1FA2' }]} onPress={() => handleMarkTaskComplete('EB', -1)}>
+                          <Text style={[styles.undoBtnText, { color: '#7B1FA2' }]}>-1</Text>
+                        </TouchableOpacity>
+                      )}
+                      {(eventData.ebCompleted || 0) < eventData.targetEb && (
+                        <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#F3E5F5' }]} onPress={() => handleMarkTaskComplete('EB')}>
+                          <CheckCircle size={14} color="#7B1FA2" />
+                          <Text style={[styles.markCompleteBtnText, { color: '#7B1FA2' }]}>+1 Complete</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   )}
                 </View>
               )}
@@ -853,11 +862,20 @@ export default function EventDetailScreen() {
                   <View style={styles.progressBar}>
                     <View style={[styles.progressFill, { width: `${Math.min(((eventData.leaseCompleted || 0) / eventData.targetLease) * 100, 100)}%`, backgroundColor: '#EF6C00' }]} />
                   </View>
-                  {canManageTeam && (eventData.leaseCompleted || 0) < eventData.targetLease && (
-                    <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FFF3E0' }]} onPress={() => handleMarkTaskComplete('LEASE')}>
-                      <CheckCircle size={14} color="#EF6C00" />
-                      <Text style={[styles.markCompleteBtnText, { color: '#EF6C00' }]}>+1 Complete</Text>
-                    </TouchableOpacity>
+                  {canManageTeam && (
+                    <View style={styles.taskButtonRow}>
+                      {(eventData.leaseCompleted || 0) > 0 && (
+                        <TouchableOpacity style={[styles.undoBtn, { borderColor: '#EF6C00' }]} onPress={() => handleMarkTaskComplete('LEASE', -1)}>
+                          <Text style={[styles.undoBtnText, { color: '#EF6C00' }]}>-1</Text>
+                        </TouchableOpacity>
+                      )}
+                      {(eventData.leaseCompleted || 0) < eventData.targetLease && (
+                        <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FFF3E0' }]} onPress={() => handleMarkTaskComplete('LEASE')}>
+                          <CheckCircle size={14} color="#EF6C00" />
+                          <Text style={[styles.markCompleteBtnText, { color: '#EF6C00' }]}>+1 Complete</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   )}
                 </View>
               )}
@@ -870,11 +888,20 @@ export default function EventDetailScreen() {
                   <View style={styles.progressBar}>
                     <View style={[styles.progressFill, { width: `${Math.min(((eventData.btsDownCompleted || 0) / eventData.targetBtsDown) * 100, 100)}%`, backgroundColor: '#C62828' }]} />
                   </View>
-                  {canManageTeam && (eventData.btsDownCompleted || 0) < eventData.targetBtsDown && (
-                    <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FFEBEE' }]} onPress={() => handleMarkTaskComplete('BTS_DOWN')}>
-                      <CheckCircle size={14} color="#C62828" />
-                      <Text style={[styles.markCompleteBtnText, { color: '#C62828' }]}>+1 Fixed</Text>
-                    </TouchableOpacity>
+                  {canManageTeam && (
+                    <View style={styles.taskButtonRow}>
+                      {(eventData.btsDownCompleted || 0) > 0 && (
+                        <TouchableOpacity style={[styles.undoBtn, { borderColor: '#C62828' }]} onPress={() => handleMarkTaskComplete('BTS_DOWN', -1)}>
+                          <Text style={[styles.undoBtnText, { color: '#C62828' }]}>-1</Text>
+                        </TouchableOpacity>
+                      )}
+                      {(eventData.btsDownCompleted || 0) < eventData.targetBtsDown && (
+                        <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FFEBEE' }]} onPress={() => handleMarkTaskComplete('BTS_DOWN')}>
+                          <CheckCircle size={14} color="#C62828" />
+                          <Text style={[styles.markCompleteBtnText, { color: '#C62828' }]}>+1 Fixed</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   )}
                 </View>
               )}
@@ -887,11 +914,20 @@ export default function EventDetailScreen() {
                   <View style={styles.progressBar}>
                     <View style={[styles.progressFill, { width: `${Math.min(((eventData.ftthDownCompleted || 0) / eventData.targetFtthDown) * 100, 100)}%`, backgroundColor: '#D81B60' }]} />
                   </View>
-                  {canManageTeam && (eventData.ftthDownCompleted || 0) < eventData.targetFtthDown && (
-                    <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FCE4EC' }]} onPress={() => handleMarkTaskComplete('FTTH_DOWN')}>
-                      <CheckCircle size={14} color="#D81B60" />
-                      <Text style={[styles.markCompleteBtnText, { color: '#D81B60' }]}>+1 Fixed</Text>
-                    </TouchableOpacity>
+                  {canManageTeam && (
+                    <View style={styles.taskButtonRow}>
+                      {(eventData.ftthDownCompleted || 0) > 0 && (
+                        <TouchableOpacity style={[styles.undoBtn, { borderColor: '#D81B60' }]} onPress={() => handleMarkTaskComplete('FTTH_DOWN', -1)}>
+                          <Text style={[styles.undoBtnText, { color: '#D81B60' }]}>-1</Text>
+                        </TouchableOpacity>
+                      )}
+                      {(eventData.ftthDownCompleted || 0) < eventData.targetFtthDown && (
+                        <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FCE4EC' }]} onPress={() => handleMarkTaskComplete('FTTH_DOWN')}>
+                          <CheckCircle size={14} color="#D81B60" />
+                          <Text style={[styles.markCompleteBtnText, { color: '#D81B60' }]}>+1 Fixed</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   )}
                 </View>
               )}
@@ -904,11 +940,20 @@ export default function EventDetailScreen() {
                   <View style={styles.progressBar}>
                     <View style={[styles.progressFill, { width: `${Math.min(((eventData.routeFailCompleted || 0) / eventData.targetRouteFail) * 100, 100)}%`, backgroundColor: '#E65100' }]} />
                   </View>
-                  {canManageTeam && (eventData.routeFailCompleted || 0) < eventData.targetRouteFail && (
-                    <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FBE9E7' }]} onPress={() => handleMarkTaskComplete('ROUTE_FAIL')}>
-                      <CheckCircle size={14} color="#E65100" />
-                      <Text style={[styles.markCompleteBtnText, { color: '#E65100' }]}>+1 Fixed</Text>
-                    </TouchableOpacity>
+                  {canManageTeam && (
+                    <View style={styles.taskButtonRow}>
+                      {(eventData.routeFailCompleted || 0) > 0 && (
+                        <TouchableOpacity style={[styles.undoBtn, { borderColor: '#E65100' }]} onPress={() => handleMarkTaskComplete('ROUTE_FAIL', -1)}>
+                          <Text style={[styles.undoBtnText, { color: '#E65100' }]}>-1</Text>
+                        </TouchableOpacity>
+                      )}
+                      {(eventData.routeFailCompleted || 0) < eventData.targetRouteFail && (
+                        <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FBE9E7' }]} onPress={() => handleMarkTaskComplete('ROUTE_FAIL')}>
+                          <CheckCircle size={14} color="#E65100" />
+                          <Text style={[styles.markCompleteBtnText, { color: '#E65100' }]}>+1 Fixed</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   )}
                 </View>
               )}
@@ -921,11 +966,20 @@ export default function EventDetailScreen() {
                   <View style={styles.progressBar}>
                     <View style={[styles.progressFill, { width: `${Math.min(((eventData.ofcFailCompleted || 0) / eventData.targetOfcFail) * 100, 100)}%`, backgroundColor: '#546E7A' }]} />
                   </View>
-                  {canManageTeam && (eventData.ofcFailCompleted || 0) < eventData.targetOfcFail && (
-                    <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#ECEFF1' }]} onPress={() => handleMarkTaskComplete('OFC_FAIL')}>
-                      <CheckCircle size={14} color="#546E7A" />
-                      <Text style={[styles.markCompleteBtnText, { color: '#546E7A' }]}>+1 Fixed</Text>
-                    </TouchableOpacity>
+                  {canManageTeam && (
+                    <View style={styles.taskButtonRow}>
+                      {(eventData.ofcFailCompleted || 0) > 0 && (
+                        <TouchableOpacity style={[styles.undoBtn, { borderColor: '#546E7A' }]} onPress={() => handleMarkTaskComplete('OFC_FAIL', -1)}>
+                          <Text style={[styles.undoBtnText, { color: '#546E7A' }]}>-1</Text>
+                        </TouchableOpacity>
+                      )}
+                      {(eventData.ofcFailCompleted || 0) < eventData.targetOfcFail && (
+                        <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#ECEFF1' }]} onPress={() => handleMarkTaskComplete('OFC_FAIL')}>
+                          <CheckCircle size={14} color="#546E7A" />
+                          <Text style={[styles.markCompleteBtnText, { color: '#546E7A' }]}>+1 Fixed</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   )}
                 </View>
               )}
@@ -1688,8 +1742,11 @@ const styles = StyleSheet.create({
   maintenanceHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   maintenanceLabel: { fontSize: 13, fontWeight: '600' as const, color: Colors.light.text },
   maintenanceProgress: { fontSize: 13, fontWeight: 'bold' as const, color: Colors.light.textSecondary },
-  markCompleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6, marginTop: 8, gap: 6 },
+  taskButtonRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+  markCompleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6, gap: 6 },
   markCompleteBtnText: { fontSize: 12, fontWeight: '600' as const },
+  undoBtn: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6, borderWidth: 1.5, backgroundColor: '#FFF' },
+  undoBtnText: { fontSize: 12, fontWeight: '700' as const },
   activityList: { marginTop: 12, gap: 10 },
   activityItem: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   activityIcon: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
