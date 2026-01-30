@@ -1264,7 +1264,7 @@ export const adminRouter = createTRPCRouter({
       const errors: string[] = [];
       
       const generateDefaultPassword = (persNo: string): string => {
-        const last4 = persNo.slice(-4);
+        const last4 = persNo.slice(-4).padStart(4, '0');
         return `BSNL@${last4}`;
       };
       
@@ -1330,7 +1330,6 @@ export const adminRouter = createTRPCRouter({
           }
           
           const password = generateDefaultPassword(emp.persNo);
-          const circleEnum = mapCircleToEnum(emp.circle) as any;
           const role = mapDesignationToRole(emp.designation);
           
           const newEmployee = await db.insert(employees).values({
@@ -1339,7 +1338,7 @@ export const adminRouter = createTRPCRouter({
             phone: null,
             password: password,
             role: role,
-            circle: circleEnum,
+            circle: emp.circle || 'Unknown',
             zone: emp.zone || 'Default',
             persNo: emp.persNo,
             designation: emp.designation || 'Staff',
@@ -1381,7 +1380,7 @@ export const adminRouter = createTRPCRouter({
         activated, 
         skipped, 
         errors,
-        passwordFormula: "BSNL@ + last 4 digits of Pers No (e.g., Pers No 198012345 → Password: BSNL@2345)"
+        passwordFormula: "BSNL@ + last 4 digits of Pers No padded with zeros (e.g., Pers No 198012345 → BSNL@2345, Pers No 223 → BSNL@0223)"
       };
     }),
 
@@ -1398,5 +1397,113 @@ export const adminRouter = createTRPCRouter({
       `);
       
       return result as unknown as { circle: string; count: string }[];
+    }),
+
+  getOutstandingSummary: publicProcedure
+    .input(z.object({
+      circle: z.string().optional(),
+    }).optional())
+    .query(async ({ input }) => {
+      let whereClause = sql`1=1`;
+      
+      if (input?.circle) {
+        whereClause = sql`circle = ${input.circle}`;
+      }
+      
+      // Note: Database values were imported with 100× inflation (10^9 instead of 10^7)
+      // Apply correction factor of 100 to get accurate amounts
+      const CORRECTION_FACTOR = 100;
+      
+      const ftthResult = await db.execute(sql`
+        SELECT 
+          COUNT(*) as employee_count,
+          COALESCE(SUM(CAST(outstanding_ftth AS NUMERIC)), 0) / ${CORRECTION_FACTOR} as total_amount
+        FROM employees
+        WHERE outstanding_ftth IS NOT NULL 
+          AND CAST(outstanding_ftth AS NUMERIC) > 0
+          AND ${whereClause}
+      `);
+      
+      const lcResult = await db.execute(sql`
+        SELECT 
+          COUNT(*) as employee_count,
+          COALESCE(SUM(CAST(outstanding_lc AS NUMERIC)), 0) / ${CORRECTION_FACTOR} as total_amount
+        FROM employees
+        WHERE outstanding_lc IS NOT NULL 
+          AND CAST(outstanding_lc AS NUMERIC) > 0
+          AND ${whereClause}
+      `);
+      
+      const ftthData = (ftthResult as any)[0] || { employee_count: '0', total_amount: '0' };
+      const lcData = (lcResult as any)[0] || { employee_count: '0', total_amount: '0' };
+      
+      return {
+        ftth: {
+          totalAmount: ftthData.total_amount?.toString() || '0',
+          employeeCount: parseInt(ftthData.employee_count || '0'),
+        },
+        lc: {
+          totalAmount: lcData.total_amount?.toString() || '0',
+          employeeCount: parseInt(lcData.employee_count || '0'),
+        },
+      };
+    }),
+
+  getOutstandingEmployees: publicProcedure
+    .input(z.object({
+      type: z.enum(['ftth', 'lc']),
+      circle: z.string().optional(),
+      limit: z.number().optional().default(100),
+      offset: z.number().optional().default(0),
+    }))
+    .query(async ({ input }) => {
+      const column = input.type === 'ftth' ? 'outstanding_ftth' : 'outstanding_lc';
+      // Note: Database values were imported with 100× inflation (10^9 instead of 10^7)
+      const CORRECTION_FACTOR = 100;
+      
+      let circleFilter = sql`1=1`;
+      if (input.circle) {
+        circleFilter = sql`circle = ${input.circle}`;
+      }
+      
+      const result = await db.execute(sql`
+        SELECT 
+          id,
+          name,
+          pers_no,
+          circle,
+          designation,
+          (CAST(${sql.raw(column)} AS NUMERIC) / ${CORRECTION_FACTOR})::text as outstanding_amount
+        FROM employees
+        WHERE ${sql.raw(column)} IS NOT NULL 
+          AND CAST(${sql.raw(column)} AS NUMERIC) > 0
+          AND ${circleFilter}
+        ORDER BY CAST(${sql.raw(column)} AS NUMERIC) DESC
+        LIMIT ${input.limit}
+        OFFSET ${input.offset}
+      `);
+      
+      const countResult = await db.execute(sql`
+        SELECT COUNT(*) as total
+        FROM employees
+        WHERE ${sql.raw(column)} IS NOT NULL 
+          AND CAST(${sql.raw(column)} AS NUMERIC) > 0
+          AND ${circleFilter}
+      `);
+      
+      const total = parseInt((countResult as any)[0]?.total || '0');
+      
+      return {
+        employees: result as unknown as Array<{
+          id: string;
+          name: string;
+          pers_no: string;
+          circle: string | null;
+          designation: string | null;
+          outstanding_amount: string;
+        }>,
+        total,
+        hasMore: input.offset + input.limit < total,
+      };
     }),
 });

@@ -52,6 +52,8 @@ export interface Employee {
   reportingPersNo?: string;
   persNo?: string;
   designation: string;
+  outstandingFtth?: string | null;
+  outstandingLc?: string | null;
   createdAt: string;
 }
 
