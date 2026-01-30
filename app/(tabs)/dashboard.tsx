@@ -22,6 +22,7 @@ export default function DashboardScreen() {
   const [showAllActive, setShowAllActive] = useState(false);
   const [showAllCompleted, setShowAllCompleted] = useState(false);
   const [outstandingModal, setOutstandingModal] = useState<{ visible: boolean; type: 'ftth' | 'lc' }>({ visible: false, type: 'ftth' });
+  const [ftthPendingModalVisible, setFtthPendingModalVisible] = useState(false);
 
   const isManagementRole = ['GM', 'CGM', 'DGM', 'AGM'].includes(employee?.role || '');
 
@@ -33,6 +34,16 @@ export default function DashboardScreen() {
   const { data: outstandingEmployees, isLoading: loadingEmployees } = trpc.admin.getOutstandingEmployees.useQuery(
     { type: outstandingModal.type, limit: 200 },
     { enabled: outstandingModal.visible && isManagementRole }
+  );
+
+  const { data: ftthPendingSummary } = trpc.ftthPending.getSummary.useQuery(
+    undefined,
+    { enabled: isManagementRole }
+  );
+
+  const { data: ftthPendingEmployeesData, isLoading: loadingFtthPendingEmployees, error: ftthPendingError } = trpc.ftthPending.getEmployeesWithPending.useQuery(
+    { limit: 200 },
+    { enabled: ftthPendingModalVisible && isManagementRole }
   );
 
   const stats = useMemo(() => {
@@ -197,11 +208,14 @@ export default function DashboardScreen() {
           />
         </View>
 
-        {isManagementRole && outstandingSummary && (safeNumber(outstandingSummary.ftth.totalAmount) > 0 || safeNumber(outstandingSummary.lc.totalAmount) > 0) && (
+        {isManagementRole && (
+          (outstandingSummary && (safeNumber(outstandingSummary.ftth.totalAmount) > 0 || safeNumber(outstandingSummary.lc.totalAmount) > 0)) ||
+          (ftthPendingSummary && Number(ftthPendingSummary.totalPendingOrders) > 0)
+        ) && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Outstanding Dues Overview</Text>
+            <Text style={styles.sectionTitle}>Outstanding & Pending Overview</Text>
             <View style={styles.outstandingCardsRow}>
-              {safeNumber(outstandingSummary.ftth.totalAmount) > 0 && (
+              {outstandingSummary && safeNumber(outstandingSummary.ftth.totalAmount) > 0 && (
                 <TouchableOpacity 
                   style={styles.outstandingCard}
                   onPress={() => setOutstandingModal({ visible: true, type: 'ftth' })}
@@ -223,7 +237,7 @@ export default function DashboardScreen() {
                 </TouchableOpacity>
               )}
               
-              {safeNumber(outstandingSummary.lc.totalAmount) > 0 && (
+              {outstandingSummary && safeNumber(outstandingSummary.lc.totalAmount) > 0 && (
                 <TouchableOpacity 
                   style={styles.outstandingCard}
                   onPress={() => setOutstandingModal({ visible: true, type: 'lc' })}
@@ -241,6 +255,28 @@ export default function DashboardScreen() {
                   <View style={styles.outstandingCardAction}>
                     <Text style={[styles.outstandingCardActionText, { color: '#E65100' }]}>View Details</Text>
                     <ChevronRight size={14} color="#E65100" />
+                  </View>
+                </TouchableOpacity>
+              )}
+              
+              {ftthPendingSummary && Number(ftthPendingSummary.totalPendingOrders) > 0 && (
+                <TouchableOpacity 
+                  style={styles.outstandingCard}
+                  onPress={() => setFtthPendingModalVisible(true)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.outstandingCardHeader}>
+                    <View style={[styles.outstandingIconContainer, { backgroundColor: '#E3F2FD' }]}>
+                      <Clock size={20} color="#1565C0" />
+                    </View>
+                    <AlertTriangle size={16} color="#1565C0" />
+                  </View>
+                  <Text style={styles.outstandingCardTitle}>FTTH Order Pending</Text>
+                  <Text style={[styles.outstandingCardAmount, { color: '#1565C0' }]} numberOfLines={1} adjustsFontSizeToFit>{Number(ftthPendingSummary.totalPendingOrders).toLocaleString()}</Text>
+                  <Text style={styles.outstandingCardCount}>{Number(ftthPendingSummary.uniqueEmployees).toLocaleString()} employees</Text>
+                  <View style={styles.outstandingCardAction}>
+                    <Text style={[styles.outstandingCardActionText, { color: '#1565C0' }]}>View Details</Text>
+                    <ChevronRight size={14} color="#1565C0" />
                   </View>
                 </TouchableOpacity>
               )}
@@ -429,7 +465,7 @@ export default function DashboardScreen() {
                   style={styles.employeeRow}
                   onPress={() => {
                     setOutstandingModal({ ...outstandingModal, visible: false });
-                    router.push(`/employee-profile?id=${item.id}`);
+                    router.push(`/employee-profile?id=${item.id}&persNo=${item.pers_no}`);
                   }}
                   activeOpacity={0.7}
                 >
@@ -455,6 +491,100 @@ export default function DashboardScreen() {
               ListEmptyComponent={
                 <View style={styles.modalEmpty}>
                   <Text style={styles.modalEmptyText}>No employees with outstanding amounts</Text>
+                </View>
+              }
+            />
+          )}
+        </View>
+      </Modal>
+
+      <Modal
+        visible={ftthPendingModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setFtthPendingModalVisible(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>FTTH Order Pending - Employees</Text>
+            <TouchableOpacity 
+              style={styles.modalCloseBtn}
+              onPress={() => setFtthPendingModalVisible(false)}
+            >
+              <X size={24} color={Colors.light.text} />
+            </TouchableOpacity>
+          </View>
+          
+          {ftthPendingSummary && (
+            <View style={styles.modalSummary}>
+              <View style={styles.modalSummaryItem}>
+                <Text style={styles.modalSummaryLabel}>Total Pending</Text>
+                <Text style={[styles.modalSummaryValue, { color: '#1565C0' }]}>
+                  {Number(ftthPendingSummary.totalPendingOrders).toLocaleString()}
+                </Text>
+              </View>
+              <View style={styles.modalSummaryDivider} />
+              <View style={styles.modalSummaryItem}>
+                <Text style={styles.modalSummaryLabel}>Employees</Text>
+                <Text style={[styles.modalSummaryValue, { color: '#1565C0' }]}>
+                  {Number(ftthPendingSummary.uniqueEmployees).toLocaleString()}
+                </Text>
+              </View>
+              <View style={styles.modalSummaryDivider} />
+              <View style={styles.modalSummaryItem}>
+                <Text style={styles.modalSummaryLabel}>BAs</Text>
+                <Text style={[styles.modalSummaryValue, { color: '#1565C0' }]}>
+                  {Number(ftthPendingSummary.uniqueBAs).toLocaleString()}
+                </Text>
+              </View>
+            </View>
+          )}
+          
+          {loadingFtthPendingEmployees ? (
+            <View style={styles.modalLoading}>
+              <ActivityIndicator size="large" color="#1565C0" />
+              <Text style={styles.modalLoadingText}>Loading employees...</Text>
+            </View>
+          ) : ftthPendingError ? (
+            <View style={styles.modalEmpty}>
+              <Text style={styles.modalEmptyText}>Failed to load employees. Please try again.</Text>
+            </View>
+          ) : (
+            <FlatList
+              data={ftthPendingEmployeesData?.employees || []}
+              keyExtractor={(item) => item.persNo}
+              contentContainerStyle={styles.modalListContent}
+              renderItem={({ item }) => (
+                <TouchableOpacity 
+                  style={styles.employeeRow}
+                  onPress={() => {
+                    setFtthPendingModalVisible(false);
+                    router.push(`/employee-profile?persNo=${item.persNo}`);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.employeeRowLeft}>
+                    <View style={[styles.employeeAvatar, { backgroundColor: '#E3F2FD' }]}>
+                      <Text style={[styles.employeeAvatarText, { color: '#1565C0' }]}>
+                        {item.name?.substring(0, 2).toUpperCase() || '??'}
+                      </Text>
+                    </View>
+                    <View style={styles.employeeInfo}>
+                      <Text style={styles.employeeName} numberOfLines={1}>{item.name}</Text>
+                      <Text style={styles.employeePersNo}>Pers No: {item.persNo}</Text>
+                      <Text style={styles.employeeCircle}>{item.designation} | {item.circle}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.employeeRowRight}>
+                    <Text style={[styles.employeeAmount, { color: '#1565C0' }]}>{item.totalPending.toLocaleString()}</Text>
+                    <Text style={styles.employeeAmountFull}>{item.baCount} BA{item.baCount > 1 ? 's' : ''}</Text>
+                    <ChevronRight size={16} color={Colors.light.textSecondary} />
+                  </View>
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <View style={styles.modalEmpty}>
+                  <Text style={styles.modalEmptyText}>No employees with pending orders</Text>
                 </View>
               }
             />
@@ -1285,21 +1415,23 @@ const styles = StyleSheet.create({
   modalSummaryItem: {
     flex: 1,
     alignItems: 'center',
+    minWidth: 70,
   },
   modalSummaryLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: Colors.light.textSecondary,
-    marginBottom: 4,
+    marginBottom: 2,
+    textAlign: 'center',
   },
   modalSummaryValue: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '800',
     color: '#D32F2F',
   },
   modalSummaryDivider: {
     width: 1,
     backgroundColor: '#FFCDD2',
-    marginHorizontal: 16,
+    marginHorizontal: 8,
   },
   modalLoading: {
     flex: 1,

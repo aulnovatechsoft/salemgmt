@@ -10,6 +10,7 @@ import { rolesRouter } from "./routes/roles";
 import { circlesRouter } from "./routes/circles";
 import { divisionsRouter } from "./routes/divisions";
 import { adminRouter } from "./routes/admin";
+import { ftthPendingRouter } from "./routes/ftth-pending";
 
 export const appRouter = createTRPCRouter({
   employees: employeesRouter,
@@ -23,6 +24,7 @@ export const appRouter = createTRPCRouter({
   circles: circlesRouter,
   divisions: divisionsRouter,
   admin: adminRouter,
+  ftthPending: ftthPendingRouter,
 });
 
 export type AppRouter = typeof appRouter;

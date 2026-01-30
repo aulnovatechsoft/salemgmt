@@ -1404,6 +1404,7 @@ export const adminRouter = createTRPCRouter({
       circle: z.string().optional(),
     }).optional())
     .query(async ({ input }) => {
+      console.log("getOutstandingSummary called with input:", input);
       let whereClause = sql`1=1`;
       
       if (input?.circle) {
@@ -1436,6 +1437,8 @@ export const adminRouter = createTRPCRouter({
       
       const ftthData = (ftthResult as any)[0] || { employee_count: '0', total_amount: '0' };
       const lcData = (lcResult as any)[0] || { employee_count: '0', total_amount: '0' };
+      
+      console.log("Outstanding Summary - FTTH:", ftthData, "LC:", lcData);
       
       return {
         ftth: {
