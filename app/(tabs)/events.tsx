@@ -20,12 +20,68 @@ const EVENT_STATUS_CONFIG: Record<EventStatus, { label: string; color: string; b
 export default function EventsScreen() {
   const router = useRouter();
   const { employee } = useAuth();
-  const { events, refetchEvents } = useApp();
+  const { refetchEvents } = useApp();
   const [searchQuery, setSearchQuery] = useState('');
+  
+  const { data: myEventsData, refetch: refetchMyEvents } = trpc.events.getMyEvents.useQuery(
+    { employeeId: employee?.id || '' },
+    {
+      enabled: !!employee?.id,
+      retry: 1,
+      refetchOnWindowFocus: true,
+      refetchInterval: 10000,
+      staleTime: 5000,
+    }
+  );
+  
+  const events: Event[] = useMemo(() => {
+    if (!myEventsData) return [];
+    return myEventsData.map((e: any) => ({
+      id: e.id,
+      name: e.name,
+      location: e.location,
+      circle: e.circle,
+      zone: e.zone,
+      dateRange: {
+        startDate: e.startDate,
+        endDate: e.endDate,
+      },
+      category: e.category,
+      targetSim: e.targetSim,
+      targetFtth: e.targetFtth,
+      assignedTeam: e.assignedTeam || [],
+      allocatedSim: e.allocatedSim,
+      allocatedFtth: e.allocatedFtth,
+      createdBy: e.createdBy,
+      createdAt: e.createdAt,
+      keyInsight: e.keyInsight,
+      status: e.status || 'active',
+      assignedTo: e.assignedTo,
+      simsSold: e.simSold || 0,
+      ftthSold: e.ftthSold || 0,
+      teamMembers: e.teamMembers || [],
+      creatorName: e.creatorName || null,
+      assigneeName: e.assigneeName || null,
+      assigneeDesignation: e.assigneeDesignation || null,
+      targetEb: e.targetEb || 0,
+      targetLease: e.targetLease || 0,
+      targetBtsDown: e.targetBtsDown || 0,
+      targetFtthDown: e.targetFtthDown || 0,
+      targetRouteFail: e.targetRouteFail || 0,
+      targetOfcFail: e.targetOfcFail || 0,
+      ebCompleted: e.ebCompleted || 0,
+      leaseCompleted: e.leaseCompleted || 0,
+      btsDownCompleted: e.btsDownCompleted || 0,
+      ftthDownCompleted: e.ftthDownCompleted || 0,
+      routeFailCompleted: e.routeFailCompleted || 0,
+      ofcFailCompleted: e.ofcFailCompleted || 0,
+    }));
+  }, [myEventsData]);
   
   const updateStatusMutation = trpc.events.updateEventStatus.useMutation({
     onSuccess: () => {
       Alert.alert('Success', 'Task activated successfully! Team members can now submit sales.');
+      refetchMyEvents();
       refetchEvents?.();
     },
     onError: (error) => {
@@ -60,29 +116,6 @@ export default function EventsScreen() {
   const filteredEvents = useMemo(() => {
     let filtered = events;
 
-    // Management roles (GM, CGM, DGM, AGM) see all events
-    // SD_JTO sees events in their circle or assigned to them
-    // SALES_STAFF only sees events they're specifically assigned to
-    const managementRoles = ['GM', 'CGM', 'DGM', 'AGM'];
-    const isManagement = managementRoles.includes(employee?.role || '');
-    const isSalesStaff = employee?.role === 'SALES_STAFF';
-    
-    if (!isManagement) {
-      filtered = filtered.filter(e => {
-        const isAssignedToMe = e.assignedTo === employee?.id;
-        const isInMyTeam = Array.isArray(e.assignedTeam) && e.assignedTeam.includes(employee?.id || '');
-        
-        // SALES_STAFF only sees events they're specifically assigned to
-        if (isSalesStaff) {
-          return isAssignedToMe || isInMyTeam;
-        }
-        
-        // SD_JTO sees circle events + assigned events
-        const isMyCircle = e.circle === employee?.circle;
-        return isMyCircle || isAssignedToMe || isInMyTeam;
-      });
-    }
-
     if (searchQuery.trim()) {
       filtered = filtered.filter(e =>
         e.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -93,7 +126,7 @@ export default function EventsScreen() {
     return filtered.sort((a, b) => 
       new Date(b.dateRange.startDate).getTime() - new Date(a.dateRange.startDate).getTime()
     );
-  }, [events, employee, searchQuery]);
+  }, [events, searchQuery]);
 
   const getEventDisplayStatus = (event: Event): { status: EventStatus | 'upcoming' | 'past'; label: string } => {
     const dbStatus = event.status as EventStatus;
@@ -277,6 +310,30 @@ export default function EventsScreen() {
   );
 }
 
+// Helper functions for avatars
+const AVATAR_COLORS = [
+  '#E53935', '#D81B60', '#8E24AA', '#5E35B1', '#3949AB',
+  '#1E88E5', '#039BE5', '#00ACC1', '#00897B', '#43A047',
+  '#7CB342', '#C0CA33', '#FDD835', '#FFB300', '#FB8C00',
+  '#F4511E', '#6D4C41', '#757575', '#546E7A'
+];
+
+function getInitials(name: string): string {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
+  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+}
+
+function getAvatarColor(name: string): string {
+  if (!name) return AVATAR_COLORS[0];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
 function EventCard({ event, getDisplayStatus, canEdit, onActivate }: { 
   event: Event; 
   getDisplayStatus: (e: Event) => { status: EventStatus | 'upcoming' | 'past'; label: string };
@@ -351,34 +408,74 @@ function EventCard({ event, getDisplayStatus, canEdit, onActivate }: {
             {new Date(event.dateRange.startDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} - {new Date(event.dateRange.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
           </Text>
         </View>
-        <View style={styles.eventDetail}>
-          <Users size={16} color={Colors.light.textSecondary} />
-          <Text style={styles.eventDetailText}>{event.assignedTeam.length} team members</Text>
-        </View>
       </View>
+
+      {/* Creator Info */}
+      {event.creatorName && (
+        <View style={styles.creatorRow}>
+          <Text style={styles.creatorLabel}>Created by:</Text>
+          <View style={styles.creatorInfo}>
+            <View style={[styles.miniAvatar, { backgroundColor: getAvatarColor(event.creatorName) }]}>
+              <Text style={styles.miniAvatarText}>{getInitials(event.creatorName)}</Text>
+            </View>
+            <Text style={styles.creatorName}>{event.creatorName}</Text>
+          </View>
+        </View>
+      )}
+
+      {/* Team Member Avatars */}
+      {event.teamMembers && event.teamMembers.length > 0 && (
+        <View style={styles.teamAvatarsRow}>
+          <Text style={styles.teamLabel}>Team:</Text>
+          <View style={styles.avatarStack}>
+            {event.teamMembers.slice(0, 5).map((member: { persNo: string; name: string }, index: number) => (
+              <View 
+                key={member.persNo} 
+                style={[
+                  styles.stackedAvatar, 
+                  { backgroundColor: getAvatarColor(member.name), marginLeft: index > 0 ? -8 : 0, zIndex: 5 - index }
+                ]}
+              >
+                <Text style={styles.stackedAvatarText}>{getInitials(member.name)}</Text>
+              </View>
+            ))}
+            {event.teamMembers.length > 5 && (
+              <View style={[styles.stackedAvatar, styles.moreAvatar, { marginLeft: -8 }]}>
+                <Text style={styles.moreAvatarText}>+{event.teamMembers.length - 5}</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      )}
 
       <View style={styles.eventCategory}>
         <Text style={styles.categoryText}>{event.category}</Text>
       </View>
 
-      <View style={styles.eventTargets}>
-        <View style={styles.targetItem}>
-          <Text style={styles.targetLabel}>SIM Progress</Text>
-          <View style={styles.progressRow}>
-            <Text style={styles.targetValue}>{event.simsSold || 0}</Text>
-            <Text style={styles.targetDivider}>/</Text>
-            <Text style={styles.targetTotal}>{event.allocatedSim || event.targetSim}</Text>
-          </View>
+      {(event.category?.includes('SIM') || (event.category?.includes('FTTH') && !event.category?.includes('FTTH_DOWN'))) && (
+        <View style={styles.eventTargets}>
+          {event.category?.includes('SIM') && (
+            <View style={styles.targetItem}>
+              <Text style={styles.targetLabel}>SIM Progress</Text>
+              <View style={styles.progressRow}>
+                <Text style={styles.targetValue}>{event.simsSold || 0}</Text>
+                <Text style={styles.targetDivider}>/</Text>
+                <Text style={styles.targetTotal}>{event.allocatedSim || event.targetSim}</Text>
+              </View>
+            </View>
+          )}
+          {event.category?.includes('FTTH') && !event.category?.includes('FTTH_DOWN') && (
+            <View style={styles.targetItem}>
+              <Text style={styles.targetLabel}>FTTH Progress</Text>
+              <View style={styles.progressRow}>
+                <Text style={styles.targetValue}>{event.ftthSold || 0}</Text>
+                <Text style={styles.targetDivider}>/</Text>
+                <Text style={styles.targetTotal}>{event.allocatedFtth || event.targetFtth}</Text>
+              </View>
+            </View>
+          )}
         </View>
-        <View style={styles.targetItem}>
-          <Text style={styles.targetLabel}>FTTH Progress</Text>
-          <View style={styles.progressRow}>
-            <Text style={styles.targetValue}>{event.ftthSold || 0}</Text>
-            <Text style={styles.targetDivider}>/</Text>
-            <Text style={styles.targetTotal}>{event.allocatedFtth || event.targetFtth}</Text>
-          </View>
-        </View>
-      </View>
+      )}
 
       {isDraft && canEdit && (
         <View style={styles.quickActions}>
@@ -632,5 +729,73 @@ const styles = StyleSheet.create({
   },
   bottomSpacer: {
     height: 20,
+  },
+  creatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    gap: 8,
+  },
+  creatorLabel: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+  },
+  creatorInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  creatorName: {
+    fontSize: 12,
+    color: Colors.light.text,
+    fontWeight: '500' as const,
+  },
+  miniAvatar: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  miniAvatarText: {
+    fontSize: 10,
+    fontWeight: '600' as const,
+    color: '#fff',
+  },
+  teamAvatarsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    gap: 8,
+  },
+  teamLabel: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+  },
+  avatarStack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  stackedAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  stackedAvatarText: {
+    fontSize: 10,
+    fontWeight: '600' as const,
+    color: '#fff',
+  },
+  moreAvatar: {
+    backgroundColor: Colors.light.textSecondary,
+  },
+  moreAvatarText: {
+    fontSize: 9,
+    fontWeight: '600' as const,
+    color: '#fff',
   },
 });

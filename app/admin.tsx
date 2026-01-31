@@ -5,7 +5,7 @@ import { Upload, Users, Search, Trash2, Link, ChevronLeft, FileText, CheckCircle
 import { useAuth } from '@/contexts/auth';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
-import { canCreateEvents } from '@/constants/app';
+import { canAccessAdminPanel, canUploadCSV, isAdminRole } from '@/constants/app';
 
 export default function AdminScreen() {
   const router = useRouter();
@@ -31,7 +31,7 @@ export default function AdminScreen() {
   
   const trpcUtils = trpc.useUtils();
   
-  const { data: stats, refetch: refetchStats } = trpc.admin.getEmployeeMasterStats.useQuery();
+  const { data: stats, refetch: refetchStats } = trpc.admin.getEmployeeMasterStats.useQuery({ userId: employee?.id });
   const { data: eventStats, refetch: refetchEventStats } = trpc.admin.getEventStats.useQuery();
   const { data: circlesWithCount } = trpc.admin.getCirclesWithUnlinkedCount.useQuery(undefined, {
     enabled: showBulkActivateModal,
@@ -39,6 +39,7 @@ export default function AdminScreen() {
   const { data: employeeList, isLoading, refetch } = trpc.admin.getEmployeeMasterList.useQuery({
     linked: filterLinked,
     limit: 100,
+    userId: employee?.id,
   });
   
   const importMutation = trpc.admin.importEmployeeMaster.useMutation({
@@ -105,17 +106,21 @@ export default function AdminScreen() {
     setRefreshing(false);
   }, [refetch, refetchStats, refetchEventStats]);
   
-  const isAdmin = canCreateEvents(employee?.role || 'SALES_STAFF');
+  const userRole = employee?.role || 'SALES_STAFF';
+  const hasAccess = canAccessAdminPanel(userRole);
+  const canUpload = canUploadCSV(userRole);
+  const isSystemAdmin = isAdminRole(userRole);
+  const screenTitle = isSystemAdmin ? 'Admin Panel' : 'Employee Directory';
   
-  if (!isAdmin) {
+  if (!hasAccess) {
     return (
       <>
-        <Stack.Screen options={{ title: 'Admin Panel', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
+        <Stack.Screen options={{ title: 'Employee Directory', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
         <View style={styles.container}>
           <View style={styles.accessDenied}>
             <XCircle size={48} color={Colors.light.error} />
             <Text style={styles.accessDeniedTitle}>Access Denied</Text>
-            <Text style={styles.accessDeniedText}>You need manager privileges to access the Admin Panel.</Text>
+            <Text style={styles.accessDeniedText}>You need manager privileges to access this section.</Text>
             <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
               <Text style={styles.backButtonText}>Go Back</Text>
             </TouchableOpacity>
@@ -500,7 +505,7 @@ export default function AdminScreen() {
     <>
       <Stack.Screen 
         options={{ 
-          title: 'Admin Panel',
+          title: screenTitle,
           headerStyle: { backgroundColor: Colors.light.primary },
           headerTintColor: Colors.light.background,
           headerLeft: () => (
@@ -515,7 +520,7 @@ export default function AdminScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
         <View style={styles.statsSection}>
-          <Text style={styles.sectionTitle}>Employee Master Statistics</Text>
+          <Text style={styles.sectionTitle}>Employee Statistics</Text>
           <View style={styles.statsRow}>
             <View style={styles.statCard}>
               <Users size={24} color={Colors.light.primary} />
@@ -535,39 +540,43 @@ export default function AdminScreen() {
           </View>
         </View>
 
-        <View style={styles.actionsSection}>
-          <TouchableOpacity 
-            style={[styles.actionButton, styles.primaryAction]}
-            onPress={() => setShowUploadSection(!showUploadSection)}
-          >
-            <Upload size={20} color={Colors.light.background} />
-            <Text style={styles.actionButtonText}>Import CSV</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.actionButton, styles.successAction]}
-            onPress={() => {
-              setShowBulkActivateModal(true);
-              setActivationResult(null);
-              setSelectedCircle(undefined);
-            }}
-          >
-            <UserPlus size={20} color={Colors.light.background} />
-            <Text style={styles.actionButtonText}>Bulk Activate</Text>
-          </TouchableOpacity>
-        </View>
-        
-        <View style={styles.actionsSection}>
-          <TouchableOpacity 
-            style={[styles.actionButton, styles.dangerAction]}
-            onPress={handleClearUnlinked}
-          >
-            <Trash2 size={20} color={Colors.light.background} />
-            <Text style={styles.actionButtonText}>Clear Unlinked</Text>
-          </TouchableOpacity>
-        </View>
+        {canUpload && (
+          <>
+            <View style={styles.actionsSection}>
+              <TouchableOpacity 
+                style={[styles.actionButton, styles.primaryAction]}
+                onPress={() => setShowUploadSection(!showUploadSection)}
+              >
+                <Upload size={20} color={Colors.light.background} />
+                <Text style={styles.actionButtonText}>Import CSV</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[styles.actionButton, styles.successAction]}
+                onPress={() => {
+                  setShowBulkActivateModal(true);
+                  setActivationResult(null);
+                  setSelectedCircle(undefined);
+                }}
+              >
+                <UserPlus size={20} color={Colors.light.background} />
+                <Text style={styles.actionButtonText}>Bulk Activate</Text>
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.actionsSection}>
+              <TouchableOpacity 
+                style={[styles.actionButton, styles.dangerAction]}
+                onPress={handleClearUnlinked}
+              >
+                <Trash2 size={20} color={Colors.light.background} />
+                <Text style={styles.actionButtonText}>Clear Unlinked</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
 
-        {showUploadSection && (
+        {canUpload && showUploadSection && (
           <View style={styles.uploadSection}>
             <Text style={styles.uploadTitle}>Paste CSV Data</Text>
             <Text style={styles.uploadHint}>
@@ -641,17 +650,19 @@ export default function AdminScreen() {
           </View>
         </View>
 
-        <View style={styles.actionsSection}>
-          <TouchableOpacity 
-            style={[styles.actionButton, styles.secondaryAction]}
-            onPress={() => setShowEventsUploadSection(!showEventsUploadSection)}
-          >
-            <Calendar size={20} color={Colors.light.background} />
-            <Text style={styles.actionButtonText}>Import Tasks CSV</Text>
-          </TouchableOpacity>
-        </View>
+        {canUpload && (
+          <View style={styles.actionsSection}>
+            <TouchableOpacity 
+              style={[styles.actionButton, styles.secondaryAction]}
+              onPress={() => setShowEventsUploadSection(!showEventsUploadSection)}
+            >
+              <Calendar size={20} color={Colors.light.background} />
+              <Text style={styles.actionButtonText}>Import Tasks CSV</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
-        {showEventsUploadSection && (
+        {canUpload && showEventsUploadSection && (
           <View style={styles.uploadSection}>
             <Text style={styles.uploadTitle}>Paste Tasks CSV Data</Text>
             <Text style={styles.uploadHint}>

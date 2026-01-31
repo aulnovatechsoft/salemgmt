@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { LayoutDashboard, Calendar, Users, FileText, AlertCircle } from "lucide-react-native";
+import { LayoutDashboard, Calendar, Users, FileText, AlertCircle, ClipboardList } from "lucide-react-native";
 import React from "react";
 import { useAuth } from "@/contexts/auth";
 import { Redirect } from "expo-router";
@@ -37,9 +37,16 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="my-tasks"
+        options={{
+          title: "My Tasks",
+          tabBarIcon: ({ color }) => <ClipboardList size={24} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="events"
         options={{
-          title: "Tasks",
+          title: "All Tasks",
           tabBarIcon: ({ color }) => <Calendar size={24} color={color} />,
         }}
       />

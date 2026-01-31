@@ -10,6 +10,7 @@ import { Event } from '@/types';
 import Svg, { Circle } from 'react-native-svg';
 import { trpc } from '@/lib/trpc';
 import { formatINRCrore, formatINRAmount, formatINRCompact, safeNumber } from '@/lib/currency';
+import { canAccessAdminPanel, isAdminRole } from '@/constants/app';
 
 const MAX_DISPLAYED_WORKS = 3;
 
@@ -18,13 +19,68 @@ const { width } = Dimensions.get('window');
 export default function DashboardScreen() {
   const router = useRouter();
   const { employee } = useAuth();
-  const { events, salesReports, resources, issues } = useApp();
+  const { salesReports, resources, issues } = useApp();
   const [showAllActive, setShowAllActive] = useState(false);
   const [showAllCompleted, setShowAllCompleted] = useState(false);
   const [outstandingModal, setOutstandingModal] = useState<{ visible: boolean; type: 'ftth' | 'lc' }>({ visible: false, type: 'ftth' });
   const [ftthPendingModalVisible, setFtthPendingModalVisible] = useState(false);
 
   const isManagementRole = ['GM', 'CGM', 'DGM', 'AGM'].includes(employee?.role || '');
+
+  const { data: myEventsData } = trpc.events.getMyEvents.useQuery(
+    { employeeId: employee?.id || '' },
+    {
+      enabled: !!employee?.id,
+      retry: 1,
+      refetchOnWindowFocus: true,
+      refetchInterval: 10000,
+      staleTime: 5000,
+    }
+  );
+  
+  const events: Event[] = useMemo(() => {
+    if (!myEventsData) return [];
+    return myEventsData.map((e: any) => ({
+      id: e.id,
+      name: e.name,
+      location: e.location,
+      circle: e.circle,
+      zone: e.zone,
+      dateRange: {
+        startDate: e.startDate,
+        endDate: e.endDate,
+      },
+      category: e.category,
+      targetSim: e.targetSim,
+      targetFtth: e.targetFtth,
+      assignedTeam: e.assignedTeam || [],
+      allocatedSim: e.allocatedSim,
+      allocatedFtth: e.allocatedFtth,
+      createdBy: e.createdBy,
+      createdAt: e.createdAt,
+      keyInsight: e.keyInsight,
+      status: e.status || 'active',
+      assignedTo: e.assignedTo,
+      simsSold: e.simSold || 0,
+      ftthSold: e.ftthSold || 0,
+      teamMembers: e.teamMembers || [],
+      creatorName: e.creatorName || null,
+      assigneeName: e.assigneeName || null,
+      assigneeDesignation: e.assigneeDesignation || null,
+      targetEb: e.targetEb || 0,
+      targetLease: e.targetLease || 0,
+      targetBtsDown: e.targetBtsDown || 0,
+      targetFtthDown: e.targetFtthDown || 0,
+      targetRouteFail: e.targetRouteFail || 0,
+      targetOfcFail: e.targetOfcFail || 0,
+      ebCompleted: e.ebCompleted || 0,
+      leaseCompleted: e.leaseCompleted || 0,
+      btsDownCompleted: e.btsDownCompleted || 0,
+      ftthDownCompleted: e.ftthDownCompleted || 0,
+      routeFailCompleted: e.routeFailCompleted || 0,
+      ofcFailCompleted: e.ofcFailCompleted || 0,
+    }));
+  }, [myEventsData]);
 
   const { data: outstandingSummary } = trpc.admin.getOutstandingSummary.useQuery(
     undefined,
@@ -47,32 +103,7 @@ export default function DashboardScreen() {
   );
 
   const stats = useMemo(() => {
-    // Management roles see all events
-    // SD_JTO sees events in their circle or assigned to them
-    // SALES_STAFF only sees events they're specifically assigned to
-    const managementRoles = ['GM', 'CGM', 'DGM', 'AGM'];
-    const isManagement = managementRoles.includes(employee?.role || '');
-    const isSalesStaff = employee?.role === 'SALES_STAFF';
-    
-    const myEvents = events.filter(e => {
-      if (isManagement) return true;
-      
-      const isAssignedToMe = e.assignedTo === employee?.id;
-      const isCreatedByMe = e.createdBy === employee?.id;
-      const isInMyTeam = Array.isArray(e.assignedTeam) && (
-        e.assignedTeam.includes(employee?.id || '') || 
-        e.assignedTeam.includes(employee?.persNo || '')
-      );
-      
-      // SALES_STAFF only sees events they're specifically assigned to
-      if (isSalesStaff) {
-        return isAssignedToMe || isInMyTeam || isCreatedByMe;
-      }
-      
-      // SD_JTO sees circle events + assigned events + created events
-      const isMyCircle = e.circle === employee?.circle;
-      return isMyCircle || isAssignedToMe || isInMyTeam || isCreatedByMe;
-    });
+    const myEvents = events;
     
     const totalSimsSold = salesReports.reduce((acc, r) => acc + r.simsSold, 0);
     const totalSimsActivated = salesReports.reduce((acc, r) => acc + r.simsActivated, 0);
@@ -358,24 +389,6 @@ export default function DashboardScreen() {
         )}
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Resources Available</Text>
-          <View style={styles.resourcesContainer}>
-            <ResourceCard
-              label="SIM Stock"
-              available={stats.simAvailable}
-              icon={<Package size={20} color={Colors.light.primary} />}
-              onPress={() => router.push('/resource-management?type=SIM')}
-            />
-            <ResourceCard
-              label="FTTH Capacity"
-              available={stats.ftthAvailable}
-              icon={<Package size={20} color={Colors.light.secondary} />}
-              onPress={() => router.push('/resource-management?type=FTTH')}
-            />
-          </View>
-        </View>
-
-        <View style={styles.section}>
           <Text style={styles.sectionTitle}>Quick Actions</Text>
           <View style={styles.actionsGrid}>
             {['GM', 'CGM', 'DGM', 'AGM', 'SD_JTO'].includes(employee?.role || '') && (
@@ -385,24 +398,28 @@ export default function DashboardScreen() {
                 onPress={() => router.push('/create-event')}
               />
             )}
-            <ActionButton 
-              label="Submit Sales" 
-              icon={<TrendingUp size={24} color={Colors.light.background} />} 
-              onPress={() => router.push('/submit-sales')}
-            />
-            <ActionButton 
-              label="Raise Issue" 
-              icon={<AlertCircle size={24} color={Colors.light.background} />} 
-              onPress={() => router.push('/raise-issue')}
-            />
+            {!isAdminRole(employee?.role || 'SALES_STAFF') && (
+              <>
+                <ActionButton 
+                  label="Submit Sales" 
+                  icon={<TrendingUp size={24} color={Colors.light.background} />} 
+                  onPress={() => router.push('/submit-sales')}
+                />
+                <ActionButton 
+                  label="Raise Issue" 
+                  icon={<AlertCircle size={24} color={Colors.light.background} />} 
+                  onPress={() => router.push('/raise-issue')}
+                />
+              </>
+            )}
             <ActionButton 
               label="View Reports" 
               icon={<Users size={24} color={Colors.light.background} />} 
               onPress={() => router.push('/sales')}
             />
-            {['GM', 'CGM', 'DGM', 'AGM'].includes(employee?.role || '') && (
+            {canAccessAdminPanel(employee?.role || 'SALES_STAFF') && (
               <ActionButton 
-                label="Admin Panel" 
+                label={isAdminRole(employee?.role || 'SALES_STAFF') ? 'Admin Panel' : 'Employee Directory'} 
                 icon={<Settings size={24} color={Colors.light.background} />} 
                 onPress={() => router.push('/admin')}
               />

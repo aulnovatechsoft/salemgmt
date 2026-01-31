@@ -182,6 +182,14 @@ export default function EventSalesScreen() {
   };
 
   const myAssignment = eventData?.teamWithAllocations?.find(t => t.employeeId === employee?.id);
+  
+  // Parse categories to show only relevant sections
+  const categories = eventData?.category ? eventData.category.split(',').map((c: string) => c.trim()) : [];
+  const hasSIM = categories.includes('SIM');
+  const hasFTTH = categories.includes('FTTH');
+  const hasMaintenanceCategories = categories.some((c: string) => 
+    ['Lease Circuit', 'BTS-Down', 'Route-Fail', 'FTTH-Down', 'OFC-Fail', 'EB'].includes(c)
+  );
 
   return (
     <>
@@ -198,65 +206,72 @@ export default function EventSalesScreen() {
           <View style={styles.eventInfo}>
             <Text style={styles.eventName}>{eventData.name}</Text>
             <Text style={styles.eventLocation}>{eventData.location}</Text>
-            {myAssignment && (
+            {myAssignment && (hasSIM || hasFTTH) && (
               <View style={styles.myTargets}>
-                <View style={styles.myTargetItem}>
-                  <Text style={styles.myTargetLabel}>My SIM Target</Text>
-                  <Text style={styles.myTargetValue}>{myAssignment.actualSimSold} / {myAssignment.simTarget}</Text>
-                </View>
-                <View style={styles.myTargetItem}>
-                  <Text style={styles.myTargetLabel}>My FTTH Target</Text>
-                  <Text style={styles.myTargetValue}>{myAssignment.actualFtthSold} / {myAssignment.ftthTarget}</Text>
-                </View>
+                {hasSIM && (
+                  <View style={styles.myTargetItem}>
+                    <Text style={styles.myTargetLabel}>My SIM Target</Text>
+                    <Text style={styles.myTargetValue}>{myAssignment.actualSimSold} / {myAssignment.simTarget}</Text>
+                  </View>
+                )}
+                {hasFTTH && (
+                  <View style={styles.myTargetItem}>
+                    <Text style={styles.myTargetLabel}>My FTTH Target</Text>
+                    <Text style={styles.myTargetValue}>{myAssignment.actualFtthSold} / {myAssignment.ftthTarget}</Text>
+                  </View>
+                )}
               </View>
             )}
           </View>
         )}
 
         <View style={styles.form}>
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>SIM Sales</Text>
-            <View style={styles.row}>
-              <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={styles.label}>SIMs Sold *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="0"
-                  value={simsSold}
-                  onChangeText={setSimsSold}
-                  keyboardType="number-pad"
-                />
-              </View>
-              <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={styles.label}>SIMs Activated</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="0"
-                  value={simsActivated}
-                  onChangeText={setSimsActivated}
-                  keyboardType="number-pad"
-                />
+          {hasSIM && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>SIM Sales</Text>
+              <View style={styles.row}>
+                <View style={[styles.inputGroup, styles.halfWidth]}>
+                  <Text style={styles.label}>SIMs Sold *</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="0"
+                    value={simsSold}
+                    onChangeText={setSimsSold}
+                    keyboardType="number-pad"
+                  />
+                </View>
+                <View style={[styles.inputGroup, styles.halfWidth]}>
+                  <Text style={styles.label}>SIMs Activated</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="0"
+                    value={simsActivated}
+                    onChangeText={setSimsActivated}
+                    keyboardType="number-pad"
+                  />
+                </View>
               </View>
             </View>
-          </View>
+          )}
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>FTTH Sales</Text>
-            <View style={styles.row}>
-              <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={styles.label}>FTTH Sold *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="0"
-                  value={ftthSold}
-                  onChangeText={setFtthSold}
-                  keyboardType="number-pad"
-                />
-              </View>
-              <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={styles.label}>FTTH Activated</Text>
-                <TextInput
-                  style={styles.input}
+          {hasFTTH && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>FTTH Sales</Text>
+              <View style={styles.row}>
+                <View style={[styles.inputGroup, styles.halfWidth]}>
+                  <Text style={styles.label}>FTTH Sold *</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="0"
+                    value={ftthSold}
+                    onChangeText={setFtthSold}
+                    keyboardType="number-pad"
+                  />
+                </View>
+                <View style={[styles.inputGroup, styles.halfWidth]}>
+                  <Text style={styles.label}>FTTH Activated</Text>
+                  <TextInput
+                    style={styles.input}
                   placeholder="0"
                   value={ftthActivated}
                   onChangeText={setFtthActivated}
@@ -265,6 +280,7 @@ export default function EventSalesScreen() {
               </View>
             </View>
           </View>
+          )}
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Customer Type *</Text>

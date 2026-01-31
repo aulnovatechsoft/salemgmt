@@ -50,7 +50,7 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 export default function CreateEventScreen() {
   const router = useRouter();
   const { employee } = useAuth();
-  const { addEvent } = useApp();
+  const { refetchResources } = useApp();
   
   const today = new Date();
   const todayStr = formatDateString(today);
@@ -399,30 +399,8 @@ export default function CreateEventScreen() {
   };
 
   const createEventMutation = trpc.events.create.useMutation({
-    onSuccess: async (data) => {
+    onSuccess: (data) => {
       console.log('Task created in database:', data.id);
-      const newEvent: Event = {
-        id: data.id,
-        name: data.name,
-        location: data.location,
-        circle: data.circle as Circle,
-        zone: data.zone,
-        dateRange: {
-          startDate: data.startDate?.toISOString() || startDate,
-          endDate: data.endDate?.toISOString() || endDate,
-        },
-        category: data.category,
-        targetSim: data.targetSim,
-        targetFtth: data.targetFtth,
-        assignedTeam: (data.assignedTeam as string[]) || [],
-        allocatedSim: data.allocatedSim,
-        allocatedFtth: data.allocatedFtth,
-        createdBy: data.createdBy,
-        createdAt: data.createdAt?.toISOString() || new Date().toISOString(),
-        keyInsight: data.keyInsight || '',
-        status: (data.status as 'draft' | 'active' | 'paused' | 'completed' | 'cancelled') || 'active',
-      };
-      await addEvent(newEvent);
       setIsSubmitting(false);
       Alert.alert('Success', 'Task created successfully', [
         { text: 'OK', onPress: () => router.back() },
@@ -1983,12 +1961,11 @@ const styles = StyleSheet.create({
   pickFromTeamButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.light.primary + '08',
-    borderWidth: 1.5,
-    borderColor: Colors.light.primary + '40',
+    backgroundColor: '#E3F2FD',
+    borderWidth: 2,
+    borderColor: Colors.light.primary,
     borderRadius: 12,
     padding: 16,
-    borderStyle: 'dashed',
   },
   pickFromTeamContent: {
     flex: 1,

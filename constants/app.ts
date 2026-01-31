@@ -1,6 +1,7 @@
 import { UserRole, Circle, EventCategory, IssueType } from '@/types';
 
 export const USER_ROLES: { label: string; value: UserRole }[] = [
+  { label: 'System Admin', value: 'ADMIN' },
   { label: 'GM (Multi-Circle)', value: 'GM' },
   { label: 'CGM (Circle)', value: 'CGM' },
   { label: 'DGM (Zone)', value: 'DGM' },
@@ -66,6 +67,7 @@ export const CUSTOMER_TYPES = [
 
 export const getRoleHierarchy = (role: UserRole): number => {
   const hierarchy: Record<UserRole, number> = {
+    ADMIN: 10,
     GM: 6,
     CGM: 5,
     DGM: 4,
@@ -74,6 +76,18 @@ export const getRoleHierarchy = (role: UserRole): number => {
     SALES_STAFF: 1,
   };
   return hierarchy[role];
+};
+
+export const isAdminRole = (role: UserRole): boolean => {
+  return role === 'ADMIN';
+};
+
+export const canAccessAdminPanel = (role: UserRole): boolean => {
+  return ['ADMIN', 'GM', 'CGM'].includes(role);
+};
+
+export const canUploadCSV = (role: UserRole): boolean => {
+  return role === 'ADMIN';
 };
 
 export const canCreateEvents = (role: UserRole): boolean => {

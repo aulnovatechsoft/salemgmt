@@ -12,7 +12,10 @@ import { CUSTOMER_TYPES } from '@/constants/app';
 export default function SubmitSalesScreen() {
   const router = useRouter();
   const { employee } = useAuth();
-  const { data: eventsData } = trpc.events.getAll.useQuery({});
+  const { data: eventsData } = trpc.events.getMyEvents.useQuery(
+    { employeeId: employee?.id || '' },
+    { enabled: !!employee?.id }
+  );
   const events = eventsData || [];
   
   const submitSalesMutation = trpc.events.submitEventSales.useMutation({
@@ -133,8 +136,20 @@ export default function SubmitSalesScreen() {
       Alert.alert('Error', 'Please select an event');
       return;
     }
-    if (!simsSold && !ftthLeads) {
-      Alert.alert('Error', 'Please enter at least SIMs sold or FTTH leads');
+    const categories = selectedEvent?.category ? selectedEvent.category.split(',') : [];
+    const taskHasSIM = categories.includes('SIM');
+    const taskHasFTTH = categories.includes('FTTH');
+    
+    if (taskHasSIM && !simsSold) {
+      Alert.alert('Error', 'Please enter SIMs sold');
+      return;
+    }
+    if (taskHasFTTH && !ftthLeads) {
+      Alert.alert('Error', 'Please enter FTTH sold');
+      return;
+    }
+    if (!taskHasSIM && !taskHasFTTH) {
+      Alert.alert('Error', 'This task does not have SIM or FTTH sales targets');
       return;
     }
 
@@ -177,6 +192,10 @@ export default function SubmitSalesScreen() {
   };
 
   const selectedEvent = events.find(e => e.id === selectedEventId);
+  
+  const selectedCategories = selectedEvent?.category ? selectedEvent.category.split(',') : [];
+  const hasSIM = selectedCategories.includes('SIM');
+  const hasFTTH = selectedCategories.includes('FTTH');
 
   return (
     <>
@@ -225,109 +244,120 @@ export default function SubmitSalesScreen() {
             )}
           </View>
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>SIM Sales</Text>
-            <View style={styles.row}>
-              <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={styles.label}>SIMs Sold</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="0"
-                  value={simsSold}
-                  onChangeText={setSimsSold}
-                  keyboardType="number-pad"
-                />
-              </View>
-
-              <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={styles.label}>SIMs Activated</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="0"
-                  value={simsActivated}
-                  onChangeText={setSimsActivated}
-                  keyboardType="number-pad"
-                />
-              </View>
-            </View>
-            
-            {expectedSimCount > 0 && (
-              <View style={styles.inputGroup}>
-                <View style={styles.labelRow}>
-                  <Text style={styles.label}>Activated Mobile Numbers *</Text>
-                  <Text style={[
-                    styles.countBadge, 
-                    countMobileNumbers === expectedSimCount ? styles.countMatch : styles.countMismatch
-                  ]}>
-                    {countMobileNumbers}/{expectedSimCount}
-                  </Text>
+          {hasSIM && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>SIM Sales</Text>
+              <View style={styles.row}>
+                <View style={[styles.inputGroup, styles.halfWidth]}>
+                  <Text style={styles.label}>SIMs Sold *</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="0"
+                    value={simsSold}
+                    onChangeText={setSimsSold}
+                    keyboardType="number-pad"
+                  />
                 </View>
-                <TextInput
-                  style={[styles.input, styles.textArea]}
-                  placeholder="Enter one mobile number per line&#10;e.g.&#10;9876543210&#10;9876543211"
-                  value={activatedMobileNumbers}
-                  onChangeText={setActivatedMobileNumbers}
-                  multiline
-                  numberOfLines={5}
-                  keyboardType="number-pad"
-                />
-                {getInvalidMobileNumbers().length > 0 && (
-                  <Text style={styles.errorText}>
-                    Invalid: {getInvalidMobileNumbers().join(', ')}
-                  </Text>
-                )}
-              </View>
-            )}
-          </View>
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>FTTH</Text>
-            <View style={styles.row}>
-              <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={styles.label}>FTTH Leads</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="0"
-                  value={ftthLeads}
-                  onChangeText={setFtthLeads}
-                  keyboardType="number-pad"
-                />
-              </View>
-
-              <View style={[styles.inputGroup, styles.halfWidth]}>
-                <Text style={styles.label}>FTTH Installed</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="0"
-                  value={ftthInstalled}
-                  onChangeText={setFtthInstalled}
-                  keyboardType="number-pad"
-                />
-              </View>
-            </View>
-            
-            {expectedFtthCount > 0 && (
-              <View style={styles.inputGroup}>
-                <View style={styles.labelRow}>
-                  <Text style={styles.label}>Activated FTTH IDs *</Text>
-                  <Text style={[
-                    styles.countBadge, 
-                    countFtthIds === expectedFtthCount ? styles.countMatch : styles.countMismatch
-                  ]}>
-                    {countFtthIds}/{expectedFtthCount}
-                  </Text>
+                <View style={[styles.inputGroup, styles.halfWidth]}>
+                  <Text style={styles.label}>SIMs Activated</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="0"
+                    value={simsActivated}
+                    onChangeText={setSimsActivated}
+                    keyboardType="number-pad"
+                  />
                 </View>
-                <TextInput
-                  style={[styles.input, styles.textArea]}
-                  placeholder="Enter one FTTH ID per line&#10;e.g.&#10;FTTH123456&#10;FTTH123457"
-                  value={activatedFtthIds}
-                  onChangeText={setActivatedFtthIds}
-                  multiline
-                  numberOfLines={5}
-                />
               </View>
-            )}
-          </View>
+              
+              {expectedSimCount > 0 && (
+                <View style={styles.inputGroup}>
+                  <View style={styles.labelRow}>
+                    <Text style={styles.label}>Activated Mobile Numbers *</Text>
+                    <Text style={[
+                      styles.countBadge, 
+                      countMobileNumbers === expectedSimCount ? styles.countMatch : styles.countMismatch
+                    ]}>
+                      {countMobileNumbers}/{expectedSimCount}
+                    </Text>
+                  </View>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    placeholder="Enter one mobile number per line&#10;e.g.&#10;9876543210&#10;9876543211"
+                    value={activatedMobileNumbers}
+                    onChangeText={setActivatedMobileNumbers}
+                    multiline
+                    numberOfLines={5}
+                    keyboardType="number-pad"
+                  />
+                  {getInvalidMobileNumbers().length > 0 && (
+                    <Text style={styles.errorText}>
+                      Invalid: {getInvalidMobileNumbers().join(', ')}
+                    </Text>
+                  )}
+                </View>
+              )}
+            </View>
+          )}
+
+          {hasFTTH && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>FTTH Sales</Text>
+              <View style={styles.row}>
+                <View style={[styles.inputGroup, styles.halfWidth]}>
+                  <Text style={styles.label}>FTTH Sold *</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="0"
+                    value={ftthLeads}
+                    onChangeText={setFtthLeads}
+                    keyboardType="number-pad"
+                  />
+                </View>
+
+                <View style={[styles.inputGroup, styles.halfWidth]}>
+                  <Text style={styles.label}>FTTH Activated</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="0"
+                    value={ftthInstalled}
+                    onChangeText={setFtthInstalled}
+                    keyboardType="number-pad"
+                  />
+                </View>
+              </View>
+              
+              {expectedFtthCount > 0 && (
+                <View style={styles.inputGroup}>
+                  <View style={styles.labelRow}>
+                    <Text style={styles.label}>Activated FTTH IDs *</Text>
+                    <Text style={[
+                      styles.countBadge, 
+                      countFtthIds === expectedFtthCount ? styles.countMatch : styles.countMismatch
+                    ]}>
+                      {countFtthIds}/{expectedFtthCount}
+                    </Text>
+                  </View>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    placeholder="Enter one FTTH ID per line&#10;e.g.&#10;FTTH123456&#10;FTTH123457"
+                    value={activatedFtthIds}
+                    onChangeText={setActivatedFtthIds}
+                    multiline
+                    numberOfLines={5}
+                  />
+                </View>
+              )}
+            </View>
+          )}
+          
+          {!hasSIM && !hasFTTH && selectedEventId && (
+            <View style={styles.noSalesSection}>
+              <Text style={styles.noSalesText}>This task does not have SIM or FTTH sales targets.</Text>
+              <Text style={styles.noSalesSubtext}>Please use the task detail page to update maintenance progress.</Text>
+            </View>
+          )}
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Customer Type *</Text>
@@ -607,5 +637,24 @@ const styles = StyleSheet.create({
   },
   bottomSpacer: {
     height: 20,
+  },
+  noSalesSection: {
+    backgroundColor: '#FFF3E0',
+    padding: 20,
+    borderRadius: 12,
+    marginBottom: 20,
+    alignItems: 'center',
+  },
+  noSalesText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#E65100',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  noSalesSubtext: {
+    fontSize: 14,
+    color: '#F57C00',
+    textAlign: 'center',
   },
 });
