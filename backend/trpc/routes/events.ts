@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, and, desc, gte, lte, sql } from "drizzle-orm";
+import { eq, and, desc, gte, lte, sql, or, inArray } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
 import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations } from "@/backend/db";
 
@@ -12,6 +12,135 @@ function getISTDate(): Date {
 
 function getISTDateString(): string {
   return getISTDate().toISOString().split('T')[0];
+}
+
+async function getAllSubordinateIds(employeeId: string, maxDepth: number = 10): Promise<string[]> {
+  const employee = await db.select({ persNo: employees.persNo }).from(employees)
+    .where(eq(employees.id, employeeId));
+  
+  if (!employee[0]?.persNo) {
+    return [];
+  }
+  
+  const allSubordinateIds: string[] = [];
+  const persNosToProcess: string[] = [employee[0].persNo];
+  const processedPersNos = new Set<string>();
+  let depth = 0;
+  
+  while (persNosToProcess.length > 0 && depth < maxDepth) {
+    const currentBatch = [...persNosToProcess];
+    persNosToProcess.length = 0;
+    
+    for (const persNo of currentBatch) {
+      if (processedPersNos.has(persNo)) continue;
+      processedPersNos.add(persNo);
+      
+      const subordinates = await db.select({
+        persNo: employeeMaster.persNo,
+        linkedEmployeeId: employeeMaster.linkedEmployeeId,
+      }).from(employeeMaster)
+        .where(eq(employeeMaster.reportingPersNo, persNo));
+      
+      for (const sub of subordinates) {
+        if (sub.linkedEmployeeId) {
+          allSubordinateIds.push(sub.linkedEmployeeId);
+        }
+        if (sub.persNo && !processedPersNos.has(sub.persNo)) {
+          persNosToProcess.push(sub.persNo);
+        }
+      }
+    }
+    depth++;
+  }
+  
+  return [...new Set(allSubordinateIds)];
+}
+
+let cachedCircleGMs: Map<string, string> | null = null;
+let cachedManagerHierarchy: Map<string, string[]> | null = null;
+let hierarchyCacheTime: number = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function getAllCircleGMs(): Promise<Map<string, string>> {
+  const now = Date.now();
+  if (cachedCircleGMs && (now - hierarchyCacheTime) < CACHE_TTL_MS) {
+    return cachedCircleGMs;
+  }
+  
+  const gmRecords = await db.select({
+    circle: employeeMaster.circle,
+    linkedEmployeeId: employeeMaster.linkedEmployeeId,
+  }).from(employeeMaster)
+    .where(eq(employeeMaster.designation, 'GM'));
+  
+  const gmMap = new Map<string, string>();
+  for (const gm of gmRecords) {
+    if (gm.circle && gm.linkedEmployeeId && !gmMap.has(gm.circle)) {
+      gmMap.set(gm.circle, gm.linkedEmployeeId);
+    }
+  }
+  
+  cachedCircleGMs = gmMap;
+  return gmMap;
+}
+
+async function buildManagerHierarchyMap(): Promise<Map<string, string[]>> {
+  const now = Date.now();
+  if (cachedManagerHierarchy && (now - hierarchyCacheTime) < CACHE_TTL_MS) {
+    return cachedManagerHierarchy;
+  }
+  
+  const allMasterRecords = await db.select({
+    persNo: employeeMaster.persNo,
+    reportingPersNo: employeeMaster.reportingPersNo,
+    linkedEmployeeId: employeeMaster.linkedEmployeeId,
+  }).from(employeeMaster);
+  
+  const persNoToLinkedId = new Map<string, string>();
+  const persNoToReporting = new Map<string, string>();
+  
+  for (const record of allMasterRecords) {
+    if (record.persNo && record.linkedEmployeeId) {
+      persNoToLinkedId.set(record.persNo, record.linkedEmployeeId);
+    }
+    if (record.persNo && record.reportingPersNo) {
+      persNoToReporting.set(record.persNo, record.reportingPersNo);
+    }
+  }
+  
+  const employeeToManagers = new Map<string, string[]>();
+  
+  for (const record of allMasterRecords) {
+    if (!record.linkedEmployeeId) continue;
+    
+    const managers: string[] = [];
+    let currentPersNo = record.persNo;
+    const visited = new Set<string>();
+    let depth = 0;
+    const maxDepth = 10;
+    
+    while (currentPersNo && depth < maxDepth) {
+      if (visited.has(currentPersNo)) break;
+      visited.add(currentPersNo);
+      
+      const reportingPersNo = persNoToReporting.get(currentPersNo);
+      if (!reportingPersNo) break;
+      
+      const managerId = persNoToLinkedId.get(reportingPersNo);
+      if (managerId) {
+        managers.push(managerId);
+      }
+      
+      currentPersNo = reportingPersNo;
+      depth++;
+    }
+    
+    employeeToManagers.set(record.linkedEmployeeId, managers);
+  }
+  
+  cachedManagerHierarchy = employeeToManagers;
+  hierarchyCacheTime = now;
+  return employeeToManagers;
 }
 
 async function autoCompleteExpiredEvents(eventsList: typeof events.$inferSelect[]) {
@@ -117,6 +246,177 @@ export const eventsRouter = createTRPCRouter({
       return eventsWithProgress;
     }),
 
+  getMyEvents: publicProcedure
+    .input(z.object({
+      employeeId: z.string().uuid(),
+      circle: z.string().optional(),
+      zone: z.string().optional(),
+      category: z.string().optional(),
+      status: z.string().optional(),
+    }))
+    .query(async ({ input }) => {
+      console.log("Fetching my events for employee:", input.employeeId);
+      
+      const employee = await db.select().from(employees)
+        .where(eq(employees.id, input.employeeId));
+      
+      if (!employee[0]) {
+        return [];
+      }
+      
+      // Admin users can see all tasks across all circles
+      if (employee[0].role === 'ADMIN') {
+        console.log("Admin user - returning all events");
+        const allEvents = await db.select().from(events)
+          .orderBy(desc(events.createdAt));
+        return allEvents;
+      }
+      
+      // Get the employee's persNo for team assignment check
+      const employeePersNo = employee[0].persNo;
+      
+      const subordinateIds = await getAllSubordinateIds(input.employeeId);
+      console.log(`Found ${subordinateIds.length} subordinates for employee ${input.employeeId}`);
+      
+      // Get subordinates' persNos for team assignment visibility
+      let subordinatePersNos: string[] = [];
+      if (subordinateIds.length > 0) {
+        const subEmployees = await db.select({ persNo: employees.persNo })
+          .from(employees)
+          .where(inArray(employees.id, subordinateIds));
+        subordinatePersNos = subEmployees.map(e => e.persNo).filter(Boolean) as string[];
+      }
+      
+      const allVisibleIds = [input.employeeId, ...subordinateIds];
+      const allVisiblePersNos = [employeePersNo, ...subordinatePersNos].filter(Boolean) as string[];
+      
+      // Query non-draft events: visible if created by user, assigned to user/subordinates, or user/subordinates are in assignedTeam
+      const nonDraftResults = await db.select().from(events)
+        .where(and(
+          sql`${events.status} != 'draft'`,
+          or(
+            eq(events.createdBy, input.employeeId),
+            inArray(events.assignedTo, allVisibleIds),
+            // Check if employee or subordinates' persNo is in assignedTeam array
+            sql`${events.assignedTeam}::jsonb ?| array[${sql.raw(allVisiblePersNos.map(p => `'${p}'`).join(',') || "''")}]`
+          )
+        ))
+        .orderBy(desc(events.createdAt));
+      
+      const [allDraftEvents, circleGMMap, managerHierarchyMap] = await Promise.all([
+        db.select().from(events)
+          .where(eq(events.status, 'draft'))
+          .orderBy(desc(events.createdAt)),
+        getAllCircleGMs(),
+        buildManagerHierarchyMap(),
+      ]);
+      
+      const visibleDraftEvents: typeof allDraftEvents = [];
+      
+      for (const draftEvent of allDraftEvents) {
+        if (draftEvent.createdBy === input.employeeId) {
+          visibleDraftEvents.push(draftEvent);
+          continue;
+        }
+        
+        const circleGMId = circleGMMap.get(draftEvent.circle);
+        
+        if (circleGMId === input.employeeId) {
+          visibleDraftEvents.push(draftEvent);
+          continue;
+        }
+        
+        if (circleGMId) {
+          const managersAboveGM = managerHierarchyMap.get(circleGMId) || [];
+          if (managersAboveGM.includes(input.employeeId)) {
+            visibleDraftEvents.push(draftEvent);
+            continue;
+          }
+        }
+      }
+      
+      const seenIds = new Set<string>();
+      const results: typeof nonDraftResults = [];
+      
+      for (const event of [...nonDraftResults, ...visibleDraftEvents]) {
+        if (!seenIds.has(event.id)) {
+          seenIds.add(event.id);
+          results.push(event);
+        }
+      }
+      
+      results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      
+      console.log(`Found ${results.length} events for employee ${input.employeeId} (${visibleDraftEvents.length} drafts)`);
+      
+      if (results.length === 0) {
+        return [];
+      }
+      
+      const eventIds = results.map(e => e.id);
+      const relevantAssignments = await db.select().from(eventAssignments)
+        .where(inArray(eventAssignments.eventId, eventIds));
+      
+      const allTeamPersNos = results.flatMap(e => (e.assignedTeam || []) as string[]);
+      const uniquePersNos = [...new Set(allTeamPersNos)];
+      let masterMap = new Map<string, { persNo: string; name: string; designation: string | null }>();
+      if (uniquePersNos.length > 0) {
+        const masterRecords = await db.select({
+          persNo: employeeMaster.persNo,
+          name: employeeMaster.name,
+          designation: employeeMaster.designation,
+        }).from(employeeMaster).where(inArray(employeeMaster.persNo, uniquePersNos));
+        masterMap = new Map(masterRecords.map(m => [m.persNo, m]));
+      }
+      
+      const allEmployeeIds = [...new Set([
+        ...results.map(e => e.createdBy),
+        ...results.map(e => e.assignedTo).filter(Boolean) as string[],
+      ])];
+      let employeeMap = new Map<string, { name: string; designation?: string }>();
+      if (allEmployeeIds.length > 0) {
+        const empRecords = await db.select({
+          id: employees.id,
+          name: employees.name,
+          designation: employees.designation,
+        }).from(employees).where(inArray(employees.id, allEmployeeIds));
+        employeeMap = new Map(empRecords.map(e => [e.id, { name: e.name, designation: e.designation || undefined }]));
+      }
+      
+      const expiredEventIds = await autoCompleteExpiredEvents(results);
+      
+      const eventsWithProgress = results.map(event => {
+        const eventAssigns = relevantAssignments.filter(a => a.eventId === event.id);
+        const simSold = eventAssigns.reduce((sum, a) => sum + a.simSold, 0);
+        const ftthSold = eventAssigns.reduce((sum, a) => sum + a.ftthSold, 0);
+        
+        const assignedTeamPurseIds = (event.assignedTeam || []) as string[];
+        const teamMembers = assignedTeamPurseIds.map(persNo => {
+          const member = masterMap.get(persNo);
+          return member ? { persNo, name: member.name, designation: member.designation } : { persNo, name: persNo, designation: null };
+        });
+        
+        const creatorInfo = employeeMap.get(event.createdBy);
+        const assigneeInfo = event.assignedTo ? employeeMap.get(event.assignedTo) : null;
+        
+        const correctedStatus = expiredEventIds.includes(event.id) ? 'completed' : event.status;
+        
+        return {
+          ...event,
+          status: correctedStatus,
+          simSold,
+          ftthSold,
+          teamMembers,
+          creatorName: creatorInfo?.name || null,
+          assigneeName: assigneeInfo?.name || null,
+          assigneeDesignation: assigneeInfo?.designation || null,
+        };
+      });
+      
+      console.log(`Returning ${eventsWithProgress.length} events for employee ${input.employeeId}`);
+      return eventsWithProgress;
+    }),
+
   getById: publicProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
@@ -153,6 +453,12 @@ export const eventsRouter = createTRPCRouter({
     }))
     .mutation(async ({ input }) => {
       console.log("Creating event:", input.name);
+      
+      // Server-side role validation: ADMIN cannot create events
+      const creator = await db.select().from(employees).where(eq(employees.id, input.createdBy)).limit(1);
+      if (creator[0]?.role === 'ADMIN') {
+        throw new Error('Admin users cannot create tasks. Please use a manager account.');
+      }
       
       let assignedToId = input.assignedTo;
       
@@ -341,9 +647,15 @@ export const eventsRouter = createTRPCRouter({
       zone: z.string().min(1).optional(),
       startDate: z.string().optional(),
       endDate: z.string().optional(),
-      category: z.enum(['Cultural', 'Religious', 'Sports', 'Exhibition', 'Fair', 'Festival', 'Agri-Tourism', 'Eco-Tourism', 'Trade/Religious']).optional(),
+      category: z.string().optional(),
       targetSim: z.number().min(0).optional(),
       targetFtth: z.number().min(0).optional(),
+      targetLease: z.number().min(0).optional(),
+      targetBtsDown: z.number().min(0).optional(),
+      targetRouteFail: z.number().min(0).optional(),
+      targetFtthDown: z.number().min(0).optional(),
+      targetOfcFail: z.number().min(0).optional(),
+      targetEb: z.number().min(0).optional(),
       assignedTeam: z.array(z.string()).optional(),
       allocatedSim: z.number().min(0).optional(),
       allocatedFtth: z.number().min(0).optional(),
@@ -1139,6 +1451,27 @@ export const eventsRouter = createTRPCRouter({
       const event = await db.select().from(events).where(eq(events.id, input.eventId));
       if (!event[0]) throw new Error("Event not found");
       
+      // Verify user is assigned to this task
+      const employee = await db.select().from(employees).where(eq(employees.id, input.updatedBy));
+      if (!employee[0]) throw new Error("Employee not found");
+      
+      const employeePersNo = employee[0].persNo;
+      const assignedTeam = (event[0].assignedTeam as string[]) || [];
+      
+      // Check if employee is in the assigned team (via persNo) or has an assignment record
+      const hasAssignment = await db.select().from(eventAssignments)
+        .where(and(
+          eq(eventAssignments.eventId, input.eventId),
+          eq(eventAssignments.employeeId, input.updatedBy)
+        ));
+      
+      const isInAssignedTeam = employeePersNo && assignedTeam.includes(employeePersNo);
+      const hasAssignmentRecord = hasAssignment.length > 0;
+      
+      if (!isInAssignedTeam && !hasAssignmentRecord) {
+        throw new Error("You are not assigned to this task. Only assigned team members can update progress.");
+      }
+      
       const columnMap: Record<string, keyof typeof events> = {
         'EB': 'ebCompleted',
         'LEASE': 'leaseCompleted',
@@ -1616,5 +1949,190 @@ export const eventsRouter = createTRPCRouter({
         },
         events: eventReports,
       };
+    }),
+
+  getMyAssignedTasks: publicProcedure
+    .input(z.object({
+      employeeId: z.string().uuid(),
+    }))
+    .query(async ({ input }) => {
+      console.log("Fetching assigned tasks for employee:", input.employeeId);
+      
+      const employee = await db.select().from(employees)
+        .where(eq(employees.id, input.employeeId));
+      
+      if (!employee[0]) {
+        return [];
+      }
+      
+      const employeePersNo = employee[0].persNo;
+      
+      const myAssignments = await db.select().from(eventAssignments)
+        .where(eq(eventAssignments.employeeId, input.employeeId));
+      
+      if (myAssignments.length === 0 && !employeePersNo) {
+        return [];
+      }
+      
+      const assignedEventIds = myAssignments.map(a => a.eventId);
+      
+      let additionalEventIds: string[] = [];
+      if (employeePersNo) {
+        const eventsWithPersNoAssignment = await db.select({ id: events.id })
+          .from(events)
+          .where(sql`${events.assignedTeam}::jsonb ? ${employeePersNo}`);
+        additionalEventIds = eventsWithPersNoAssignment.map(e => e.id);
+      }
+      
+      const allEventIds = [...new Set([...assignedEventIds, ...additionalEventIds])];
+      
+      if (allEventIds.length === 0) {
+        return [];
+      }
+      
+      const myEvents = await db.select().from(events)
+        .where(and(
+          inArray(events.id, allEventIds),
+          sql`${events.status} != 'draft'`
+        ))
+        .orderBy(desc(events.createdAt));
+      
+      const assignmentMap = new Map(myAssignments.map(a => [a.eventId, a]));
+      
+      return myEvents.map(event => {
+        const assignment = assignmentMap.get(event.id);
+        const categories = (event.category || '').split(',').filter(Boolean);
+        const hasSIM = categories.includes('SIM');
+        const hasFTTH = categories.includes('FTTH');
+        const hasLease = categories.includes('LEASE_CIRCUIT');
+        const hasBtsDown = categories.includes('BTS_DOWN');
+        const hasRouteFail = categories.includes('ROUTE_FAIL');
+        const hasFtthDown = categories.includes('FTTH_DOWN');
+        const hasOfcFail = categories.includes('OFC_FAIL');
+        const hasEb = categories.includes('EB');
+        
+        const teamSize = (event.assignedTeam as string[] || []).length || 1;
+        const teamIndex = employeePersNo ? (event.assignedTeam as string[] || []).indexOf(employeePersNo) : 0;
+        const effectiveIndex = teamIndex >= 0 ? teamIndex : 0;
+        
+        const getDistributedTarget = (total: number) => {
+          const base = Math.floor(total / teamSize);
+          const remainder = total % teamSize;
+          return effectiveIndex < remainder ? base + 1 : base;
+        };
+        
+        return {
+          id: event.id,
+          name: event.name,
+          location: event.location,
+          circle: event.circle,
+          zone: event.zone,
+          startDate: event.startDate,
+          endDate: event.endDate,
+          status: event.status,
+          category: event.category,
+          assignmentId: assignment?.id || null,
+          myTargets: {
+            sim: assignment?.simTarget || (hasSIM ? getDistributedTarget(event.targetSim) : 0),
+            ftth: assignment?.ftthTarget || (hasFTTH ? getDistributedTarget(event.targetFtth) : 0),
+            lease: hasLease ? getDistributedTarget(event.targetLease || 0) : 0,
+            btsDown: hasBtsDown ? getDistributedTarget(event.targetBtsDown || 0) : 0,
+            routeFail: hasRouteFail ? getDistributedTarget(event.targetRouteFail || 0) : 0,
+            ftthDown: hasFtthDown ? getDistributedTarget(event.targetFtthDown || 0) : 0,
+            ofcFail: hasOfcFail ? getDistributedTarget(event.targetOfcFail || 0) : 0,
+            eb: hasEb ? getDistributedTarget(event.targetEb || 0) : 0,
+          },
+          myProgress: {
+            simSold: assignment?.simSold || 0,
+            ftthSold: assignment?.ftthSold || 0,
+          },
+          maintenanceProgress: {
+            lease: event.leaseCompleted || 0,
+            leaseTarget: event.targetLease || 0,
+            btsDown: event.btsDownCompleted || 0,
+            btsDownTarget: event.targetBtsDown || 0,
+            routeFail: event.routeFailCompleted || 0,
+            routeFailTarget: event.targetRouteFail || 0,
+            ftthDown: event.ftthDownCompleted || 0,
+            ftthDownTarget: event.targetFtthDown || 0,
+            ofcFail: event.ofcFailCompleted || 0,
+            ofcFailTarget: event.targetOfcFail || 0,
+            eb: event.ebCompleted || 0,
+            ebTarget: event.targetEb || 0,
+          },
+          categories: {
+            hasSIM,
+            hasFTTH,
+            hasLease,
+            hasBtsDown,
+            hasRouteFail,
+            hasFtthDown,
+            hasOfcFail,
+            hasEb,
+          },
+        };
+      });
+    }),
+
+  submitMyProgress: publicProcedure
+    .input(z.object({
+      employeeId: z.string().uuid(),
+      eventId: z.string().uuid(),
+      simSold: z.number().min(0).optional(),
+      ftthSold: z.number().min(0).optional(),
+    }))
+    .mutation(async ({ input }) => {
+      console.log("Submitting progress:", input);
+      
+      const existingAssignment = await db.select().from(eventAssignments)
+        .where(and(
+          eq(eventAssignments.eventId, input.eventId),
+          eq(eventAssignments.employeeId, input.employeeId)
+        ));
+      
+      if (existingAssignment[0]) {
+        const updateData: any = { updatedAt: new Date() };
+        if (input.simSold !== undefined) updateData.simSold = input.simSold;
+        if (input.ftthSold !== undefined) updateData.ftthSold = input.ftthSold;
+        
+        await db.update(eventAssignments)
+          .set(updateData)
+          .where(eq(eventAssignments.id, existingAssignment[0].id));
+        
+        return { success: true, message: 'Progress updated successfully' };
+      }
+      
+      const employee = await db.select().from(employees)
+        .where(eq(employees.id, input.employeeId));
+      
+      if (!employee[0]) {
+        throw new Error('Employee not found');
+      }
+      
+      const event = await db.select().from(events)
+        .where(eq(events.id, input.eventId));
+      
+      if (!event[0]) {
+        throw new Error('Event not found');
+      }
+      
+      const employeePersNo = employee[0].persNo;
+      const assignedTeam = (event[0].assignedTeam as string[]) || [];
+      
+      if (!employeePersNo || !assignedTeam.includes(employeePersNo)) {
+        throw new Error('You are not assigned to this task');
+      }
+      
+      await db.insert(eventAssignments).values({
+        eventId: input.eventId,
+        employeeId: input.employeeId,
+        simTarget: 0,
+        ftthTarget: 0,
+        simSold: input.simSold || 0,
+        ftthSold: input.ftthSold || 0,
+        assignedBy: input.employeeId,
+      });
+      
+      return { success: true, message: 'Progress submitted successfully' };
     }),
 });

@@ -1,6 +1,6 @@
 import { pgTable, text, varchar, integer, timestamp, boolean, jsonb, pgEnum, uuid } from 'drizzle-orm/pg-core';
 
-export const userRoleEnum = pgEnum('user_role', ['GM', 'CGM', 'DGM', 'AGM', 'SD_JTO', 'SALES_STAFF']);
+export const userRoleEnum = pgEnum('user_role', ['ADMIN', 'GM', 'CGM', 'DGM', 'AGM', 'SD_JTO', 'SALES_STAFF']);
 
 export const circleEnum = pgEnum('bsnl_circle', [
   'ANDAMAN_NICOBAR', 'ANDHRA_PRADESH', 'ASSAM', 'BIHAR', 'CHHATTISGARH',

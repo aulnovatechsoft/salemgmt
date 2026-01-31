@@ -1,10 +1,9 @@
 import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState, useEffect, useCallback } from 'react';
-import { Event, SalesReport, Resource, Issue, AuditLog, Employee } from '@/types';
+import { SalesReport, Resource, Issue, AuditLog, Employee } from '@/types';
 import { trpc } from '@/lib/trpc';
 
-const EVENTS_KEY = 'bsnl_events';
 const SALES_KEY = 'bsnl_sales';
 const RESOURCES_KEY = 'bsnl_resources';
 const ISSUES_KEY = 'bsnl_issues';
@@ -12,7 +11,6 @@ const AUDIT_KEY = 'bsnl_audit';
 const EMPLOYEES_KEY = 'bsnl_employees';
 
 export const [AppProvider, useApp] = createContextHook(() => {
-  const [events, setEvents] = useState<Event[]>([]);
   const [salesReports, setSalesReports] = useState<SalesReport[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
@@ -20,67 +18,12 @@ export const [AppProvider, useApp] = createContextHook(() => {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const eventsQuery = trpc.events.getAll.useQuery(undefined, {
-    retry: 1,
-    refetchOnWindowFocus: true,
-    refetchInterval: 10000,
-    staleTime: 5000,
-  });
-
   const resourcesQuery = trpc.resources.getAll.useQuery(undefined, {
     retry: 1,
     refetchOnWindowFocus: true,
     refetchInterval: 15000,
     staleTime: 10000,
   });
-
-  useEffect(() => {
-    if (eventsQuery.data) {
-      const formattedEvents: Event[] = eventsQuery.data.map((e: any) => ({
-        id: e.id,
-        name: e.name,
-        location: e.location,
-        circle: e.circle,
-        zone: e.zone,
-        dateRange: {
-          startDate: e.startDate,
-          endDate: e.endDate,
-        },
-        category: e.category,
-        targetSim: e.targetSim,
-        targetFtth: e.targetFtth,
-        assignedTeam: e.assignedTeam || [],
-        allocatedSim: e.allocatedSim,
-        allocatedFtth: e.allocatedFtth,
-        createdBy: e.createdBy,
-        createdAt: e.createdAt,
-        keyInsight: e.keyInsight,
-        status: e.status || 'active',
-        assignedTo: e.assignedTo,
-        simsSold: e.simSold || 0,
-        ftthSold: e.ftthSold || 0,
-        teamMembers: e.teamMembers || [],
-        creatorName: e.creatorName || null,
-        assigneeName: e.assigneeName || null,
-        assigneeDesignation: e.assigneeDesignation || null,
-        targetEb: e.targetEb || 0,
-        targetLease: e.targetLease || 0,
-        targetBtsDown: e.targetBtsDown || 0,
-        targetFtthDown: e.targetFtthDown || 0,
-        targetRouteFail: e.targetRouteFail || 0,
-        targetOfcFail: e.targetOfcFail || 0,
-        ebCompleted: e.ebCompleted || 0,
-        leaseCompleted: e.leaseCompleted || 0,
-        btsDownCompleted: e.btsDownCompleted || 0,
-        ftthDownCompleted: e.ftthDownCompleted || 0,
-        routeFailCompleted: e.routeFailCompleted || 0,
-        ofcFailCompleted: e.ofcFailCompleted || 0,
-      }));
-      console.log('Formatted events from backend:', formattedEvents.length);
-      setEvents(formattedEvents);
-      AsyncStorage.setItem(EVENTS_KEY, JSON.stringify(formattedEvents));
-    }
-  }, [eventsQuery.data]);
 
   useEffect(() => {
     if (resourcesQuery.data) {
@@ -105,8 +48,7 @@ export const [AppProvider, useApp] = createContextHook(() => {
 
   const loadData = async () => {
     try {
-      const [eventsData, salesData, resourcesData, issuesData, auditData, employeesData] = await Promise.all([
-        AsyncStorage.getItem(EVENTS_KEY),
+      const [salesData, resourcesData, issuesData, auditData, employeesData] = await Promise.all([
         AsyncStorage.getItem(SALES_KEY),
         AsyncStorage.getItem(RESOURCES_KEY),
         AsyncStorage.getItem(ISSUES_KEY),
@@ -114,7 +56,6 @@ export const [AppProvider, useApp] = createContextHook(() => {
         AsyncStorage.getItem(EMPLOYEES_KEY),
       ]);
 
-      if (eventsData && !eventsQuery.data) setEvents(JSON.parse(eventsData));
       if (salesData) setSalesReports(JSON.parse(salesData));
       if (resourcesData) setResources(JSON.parse(resourcesData));
       if (issuesData) setIssues(JSON.parse(issuesData));
@@ -127,30 +68,9 @@ export const [AppProvider, useApp] = createContextHook(() => {
     }
   };
 
-  const refetchEvents = useCallback(() => {
-    eventsQuery.refetch();
-  }, [eventsQuery]);
-
   const refetchResources = useCallback(() => {
     resourcesQuery.refetch();
   }, [resourcesQuery]);
-
-  const refetchAll = useCallback(() => {
-    eventsQuery.refetch();
-    resourcesQuery.refetch();
-  }, [eventsQuery, resourcesQuery]);
-
-  const addEvent = useCallback(async (event: Event) => {
-    const updated = [...events, event];
-    setEvents(updated);
-    await AsyncStorage.setItem(EVENTS_KEY, JSON.stringify(updated));
-  }, [events]);
-
-  const updateEvent = useCallback(async (eventId: string, updates: Partial<Event>) => {
-    const updated = events.map(e => e.id === eventId ? { ...e, ...updates } : e);
-    setEvents(updated);
-    await AsyncStorage.setItem(EVENTS_KEY, JSON.stringify(updated));
-  }, [events]);
 
   const addSalesReport = useCallback(async (report: SalesReport) => {
     const updated = [...salesReports, report];
@@ -189,26 +109,21 @@ export const [AppProvider, useApp] = createContextHook(() => {
   }, [employees]);
 
   const clearAllData = useCallback(async () => {
-    setEvents([]);
     setSalesReports([]);
     setResources([]);
     setIssues([]);
     setAuditLogs([]);
-    await AsyncStorage.multiRemove([EVENTS_KEY, SALES_KEY, RESOURCES_KEY, ISSUES_KEY, AUDIT_KEY]);
+    await AsyncStorage.multiRemove([SALES_KEY, RESOURCES_KEY, ISSUES_KEY, AUDIT_KEY]);
   }, []);
 
   return {
-    events,
     salesReports,
     resources,
     issues,
     auditLogs,
     employees,
     isLoading,
-    isLoadingEvents: eventsQuery.isLoading,
     isLoadingResources: resourcesQuery.isLoading,
-    addEvent,
-    updateEvent,
     addSalesReport,
     updateResource,
     addIssue,
@@ -216,8 +131,6 @@ export const [AppProvider, useApp] = createContextHook(() => {
     addAuditLog,
     addEmployees,
     clearAllData,
-    refetchEvents,
     refetchResources,
-    refetchAll,
   };
 });

@@ -5,7 +5,7 @@ import { User, Link, ChevronLeft, ChevronRight, Users, Building, MapPin, Phone, 
 import { useAuth } from '@/contexts/auth';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
-import { canCreateEvents } from '@/constants/app';
+import { canAccessAdminPanel, isAdminRole } from '@/constants/app';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -74,7 +74,9 @@ export default function ProfileScreen() {
     );
   };
   
-  const isAdmin = canCreateEvents(employee?.role || 'SALES_STAFF');
+  const userRole = employee?.role || 'SALES_STAFF';
+  const hasAdminAccess = canAccessAdminPanel(userRole);
+  const adminButtonLabel = isAdminRole(userRole) ? 'Admin Panel' : 'Employee Directory';
 
   return (
     <>
@@ -235,14 +237,14 @@ export default function ProfileScreen() {
         )}
 
         <View style={styles.actionsSection}>
-          {isAdmin && (
+          {hasAdminAccess && (
             <TouchableOpacity 
               style={styles.actionRow}
               onPress={() => router.push('/admin' as any)}
             >
               <View style={styles.actionLeft}>
                 <Settings size={20} color={Colors.light.primary} />
-                <Text style={styles.actionText}>Admin Panel</Text>
+                <Text style={styles.actionText}>{adminButtonLabel}</Text>
               </View>
               <ChevronRight size={20} color={Colors.light.textSecondary} />
             </TouchableOpacity>

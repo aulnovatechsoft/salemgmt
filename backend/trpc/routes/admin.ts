@@ -29,6 +29,12 @@ export const adminRouter = createTRPCRouter({
     .mutation(async ({ input }) => {
       console.log("Importing employee master data:", input.data.length, "records");
       
+      // Server-side role validation: Only ADMIN can import CSV
+      const uploader = await db.select().from(employees).where(eq(employees.id, input.uploadedBy)).limit(1);
+      if (uploader[0]?.role !== 'ADMIN') {
+        throw new Error('Only admin users can import employee data. Access denied.');
+      }
+      
       let imported = 0;
       let updated = 0;
       let errors: string[] = [];
@@ -103,16 +109,42 @@ export const adminRouter = createTRPCRouter({
       linked: z.boolean().optional(),
       limit: z.number().min(1).max(100).default(50),
       offset: z.number().min(0).default(0),
+      userId: z.string().uuid().optional(),
     }).optional())
     .query(async ({ input }) => {
       console.log("Fetching employee master list");
       
-      let query = db.select().from(employeeMaster);
+      // Get user's role and circle for filtering
+      let userRole: string | null = null;
+      let userCircle: string | null = null;
+      
+      if (input?.userId) {
+        const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
+        if (user[0]) {
+          userRole = user[0].role;
+          userCircle = user[0].circle;
+        }
+      }
+      
+      // Build query with filters
+      const conditions: any[] = [];
       
       if (input?.linked === true) {
-        query = query.where(eq(employeeMaster.isLinked, true)) as any;
+        conditions.push(eq(employeeMaster.isLinked, true));
       } else if (input?.linked === false) {
-        query = query.where(eq(employeeMaster.isLinked, false)) as any;
+        conditions.push(eq(employeeMaster.isLinked, false));
+      }
+      
+      // GM/CGM can only see their own circle employees
+      // ADMIN can see all circles
+      if (userRole && userRole !== 'ADMIN' && userCircle) {
+        conditions.push(eq(employeeMaster.circle, userCircle));
+        console.log(`Filtering employees by circle: ${userCircle} for role: ${userRole}`);
+      }
+      
+      let query = db.select().from(employeeMaster);
+      if (conditions.length > 0) {
+        query = query.where(and(...conditions)) as any;
       }
       
       const results = await query
@@ -120,7 +152,12 @@ export const adminRouter = createTRPCRouter({
         .limit(input?.limit || 50)
         .offset(input?.offset || 0);
       
-      const countResult = await db.select({ count: sql<number>`count(*)` }).from(employeeMaster);
+      // Count with same filters
+      let countQuery = db.select({ count: sql<number>`count(*)` }).from(employeeMaster);
+      if (conditions.length > 0) {
+        countQuery = countQuery.where(and(...conditions)) as any;
+      }
+      const countResult = await countQuery;
       const total = Number(countResult[0]?.count || 0);
       
       return { data: results, total };
@@ -314,6 +351,12 @@ export const adminRouter = createTRPCRouter({
     .mutation(async ({ input }) => {
       console.log("Clearing all unlinked employee master records");
       
+      // Server-side role validation: Only ADMIN can clear records
+      const user = await db.select().from(employees).where(eq(employees.id, input.clearedBy)).limit(1);
+      if (user[0]?.role !== 'ADMIN') {
+        throw new Error('Only admin users can clear employee data. Access denied.');
+      }
+      
       const result = await db.delete(employeeMaster)
         .where(eq(employeeMaster.isLinked, false));
       
@@ -329,11 +372,35 @@ export const adminRouter = createTRPCRouter({
     }),
 
   getEmployeeMasterStats: publicProcedure
-    .query(async () => {
-      const total = await db.select({ count: sql<number>`count(*)` }).from(employeeMaster);
-      const linked = await db.select({ count: sql<number>`count(*)` })
-        .from(employeeMaster)
-        .where(eq(employeeMaster.isLinked, true));
+    .input(z.object({
+      userId: z.string().uuid().optional(),
+    }).optional())
+    .query(async ({ input }) => {
+      // Get user's role and circle for filtering
+      let userRole: string | null = null;
+      let userCircle: string | null = null;
+      
+      if (input?.userId) {
+        const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
+        if (user[0]) {
+          userRole = user[0].role;
+          userCircle = user[0].circle;
+        }
+      }
+      
+      // GM/CGM can only see their own circle stats
+      // ADMIN can see all circles
+      const circleFilter = (userRole && userRole !== 'ADMIN' && userCircle) 
+        ? eq(employeeMaster.circle, userCircle) 
+        : undefined;
+      
+      const total = circleFilter 
+        ? await db.select({ count: sql<number>`count(*)` }).from(employeeMaster).where(circleFilter)
+        : await db.select({ count: sql<number>`count(*)` }).from(employeeMaster);
+        
+      const linked = circleFilter
+        ? await db.select({ count: sql<number>`count(*)` }).from(employeeMaster).where(and(eq(employeeMaster.isLinked, true), circleFilter))
+        : await db.select({ count: sql<number>`count(*)` }).from(employeeMaster).where(eq(employeeMaster.isLinked, true));
       
       return {
         total: Number(total[0]?.count || 0),
@@ -359,6 +426,12 @@ export const adminRouter = createTRPCRouter({
     }))
     .mutation(async ({ input }) => {
       console.log("Importing events:", input.data.length, "records");
+      
+      // Server-side role validation: Only ADMIN can import events
+      const uploader = await db.select().from(employees).where(eq(employees.id, input.uploadedBy)).limit(1);
+      if (uploader[0]?.role !== 'ADMIN') {
+        throw new Error('Only admin users can import events. Access denied.');
+      }
       
       let imported = 0;
       let updated = 0;
@@ -1244,6 +1317,12 @@ export const adminRouter = createTRPCRouter({
     .mutation(async ({ input }) => {
       console.log("=== BULK ACTIVATE EMPLOYEES ===");
       console.log("Circle filter:", input.circle || "All circles");
+      
+      // Server-side role validation: Only ADMIN can bulk activate
+      const admin = await db.select().from(employees).where(eq(employees.id, input.adminId)).limit(1);
+      if (admin[0]?.role !== 'ADMIN') {
+        throw new Error('Only admin users can bulk activate employees. Access denied.');
+      }
       
       let unlinkedQuery = db.select().from(employeeMaster)
         .where(isNull(employeeMaster.linkedEmployeeId));

@@ -2,10 +2,10 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./schema";
 
-const connectionString = process.env.DATABASE_URL!;
+const connectionString = process.env.BSNL_DATABASE_URL || process.env.DATABASE_URL!;
 
 if (!connectionString) {
-  console.error("DATABASE_URL is not set");
+  console.error("BSNL_DATABASE_URL or DATABASE_URL is not set");
 }
 
 console.log("Connecting to database:", connectionString?.replace(/:[^:@]+@/, ':***@'));

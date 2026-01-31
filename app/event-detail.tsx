@@ -38,11 +38,151 @@ const STATUS_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
   cancelled: ['draft'],
 };
 
+// Category configuration with icons and colors
+const CATEGORY_CONFIG: Record<string, { label: string; color: string; bg: string; icon: string; type: 'sales' | 'maintenance' }> = {
+  SIM: { label: 'SIM Sales', color: '#1565C0', bg: '#E3F2FD', icon: 'sim', type: 'sales' },
+  FTTH: { label: 'FTTH Sales', color: '#2E7D32', bg: '#E8F5E9', icon: 'wifi', type: 'sales' },
+  LEASE_CIRCUIT: { label: 'Lease Circuit', color: '#EF6C00', bg: '#FFF3E0', icon: 'cable', type: 'maintenance' },
+  BTS_DOWN: { label: 'BTS Down', color: '#C62828', bg: '#FFEBEE', icon: 'tower', type: 'maintenance' },
+  FTTH_DOWN: { label: 'FTTH Down', color: '#7B1FA2', bg: '#F3E5F5', icon: 'signal', type: 'maintenance' },
+  ROUTE_FAIL: { label: 'Route Fail', color: '#00796B', bg: '#E0F2F1', icon: 'route', type: 'maintenance' },
+  OFC_FAIL: { label: 'OFC Fail', color: '#546E7A', bg: '#ECEFF1', icon: 'fiber', type: 'maintenance' },
+  EB: { label: 'EB Connections', color: '#FF5722', bg: '#FBE9E7', icon: 'zap', type: 'maintenance' },
+};
+
+type UrgencyLevel = 'on_track' | 'moderate' | 'warning' | 'critical' | 'overdue' | 'completed';
+
+interface TimeInfo {
+  elapsed: string;
+  remaining: string;
+  percentElapsed: number;
+  urgency: UrgencyLevel;
+  urgencyColor: string;
+  urgencyBg: string;
+  urgencyLabel: string;
+  trendStatus: 'ahead' | 'on_track' | 'behind';
+  expectedProgress: number;
+}
+
+function getISTDate(): Date {
+  const now = new Date();
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60 * 1000);
+  return new Date(utc + istOffset);
+}
+
+const AVATAR_COLORS = [
+  '#1565C0', '#2E7D32', '#EF6C00', '#7B1FA2', '#00796B',
+  '#C62828', '#546E7A', '#FF5722', '#303F9F', '#00838F'
+];
+
+function getAvatarColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+function getDistributedTarget(totalTarget: number, teamSize: number, memberIndex: number): number {
+  if (teamSize <= 0) return 0;
+  const baseTarget = Math.floor(totalTarget / teamSize);
+  const remainder = totalTarget % teamSize;
+  return memberIndex < remainder ? baseTarget + 1 : baseTarget;
+}
+
+function calculateTimeInfo(startDate: Date | string | null, endDate: Date | string | null, completed: number, target: number, _currentTime?: Date): TimeInfo {
+  const now = _currentTime || getISTDate();
+  const start = startDate ? new Date(startDate) : now;
+  const end = endDate ? new Date(endDate) : now;
+  
+  const totalDuration = end.getTime() - start.getTime();
+  const elapsed = now.getTime() - start.getTime();
+  const remaining = end.getTime() - now.getTime();
+  
+  const percentElapsed = totalDuration > 0 ? Math.min(Math.max((elapsed / totalDuration) * 100, 0), 100) : 0;
+  const completionPercent = target > 0 ? (completed / target) * 100 : 0;
+  const expectedProgress = percentElapsed;
+  
+  let urgency: UrgencyLevel;
+  let urgencyColor: string;
+  let urgencyBg: string;
+  let urgencyLabel: string;
+  
+  if (completed >= target) {
+    urgency = 'completed';
+    urgencyColor = '#2E7D32';
+    urgencyBg = '#E8F5E9';
+    urgencyLabel = 'Completed';
+  } else if (remaining < 0) {
+    urgency = 'overdue';
+    urgencyColor = '#B71C1C';
+    urgencyBg = '#FFCDD2';
+    urgencyLabel = 'Overdue';
+  } else if (percentElapsed >= 90) {
+    urgency = 'critical';
+    urgencyColor = '#C62828';
+    urgencyBg = '#FFEBEE';
+    urgencyLabel = 'Critical';
+  } else if (percentElapsed >= 75) {
+    urgency = 'warning';
+    urgencyColor = '#E65100';
+    urgencyBg = '#FFF3E0';
+    urgencyLabel = 'Warning';
+  } else if (percentElapsed >= 50) {
+    urgency = 'moderate';
+    urgencyColor = '#F9A825';
+    urgencyBg = '#FFFDE7';
+    urgencyLabel = 'Moderate';
+  } else {
+    urgency = 'on_track';
+    urgencyColor = '#2E7D32';
+    urgencyBg = '#E8F5E9';
+    urgencyLabel = 'On Track';
+  }
+  
+  let trendStatus: 'ahead' | 'on_track' | 'behind' = 'on_track';
+  if (completionPercent > expectedProgress + 10) {
+    trendStatus = 'ahead';
+  } else if (completionPercent < expectedProgress - 10) {
+    trendStatus = 'behind';
+  }
+  
+  return {
+    elapsed: formatDuration(elapsed),
+    remaining: remaining > 0 ? formatDuration(remaining) : 'Overdue',
+    percentElapsed,
+    urgency,
+    urgencyColor,
+    urgencyBg,
+    urgencyLabel,
+    trendStatus,
+    expectedProgress,
+  };
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 0) return '0m';
+  const totalMinutes = Math.floor(ms / (1000 * 60));
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  const minutes = totalMinutes % 60;
+  
+  if (days > 0) {
+    return `${days}d ${hours}h`;
+  } else if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  } else {
+    return `${minutes}m`;
+  }
+}
+
 export default function EventDetailScreen() {
   const router = useRouter();
   const { id, edit } = useLocalSearchParams<{ id: string; edit?: string }>();
   const { employee } = useAuth();
   
+  const [currentTime, setCurrentTime] = useState(getISTDate());
   const [refreshing, setRefreshing] = useState(false);
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -59,6 +199,12 @@ export default function EventDetailScreen() {
   const [editEndDate, setEditEndDate] = useState('');
   const [editTargetSim, setEditTargetSim] = useState('');
   const [editTargetFtth, setEditTargetFtth] = useState('');
+  const [editTargetLease, setEditTargetLease] = useState('');
+  const [editTargetBtsDown, setEditTargetBtsDown] = useState('');
+  const [editTargetRouteFail, setEditTargetRouteFail] = useState('');
+  const [editTargetFtthDown, setEditTargetFtthDown] = useState('');
+  const [editTargetOfcFail, setEditTargetOfcFail] = useState('');
+  const [editTargetEb, setEditTargetEb] = useState('');
   const [editCategory, setEditCategory] = useState('');
   const [editKeyInsight, setEditKeyInsight] = useState('');
   
@@ -79,6 +225,13 @@ export default function EventDetailScreen() {
   const [editMemberFtthTarget, setEditMemberFtthTarget] = useState('');
   
   const trpcUtils = trpc.useUtils();
+  
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(getISTDate());
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
   
   const { data: eventData, isLoading, isError, error, refetch } = trpc.events.getEventWithDetails.useQuery(
     { id: id || '' },
@@ -258,6 +411,12 @@ export default function EventDetailScreen() {
     setEditEndDate(new Date(eventData.endDate).toISOString().split('T')[0]);
     setEditTargetSim(eventData.targetSim.toString());
     setEditTargetFtth(eventData.targetFtth.toString());
+    setEditTargetLease((eventData.targetLease || 0).toString());
+    setEditTargetBtsDown((eventData.targetBtsDown || 0).toString());
+    setEditTargetRouteFail((eventData.targetRouteFail || 0).toString());
+    setEditTargetFtthDown((eventData.targetFtthDown || 0).toString());
+    setEditTargetOfcFail((eventData.targetOfcFail || 0).toString());
+    setEditTargetEb((eventData.targetEb || 0).toString());
     setEditCategory(eventData.category);
     setEditKeyInsight(eventData.keyInsight || '');
     setShowEditModal(true);
@@ -321,6 +480,12 @@ export default function EventDetailScreen() {
       endDate: editEndDate,
       targetSim: parseInt(editTargetSim) || 0,
       targetFtth: parseInt(editTargetFtth) || 0,
+      targetLease: parseInt(editTargetLease) || 0,
+      targetBtsDown: parseInt(editTargetBtsDown) || 0,
+      targetRouteFail: parseInt(editTargetRouteFail) || 0,
+      targetFtthDown: parseInt(editTargetFtthDown) || 0,
+      targetOfcFail: parseInt(editTargetOfcFail) || 0,
+      targetEb: parseInt(editTargetEb) || 0,
       category: editCategory as any,
       keyInsight: editKeyInsight,
       updatedBy: employee.id,
@@ -475,7 +640,10 @@ export default function EventDetailScreen() {
   const isEventManager = eventData?.assignedToEmployee?.id === employee?.id;
   const isEventCreator = eventData?.createdBy === employee?.id;
   const canManageTeam = canCreateEvents(employee?.role || 'SALES_STAFF') || isEventManager || isEventCreator;
-  const isTeamMember = eventData?.teamWithAllocations?.some(t => t.employeeId === employee?.id);
+  // Check if user is a team member via either event_assignments OR assignedTeam array (persNo based)
+  const isInAssignedTeam = employee?.persNo && (eventData?.assignedTeam as string[] || []).includes(employee.persNo);
+  const hasAssignmentRecord = eventData?.teamWithAllocations?.some(t => t.employeeId === employee?.id);
+  const isTeamMember = isInAssignedTeam || hasAssignmentRecord;
 
   const isDraftEvent = eventData?.status === 'draft';
   
@@ -781,211 +949,665 @@ export default function EventDetailScreen() {
           </View>
         )}
 
-        <View style={styles.summarySection}>
-          <Text style={styles.sectionTitle}>Sales Progress</Text>
-          <View style={styles.progressCards}>
-            <View style={styles.progressCard}>
-              <Text style={styles.progressLabel}>SIM Sales</Text>
-              <Text style={styles.progressValue}>
-                {eventData.summary?.totalSimsSold || 0} / {eventData.targetSim}
-              </Text>
-              <View style={styles.progressBar}>
-                <View 
-                  style={[
-                    styles.progressFill, 
-                    { 
-                      width: `${Math.min(((eventData.summary?.totalSimsSold || 0) / eventData.targetSim) * 100, 100)}%`,
-                      backgroundColor: Colors.light.primary 
-                    }
-                  ]} 
-                />
+        {/* ===== CATEGORY-BASED TASK CARDS ===== */}
+        <View style={styles.categoryCardsSection}>
+          <Text style={styles.sectionTitle}>Task Categories & Assignments</Text>
+          
+          {/* SIM Sales Category Card */}
+          {eventData.category?.includes('SIM') && (
+            <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.SIM.color }]}>
+              <View style={styles.categoryCardHeader}>
+                <View style={styles.categoryTitleRow}>
+                  <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.SIM.bg }]}>
+                    <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.SIM.color }]}>S</Text>
+                  </View>
+                  <View style={styles.categoryTitleInfo}>
+                    <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.SIM.label}</Text>
+                    <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                  </View>
+                </View>
+                <View style={styles.categoryTargetBadge}>
+                  <Text style={styles.categoryTargetText}>{eventData.summary?.totalSimsSold || 0} / {eventData.targetSim}</Text>
+                </View>
+              </View>
+              
+              <View style={styles.categoryProgressBar}>
+                <View style={[styles.categoryProgressFill, { width: `${Math.min(((eventData.summary?.totalSimsSold || 0) / Math.max(eventData.targetSim, 1)) * 100, 100)}%`, backgroundColor: CATEGORY_CONFIG.SIM.color }]} />
+              </View>
+              
+              <View style={styles.categoryAssignees}>
+                <Text style={styles.assigneesLabel}>Assigned Team:</Text>
+                {eventData.teamWithAllocations?.filter((m: any) => m.simTarget > 0 && m.employeeId !== eventData.assignedTo).length > 0 ? (
+                  eventData.teamWithAllocations?.filter((m: any) => m.simTarget > 0 && m.employeeId !== eventData.assignedTo).map((member: any) => (
+                    <View key={member.id} style={styles.assigneeRow}>
+                      <View style={styles.assigneeInfo}>
+                        <View style={[styles.assigneeAvatar, { backgroundColor: CATEGORY_CONFIG.SIM.bg }]}>
+                          <Text style={[styles.assigneeAvatarText, { color: CATEGORY_CONFIG.SIM.color }]}>
+                            {(member.employee?.name || 'U').charAt(0)}
+                          </Text>
+                        </View>
+                        <View style={styles.assigneeDetails}>
+                          <Text style={styles.assigneeName}>{member.employee?.name || 'Unknown'}</Text>
+                          <Text style={styles.assigneeRole}>{member.employee?.designation} | {member.employee?.persNo}</Text>
+                        </View>
+                      </View>
+                      <View style={styles.assigneeProgress}>
+                        <Text style={styles.assigneeProgressText}>{member.actualSimSold || 0} / {member.simTarget}</Text>
+                        <View style={styles.assigneeMiniBar}>
+                          <View style={[styles.assigneeMiniBarFill, { width: `${member.simTarget > 0 ? Math.min((member.actualSimSold / member.simTarget) * 100, 100) : 0}%`, backgroundColor: CATEGORY_CONFIG.SIM.color }]} />
+                        </View>
+                      </View>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.noAssigneesText}>No team members assigned to SIM sales</Text>
+                )}
               </View>
             </View>
-            <View style={styles.progressCard}>
-              <Text style={styles.progressLabel}>FTTH Sales</Text>
-              <Text style={styles.progressValue}>
-                {eventData.summary?.totalFtthSold || 0} / {eventData.targetFtth}
-              </Text>
-              <View style={styles.progressBar}>
-                <View 
-                  style={[
-                    styles.progressFill, 
-                    { 
-                      width: `${Math.min(((eventData.summary?.totalFtthSold || 0) / eventData.targetFtth) * 100, 100)}%`,
-                      backgroundColor: Colors.light.success 
-                    }
-                  ]} 
-                />
+          )}
+          
+          {/* FTTH Sales Category Card */}
+          {eventData.category?.includes('FTTH') && !eventData.category?.includes('FTTH_DOWN') && (
+            <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.FTTH.color }]}>
+              <View style={styles.categoryCardHeader}>
+                <View style={styles.categoryTitleRow}>
+                  <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.FTTH.bg }]}>
+                    <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.FTTH.color }]}>F</Text>
+                  </View>
+                  <View style={styles.categoryTitleInfo}>
+                    <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.FTTH.label}</Text>
+                    <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                  </View>
+                </View>
+                <View style={styles.categoryTargetBadge}>
+                  <Text style={styles.categoryTargetText}>{eventData.summary?.totalFtthSold || 0} / {eventData.targetFtth}</Text>
+                </View>
+              </View>
+              
+              <View style={styles.categoryProgressBar}>
+                <View style={[styles.categoryProgressFill, { width: `${Math.min(((eventData.summary?.totalFtthSold || 0) / Math.max(eventData.targetFtth, 1)) * 100, 100)}%`, backgroundColor: CATEGORY_CONFIG.FTTH.color }]} />
+              </View>
+              
+              <View style={styles.categoryAssignees}>
+                <Text style={styles.assigneesLabel}>Assigned Team:</Text>
+                {eventData.teamWithAllocations?.filter((m: any) => m.ftthTarget > 0 && m.employeeId !== eventData.assignedTo).length > 0 ? (
+                  eventData.teamWithAllocations?.filter((m: any) => m.ftthTarget > 0 && m.employeeId !== eventData.assignedTo).map((member: any) => (
+                    <View key={member.id} style={styles.assigneeRow}>
+                      <View style={styles.assigneeInfo}>
+                        <View style={[styles.assigneeAvatar, { backgroundColor: CATEGORY_CONFIG.FTTH.bg }]}>
+                          <Text style={[styles.assigneeAvatarText, { color: CATEGORY_CONFIG.FTTH.color }]}>
+                            {(member.employee?.name || 'U').charAt(0)}
+                          </Text>
+                        </View>
+                        <View style={styles.assigneeDetails}>
+                          <Text style={styles.assigneeName}>{member.employee?.name || 'Unknown'}</Text>
+                          <Text style={styles.assigneeRole}>{member.employee?.designation} | {member.employee?.persNo}</Text>
+                        </View>
+                      </View>
+                      <View style={styles.assigneeProgress}>
+                        <Text style={styles.assigneeProgressText}>{member.actualFtthSold || 0} / {member.ftthTarget}</Text>
+                        <View style={styles.assigneeMiniBar}>
+                          <View style={[styles.assigneeMiniBarFill, { width: `${member.ftthTarget > 0 ? Math.min((member.actualFtthSold / member.ftthTarget) * 100, 100) : 0}%`, backgroundColor: CATEGORY_CONFIG.FTTH.color }]} />
+                        </View>
+                      </View>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.noAssigneesText}>No team members assigned to FTTH sales</Text>
+                )}
               </View>
             </View>
-          </View>
+          )}
+          
+          {/* Lease Circuit Maintenance Card */}
+          {eventData.category?.includes('LEASE_CIRCUIT') && eventData.targetLease > 0 && (() => {
+            const timeInfo = calculateTimeInfo(eventData.startDate, eventData.endDate, eventData.leaseCompleted || 0, eventData.targetLease, currentTime);
+            const completionPct = Math.round(((eventData.leaseCompleted || 0) / eventData.targetLease) * 100);
+            return (
+              <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>
+                <View style={styles.categoryCardHeader}>
+                  <View style={styles.categoryTitleRow}>
+                    <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.bg }]}>
+                      <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>LC</Text>
+                    </View>
+                    <View style={styles.categoryTitleInfo}>
+                      <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.LEASE_CIRCUIT.label}</Text>
+                      <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                    </View>
+                  </View>
+                  <View style={[styles.statusBadgeMini, { backgroundColor: timeInfo.urgencyBg }]}>
+                    <Text style={[styles.statusBadgeMiniText, { color: timeInfo.urgencyColor }]}>{timeInfo.urgencyLabel}</Text>
+                  </View>
+                </View>
+                
+                <View style={styles.maintenanceStats}>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Target</Text>
+                    <Text style={styles.maintenanceStatValue}>{eventData.targetLease}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Completed</Text>
+                    <Text style={[styles.maintenanceStatValue, { color: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>{eventData.leaseCompleted || 0}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Remaining</Text>
+                    <Text style={styles.maintenanceStatValue}>{eventData.targetLease - (eventData.leaseCompleted || 0)}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Time Left</Text>
+                    <Text style={styles.maintenanceStatValue}>{timeInfo.remaining}</Text>
+                  </View>
+                </View>
+                
+                <View style={styles.categoryProgressBar}>
+                  <View style={[styles.categoryProgressFill, { width: `${completionPct}%`, backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]} />
+                </View>
+                
+                {/* Team Members for this maintenance category */}
+                {eventData.teamWithAllocations && eventData.teamWithAllocations.length > 0 && (
+                  <View style={styles.categoryAssignees}>
+                    <Text style={styles.assigneesLabel}>Assigned Team ({eventData.teamWithAllocations.length})</Text>
+                    {eventData.teamWithAllocations.map((member: any, idx: number) => {
+                      const memberTarget = getDistributedTarget(eventData.targetLease, eventData.teamWithAllocations.length, idx);
+                      return (
+                        <View key={member.id} style={styles.assigneeRow}>
+                          <View style={styles.assigneeInfo}>
+                            <View style={[styles.assigneeAvatar, { backgroundColor: getAvatarColor(member.employee?.name || 'U') }]}>
+                              <Text style={[styles.assigneeAvatarText, { color: '#fff' }]}>
+                                {(member.employee?.name || 'U').split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase()}
+                              </Text>
+                            </View>
+                            <View style={styles.assigneeDetails}>
+                              <Text style={styles.assigneeName}>{member.employee?.name || 'Unknown'}</Text>
+                              <Text style={styles.assigneeRole}>{member.employee?.designation || member.employee?.role}{member.employee?.persNo ? ` | ${member.employee.persNo}` : ''}</Text>
+                            </View>
+                          </View>
+                          <View style={styles.assigneeProgress}>
+                            <Text style={styles.assigneeProgressText}>Target: {memberTarget}</Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+                
+                {(canManageTeam || isTeamMember) && dbStatus === 'active' && (
+                  <View style={styles.maintenanceActions}>
+                    {(eventData.leaseCompleted || 0) > 0 && (
+                      <TouchableOpacity style={[styles.maintenanceActionBtn, { borderColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]} onPress={() => handleMarkTaskComplete('LEASE', -1)}>
+                        <Text style={[styles.maintenanceActionBtnText, { color: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>-1</Text>
+                      </TouchableOpacity>
+                    )}
+                    {(eventData.leaseCompleted || 0) < eventData.targetLease && (
+                      <TouchableOpacity style={[styles.maintenanceActionBtnPrimary, { backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]} onPress={() => handleMarkTaskComplete('LEASE')}>
+                        <CheckCircle size={16} color="#fff" />
+                        <Text style={styles.maintenanceActionBtnPrimaryText}>Mark +1 Complete</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </View>
+            );
+          })()}
+          
+          {/* BTS Down Maintenance Card */}
+          {eventData.category?.includes('BTS_DOWN') && eventData.targetBtsDown > 0 && (() => {
+            const timeInfo = calculateTimeInfo(eventData.startDate, eventData.endDate, eventData.btsDownCompleted || 0, eventData.targetBtsDown, currentTime);
+            const completionPct = Math.round(((eventData.btsDownCompleted || 0) / eventData.targetBtsDown) * 100);
+            return (
+              <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.BTS_DOWN.color }]}>
+                <View style={styles.categoryCardHeader}>
+                  <View style={styles.categoryTitleRow}>
+                    <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.BTS_DOWN.bg }]}>
+                      <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.BTS_DOWN.color }]}>BTS</Text>
+                    </View>
+                    <View style={styles.categoryTitleInfo}>
+                      <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.BTS_DOWN.label}</Text>
+                      <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                    </View>
+                  </View>
+                  <View style={[styles.statusBadgeMini, { backgroundColor: timeInfo.urgencyBg }]}>
+                    <Text style={[styles.statusBadgeMiniText, { color: timeInfo.urgencyColor }]}>{timeInfo.urgencyLabel}</Text>
+                  </View>
+                </View>
+                
+                <View style={styles.maintenanceStats}>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Target</Text>
+                    <Text style={styles.maintenanceStatValue}>{eventData.targetBtsDown}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Completed</Text>
+                    <Text style={[styles.maintenanceStatValue, { color: CATEGORY_CONFIG.BTS_DOWN.color }]}>{eventData.btsDownCompleted || 0}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Remaining</Text>
+                    <Text style={styles.maintenanceStatValue}>{eventData.targetBtsDown - (eventData.btsDownCompleted || 0)}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Time Left</Text>
+                    <Text style={styles.maintenanceStatValue}>{timeInfo.remaining}</Text>
+                  </View>
+                </View>
+                
+                <View style={styles.categoryProgressBar}>
+                  <View style={[styles.categoryProgressFill, { width: `${completionPct}%`, backgroundColor: CATEGORY_CONFIG.BTS_DOWN.color }]} />
+                </View>
+                
+                {/* Team Members for BTS Down */}
+                {eventData.teamWithAllocations && eventData.teamWithAllocations.length > 0 && (
+                  <View style={styles.categoryAssignees}>
+                    <Text style={styles.assigneesLabel}>Assigned Team ({eventData.teamWithAllocations.length})</Text>
+                    {eventData.teamWithAllocations.map((member: any, idx: number) => {
+                      const memberTarget = getDistributedTarget(eventData.targetBtsDown, eventData.teamWithAllocations.length, idx);
+                      return (
+                        <View key={member.id} style={styles.assigneeRow}>
+                          <View style={styles.assigneeInfo}>
+                            <View style={[styles.assigneeAvatar, { backgroundColor: getAvatarColor(member.employee?.name || 'U') }]}>
+                              <Text style={[styles.assigneeAvatarText, { color: '#fff' }]}>
+                                {(member.employee?.name || 'U').split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase()}
+                              </Text>
+                            </View>
+                            <View style={styles.assigneeDetails}>
+                              <Text style={styles.assigneeName}>{member.employee?.name || 'Unknown'}</Text>
+                              <Text style={styles.assigneeRole}>{member.employee?.designation || member.employee?.role}{member.employee?.persNo ? ` | ${member.employee.persNo}` : ''}</Text>
+                            </View>
+                          </View>
+                          <View style={styles.assigneeProgress}>
+                            <Text style={styles.assigneeProgressText}>Target: {memberTarget}</Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+                
+                {(canManageTeam || isTeamMember) && dbStatus === 'active' && (
+                  <View style={styles.maintenanceActions}>
+                    {(eventData.btsDownCompleted || 0) > 0 && (
+                      <TouchableOpacity style={[styles.maintenanceActionBtn, { borderColor: CATEGORY_CONFIG.BTS_DOWN.color }]} onPress={() => handleMarkTaskComplete('BTS_DOWN', -1)}>
+                        <Text style={[styles.maintenanceActionBtnText, { color: CATEGORY_CONFIG.BTS_DOWN.color }]}>-1</Text>
+                      </TouchableOpacity>
+                    )}
+                    {(eventData.btsDownCompleted || 0) < eventData.targetBtsDown && (
+                      <TouchableOpacity style={[styles.maintenanceActionBtnPrimary, { backgroundColor: CATEGORY_CONFIG.BTS_DOWN.color }]} onPress={() => handleMarkTaskComplete('BTS_DOWN')}>
+                        <CheckCircle size={16} color="#fff" />
+                        <Text style={styles.maintenanceActionBtnPrimaryText}>Mark +1 Complete</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </View>
+            );
+          })()}
+          
+          {/* Route Fail Maintenance Card */}
+          {eventData.category?.includes('ROUTE_FAIL') && eventData.targetRouteFail > 0 && (() => {
+            const timeInfo = calculateTimeInfo(eventData.startDate, eventData.endDate, eventData.routeFailCompleted || 0, eventData.targetRouteFail, currentTime);
+            const completionPct = Math.round(((eventData.routeFailCompleted || 0) / eventData.targetRouteFail) * 100);
+            return (
+              <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.ROUTE_FAIL.color }]}>
+                <View style={styles.categoryCardHeader}>
+                  <View style={styles.categoryTitleRow}>
+                    <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.ROUTE_FAIL.bg }]}>
+                      <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.ROUTE_FAIL.color }]}>RF</Text>
+                    </View>
+                    <View style={styles.categoryTitleInfo}>
+                      <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.ROUTE_FAIL.label}</Text>
+                      <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                    </View>
+                  </View>
+                  <View style={[styles.statusBadgeMini, { backgroundColor: timeInfo.urgencyBg }]}>
+                    <Text style={[styles.statusBadgeMiniText, { color: timeInfo.urgencyColor }]}>{timeInfo.urgencyLabel}</Text>
+                  </View>
+                </View>
+                
+                <View style={styles.maintenanceStats}>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Target</Text>
+                    <Text style={styles.maintenanceStatValue}>{eventData.targetRouteFail}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Completed</Text>
+                    <Text style={[styles.maintenanceStatValue, { color: CATEGORY_CONFIG.ROUTE_FAIL.color }]}>{eventData.routeFailCompleted || 0}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Remaining</Text>
+                    <Text style={styles.maintenanceStatValue}>{eventData.targetRouteFail - (eventData.routeFailCompleted || 0)}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Time Left</Text>
+                    <Text style={styles.maintenanceStatValue}>{timeInfo.remaining}</Text>
+                  </View>
+                </View>
+                
+                <View style={styles.categoryProgressBar}>
+                  <View style={[styles.categoryProgressFill, { width: `${completionPct}%`, backgroundColor: CATEGORY_CONFIG.ROUTE_FAIL.color }]} />
+                </View>
+                
+                {/* Team Members for Route Fail */}
+                {eventData.teamWithAllocations && eventData.teamWithAllocations.length > 0 && (
+                  <View style={styles.categoryAssignees}>
+                    <Text style={styles.assigneesLabel}>Assigned Team ({eventData.teamWithAllocations.length})</Text>
+                    {eventData.teamWithAllocations.map((member: any, idx: number) => {
+                      const memberTarget = getDistributedTarget(eventData.targetRouteFail, eventData.teamWithAllocations.length, idx);
+                      return (
+                        <View key={member.id} style={styles.assigneeRow}>
+                          <View style={styles.assigneeInfo}>
+                            <View style={[styles.assigneeAvatar, { backgroundColor: getAvatarColor(member.employee?.name || 'U') }]}>
+                              <Text style={[styles.assigneeAvatarText, { color: '#fff' }]}>
+                                {(member.employee?.name || 'U').split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase()}
+                              </Text>
+                            </View>
+                            <View style={styles.assigneeDetails}>
+                              <Text style={styles.assigneeName}>{member.employee?.name || 'Unknown'}</Text>
+                              <Text style={styles.assigneeRole}>{member.employee?.designation || member.employee?.role}{member.employee?.persNo ? ` | ${member.employee.persNo}` : ''}</Text>
+                            </View>
+                          </View>
+                          <View style={styles.assigneeProgress}>
+                            <Text style={styles.assigneeProgressText}>Target: {memberTarget}</Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+                
+                {(canManageTeam || isTeamMember) && dbStatus === 'active' && (
+                  <View style={styles.maintenanceActions}>
+                    {(eventData.routeFailCompleted || 0) > 0 && (
+                      <TouchableOpacity style={[styles.maintenanceActionBtn, { borderColor: CATEGORY_CONFIG.ROUTE_FAIL.color }]} onPress={() => handleMarkTaskComplete('ROUTE_FAIL', -1)}>
+                        <Text style={[styles.maintenanceActionBtnText, { color: CATEGORY_CONFIG.ROUTE_FAIL.color }]}>-1</Text>
+                      </TouchableOpacity>
+                    )}
+                    {(eventData.routeFailCompleted || 0) < eventData.targetRouteFail && (
+                      <TouchableOpacity style={[styles.maintenanceActionBtnPrimary, { backgroundColor: CATEGORY_CONFIG.ROUTE_FAIL.color }]} onPress={() => handleMarkTaskComplete('ROUTE_FAIL')}>
+                        <CheckCircle size={16} color="#fff" />
+                        <Text style={styles.maintenanceActionBtnPrimaryText}>Mark +1 Complete</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </View>
+            );
+          })()}
+          
+          {/* FTTH Down Maintenance Card */}
+          {eventData.category?.includes('FTTH_DOWN') && eventData.targetFtthDown > 0 && (() => {
+            const timeInfo = calculateTimeInfo(eventData.startDate, eventData.endDate, eventData.ftthDownCompleted || 0, eventData.targetFtthDown, currentTime);
+            const completionPct = Math.round(((eventData.ftthDownCompleted || 0) / eventData.targetFtthDown) * 100);
+            return (
+              <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.FTTH_DOWN.color }]}>
+                <View style={styles.categoryCardHeader}>
+                  <View style={styles.categoryTitleRow}>
+                    <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.FTTH_DOWN.bg }]}>
+                      <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.FTTH_DOWN.color }]}>FD</Text>
+                    </View>
+                    <View style={styles.categoryTitleInfo}>
+                      <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.FTTH_DOWN.label}</Text>
+                      <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                    </View>
+                  </View>
+                  <View style={[styles.statusBadgeMini, { backgroundColor: timeInfo.urgencyBg }]}>
+                    <Text style={[styles.statusBadgeMiniText, { color: timeInfo.urgencyColor }]}>{timeInfo.urgencyLabel}</Text>
+                  </View>
+                </View>
+                
+                <View style={styles.maintenanceStats}>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Target</Text>
+                    <Text style={styles.maintenanceStatValue}>{eventData.targetFtthDown}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Completed</Text>
+                    <Text style={[styles.maintenanceStatValue, { color: CATEGORY_CONFIG.FTTH_DOWN.color }]}>{eventData.ftthDownCompleted || 0}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Remaining</Text>
+                    <Text style={styles.maintenanceStatValue}>{eventData.targetFtthDown - (eventData.ftthDownCompleted || 0)}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Time Left</Text>
+                    <Text style={styles.maintenanceStatValue}>{timeInfo.remaining}</Text>
+                  </View>
+                </View>
+                
+                <View style={styles.categoryProgressBar}>
+                  <View style={[styles.categoryProgressFill, { width: `${completionPct}%`, backgroundColor: CATEGORY_CONFIG.FTTH_DOWN.color }]} />
+                </View>
+                
+                {/* Team Members for FTTH Down */}
+                {eventData.teamWithAllocations && eventData.teamWithAllocations.length > 0 && (
+                  <View style={styles.categoryAssignees}>
+                    <Text style={styles.assigneesLabel}>Assigned Team ({eventData.teamWithAllocations.length})</Text>
+                    {eventData.teamWithAllocations.map((member: any, idx: number) => {
+                      const memberTarget = getDistributedTarget(eventData.targetFtthDown, eventData.teamWithAllocations.length, idx);
+                      return (
+                        <View key={member.id} style={styles.assigneeRow}>
+                          <View style={styles.assigneeInfo}>
+                            <View style={[styles.assigneeAvatar, { backgroundColor: getAvatarColor(member.employee?.name || 'U') }]}>
+                              <Text style={[styles.assigneeAvatarText, { color: '#fff' }]}>
+                                {(member.employee?.name || 'U').split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase()}
+                              </Text>
+                            </View>
+                            <View style={styles.assigneeDetails}>
+                              <Text style={styles.assigneeName}>{member.employee?.name || 'Unknown'}</Text>
+                              <Text style={styles.assigneeRole}>{member.employee?.designation || member.employee?.role}{member.employee?.persNo ? ` | ${member.employee.persNo}` : ''}</Text>
+                            </View>
+                          </View>
+                          <View style={styles.assigneeProgress}>
+                            <Text style={styles.assigneeProgressText}>Target: {memberTarget}</Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+                
+                {(canManageTeam || isTeamMember) && dbStatus === 'active' && (
+                  <View style={styles.maintenanceActions}>
+                    {(eventData.ftthDownCompleted || 0) > 0 && (
+                      <TouchableOpacity style={[styles.maintenanceActionBtn, { borderColor: CATEGORY_CONFIG.FTTH_DOWN.color }]} onPress={() => handleMarkTaskComplete('FTTH_DOWN', -1)}>
+                        <Text style={[styles.maintenanceActionBtnText, { color: CATEGORY_CONFIG.FTTH_DOWN.color }]}>-1</Text>
+                      </TouchableOpacity>
+                    )}
+                    {(eventData.ftthDownCompleted || 0) < eventData.targetFtthDown && (
+                      <TouchableOpacity style={[styles.maintenanceActionBtnPrimary, { backgroundColor: CATEGORY_CONFIG.FTTH_DOWN.color }]} onPress={() => handleMarkTaskComplete('FTTH_DOWN')}>
+                        <CheckCircle size={16} color="#fff" />
+                        <Text style={styles.maintenanceActionBtnPrimaryText}>Mark +1 Complete</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </View>
+            );
+          })()}
+          
+          {/* OFC Fail Maintenance Card */}
+          {eventData.category?.includes('OFC_FAIL') && eventData.targetOfcFail > 0 && (() => {
+            const timeInfo = calculateTimeInfo(eventData.startDate, eventData.endDate, eventData.ofcFailCompleted || 0, eventData.targetOfcFail, currentTime);
+            const completionPct = Math.round(((eventData.ofcFailCompleted || 0) / eventData.targetOfcFail) * 100);
+            return (
+              <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.OFC_FAIL.color }]}>
+                <View style={styles.categoryCardHeader}>
+                  <View style={styles.categoryTitleRow}>
+                    <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.OFC_FAIL.bg }]}>
+                      <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.OFC_FAIL.color }]}>OFC</Text>
+                    </View>
+                    <View style={styles.categoryTitleInfo}>
+                      <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.OFC_FAIL.label}</Text>
+                      <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                    </View>
+                  </View>
+                  <View style={[styles.statusBadgeMini, { backgroundColor: timeInfo.urgencyBg }]}>
+                    <Text style={[styles.statusBadgeMiniText, { color: timeInfo.urgencyColor }]}>{timeInfo.urgencyLabel}</Text>
+                  </View>
+                </View>
+                
+                <View style={styles.maintenanceStats}>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Target</Text>
+                    <Text style={styles.maintenanceStatValue}>{eventData.targetOfcFail}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Completed</Text>
+                    <Text style={[styles.maintenanceStatValue, { color: CATEGORY_CONFIG.OFC_FAIL.color }]}>{eventData.ofcFailCompleted || 0}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Remaining</Text>
+                    <Text style={styles.maintenanceStatValue}>{eventData.targetOfcFail - (eventData.ofcFailCompleted || 0)}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Time Left</Text>
+                    <Text style={styles.maintenanceStatValue}>{timeInfo.remaining}</Text>
+                  </View>
+                </View>
+                
+                <View style={styles.categoryProgressBar}>
+                  <View style={[styles.categoryProgressFill, { width: `${completionPct}%`, backgroundColor: CATEGORY_CONFIG.OFC_FAIL.color }]} />
+                </View>
+                
+                {/* Team Members for OFC Fail */}
+                {eventData.teamWithAllocations && eventData.teamWithAllocations.length > 0 && (
+                  <View style={styles.categoryAssignees}>
+                    <Text style={styles.assigneesLabel}>Assigned Team ({eventData.teamWithAllocations.length})</Text>
+                    {eventData.teamWithAllocations.map((member: any, idx: number) => {
+                      const memberTarget = getDistributedTarget(eventData.targetOfcFail, eventData.teamWithAllocations.length, idx);
+                      return (
+                        <View key={member.id} style={styles.assigneeRow}>
+                          <View style={styles.assigneeInfo}>
+                            <View style={[styles.assigneeAvatar, { backgroundColor: getAvatarColor(member.employee?.name || 'U') }]}>
+                              <Text style={[styles.assigneeAvatarText, { color: '#fff' }]}>
+                                {(member.employee?.name || 'U').split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase()}
+                              </Text>
+                            </View>
+                            <View style={styles.assigneeDetails}>
+                              <Text style={styles.assigneeName}>{member.employee?.name || 'Unknown'}</Text>
+                              <Text style={styles.assigneeRole}>{member.employee?.designation || member.employee?.role}{member.employee?.persNo ? ` | ${member.employee.persNo}` : ''}</Text>
+                            </View>
+                          </View>
+                          <View style={styles.assigneeProgress}>
+                            <Text style={styles.assigneeProgressText}>Target: {memberTarget}</Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+                
+                {(canManageTeam || isTeamMember) && dbStatus === 'active' && (
+                  <View style={styles.maintenanceActions}>
+                    {(eventData.ofcFailCompleted || 0) > 0 && (
+                      <TouchableOpacity style={[styles.maintenanceActionBtn, { borderColor: CATEGORY_CONFIG.OFC_FAIL.color }]} onPress={() => handleMarkTaskComplete('OFC_FAIL', -1)}>
+                        <Text style={[styles.maintenanceActionBtnText, { color: CATEGORY_CONFIG.OFC_FAIL.color }]}>-1</Text>
+                      </TouchableOpacity>
+                    )}
+                    {(eventData.ofcFailCompleted || 0) < eventData.targetOfcFail && (
+                      <TouchableOpacity style={[styles.maintenanceActionBtnPrimary, { backgroundColor: CATEGORY_CONFIG.OFC_FAIL.color }]} onPress={() => handleMarkTaskComplete('OFC_FAIL')}>
+                        <CheckCircle size={16} color="#fff" />
+                        <Text style={styles.maintenanceActionBtnPrimaryText}>Mark +1 Complete</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </View>
+            );
+          })()}
+          
+          {/* EB Connections Maintenance Card */}
+          {eventData.targetEb > 0 && (() => {
+            const timeInfo = calculateTimeInfo(eventData.startDate, eventData.endDate, eventData.ebCompleted || 0, eventData.targetEb, currentTime);
+            const completionPct = Math.round(((eventData.ebCompleted || 0) / eventData.targetEb) * 100);
+            return (
+              <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.EB.color }]}>
+                <View style={styles.categoryCardHeader}>
+                  <View style={styles.categoryTitleRow}>
+                    <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.EB.bg }]}>
+                      <Zap size={16} color={CATEGORY_CONFIG.EB.color} />
+                    </View>
+                    <View style={styles.categoryTitleInfo}>
+                      <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.EB.label}</Text>
+                      <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                    </View>
+                  </View>
+                  <View style={[styles.statusBadgeMini, { backgroundColor: timeInfo.urgencyBg }]}>
+                    <Text style={[styles.statusBadgeMiniText, { color: timeInfo.urgencyColor }]}>{timeInfo.urgencyLabel}</Text>
+                  </View>
+                </View>
+                
+                <View style={styles.maintenanceStats}>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Target</Text>
+                    <Text style={styles.maintenanceStatValue}>{eventData.targetEb}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Completed</Text>
+                    <Text style={[styles.maintenanceStatValue, { color: CATEGORY_CONFIG.EB.color }]}>{eventData.ebCompleted || 0}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Remaining</Text>
+                    <Text style={styles.maintenanceStatValue}>{eventData.targetEb - (eventData.ebCompleted || 0)}</Text>
+                  </View>
+                  <View style={styles.maintenanceStatItem}>
+                    <Text style={styles.maintenanceStatLabel}>Time Left</Text>
+                    <Text style={styles.maintenanceStatValue}>{timeInfo.remaining}</Text>
+                  </View>
+                </View>
+                
+                <View style={styles.categoryProgressBar}>
+                  <View style={[styles.categoryProgressFill, { width: `${completionPct}%`, backgroundColor: CATEGORY_CONFIG.EB.color }]} />
+                </View>
+                
+                {/* Team Members for EB */}
+                {eventData.teamWithAllocations && eventData.teamWithAllocations.length > 0 && (
+                  <View style={styles.categoryAssignees}>
+                    <Text style={styles.assigneesLabel}>Assigned Team ({eventData.teamWithAllocations.length})</Text>
+                    {eventData.teamWithAllocations.map((member: any, idx: number) => {
+                      const memberTarget = getDistributedTarget(eventData.targetEb, eventData.teamWithAllocations.length, idx);
+                      return (
+                        <View key={member.id} style={styles.assigneeRow}>
+                          <View style={styles.assigneeInfo}>
+                            <View style={[styles.assigneeAvatar, { backgroundColor: getAvatarColor(member.employee?.name || 'U') }]}>
+                              <Text style={[styles.assigneeAvatarText, { color: '#fff' }]}>
+                                {(member.employee?.name || 'U').split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase()}
+                              </Text>
+                            </View>
+                            <View style={styles.assigneeDetails}>
+                              <Text style={styles.assigneeName}>{member.employee?.name || 'Unknown'}</Text>
+                              <Text style={styles.assigneeRole}>{member.employee?.designation || member.employee?.role}{member.employee?.persNo ? ` | ${member.employee.persNo}` : ''}</Text>
+                            </View>
+                          </View>
+                          <View style={styles.assigneeProgress}>
+                            <Text style={styles.assigneeProgressText}>Target: {memberTarget}</Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+                
+                {(canManageTeam || isTeamMember) && dbStatus === 'active' && (
+                  <View style={styles.maintenanceActions}>
+                    {(eventData.ebCompleted || 0) > 0 && (
+                      <TouchableOpacity style={[styles.maintenanceActionBtn, { borderColor: CATEGORY_CONFIG.EB.color }]} onPress={() => handleMarkTaskComplete('EB', -1)}>
+                        <Text style={[styles.maintenanceActionBtnText, { color: CATEGORY_CONFIG.EB.color }]}>-1</Text>
+                      </TouchableOpacity>
+                    )}
+                    {(eventData.ebCompleted || 0) < eventData.targetEb && (
+                      <TouchableOpacity style={[styles.maintenanceActionBtnPrimary, { backgroundColor: CATEGORY_CONFIG.EB.color }]} onPress={() => handleMarkTaskComplete('EB')}>
+                        <CheckCircle size={16} color="#fff" />
+                        <Text style={styles.maintenanceActionBtnPrimaryText}>Mark +1 Complete</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </View>
+            );
+          })()}
         </View>
+        {/* ===== END CATEGORY-BASED TASK CARDS ===== */}
 
-        {/* Additional Task Progress Section - EB, Lease, and Maintenance */}
-        {(eventData.targetEb > 0 || eventData.targetLease > 0 || eventData.targetBtsDown > 0 || 
-          eventData.targetFtthDown > 0 || eventData.targetRouteFail > 0 || eventData.targetOfcFail > 0) ? (
-          <View style={styles.summarySection}>
-            <Text style={styles.sectionTitle}>Additional Task Progress</Text>
-            <View style={styles.maintenanceTasksGrid}>
-              {eventData.targetEb > 0 && (
-                <View style={styles.maintenanceCard}>
-                  <View style={styles.maintenanceHeader}>
-                    <Text style={styles.maintenanceLabel}>EB Connections</Text>
-                    <Text style={styles.maintenanceProgress}>{eventData.ebCompleted || 0}/{eventData.targetEb}</Text>
-                  </View>
-                  <View style={styles.progressBar}>
-                    <View style={[styles.progressFill, { width: `${Math.min(((eventData.ebCompleted || 0) / eventData.targetEb) * 100, 100)}%`, backgroundColor: '#7B1FA2' }]} />
-                  </View>
-                  {canManageTeam && (
-                    <View style={styles.taskButtonRow}>
-                      {(eventData.ebCompleted || 0) > 0 && (
-                        <TouchableOpacity style={[styles.undoBtn, { borderColor: '#7B1FA2' }]} onPress={() => handleMarkTaskComplete('EB', -1)}>
-                          <Text style={[styles.undoBtnText, { color: '#7B1FA2' }]}>-1</Text>
-                        </TouchableOpacity>
-                      )}
-                      {(eventData.ebCompleted || 0) < eventData.targetEb && (
-                        <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#F3E5F5' }]} onPress={() => handleMarkTaskComplete('EB')}>
-                          <CheckCircle size={14} color="#7B1FA2" />
-                          <Text style={[styles.markCompleteBtnText, { color: '#7B1FA2' }]}>+1 Complete</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  )}
-                </View>
-              )}
-              {eventData.targetLease > 0 && (
-                <View style={styles.maintenanceCard}>
-                  <View style={styles.maintenanceHeader}>
-                    <Text style={styles.maintenanceLabel}>Lease Circuit</Text>
-                    <Text style={styles.maintenanceProgress}>{eventData.leaseCompleted || 0}/{eventData.targetLease}</Text>
-                  </View>
-                  <View style={styles.progressBar}>
-                    <View style={[styles.progressFill, { width: `${Math.min(((eventData.leaseCompleted || 0) / eventData.targetLease) * 100, 100)}%`, backgroundColor: '#EF6C00' }]} />
-                  </View>
-                  {canManageTeam && (
-                    <View style={styles.taskButtonRow}>
-                      {(eventData.leaseCompleted || 0) > 0 && (
-                        <TouchableOpacity style={[styles.undoBtn, { borderColor: '#EF6C00' }]} onPress={() => handleMarkTaskComplete('LEASE', -1)}>
-                          <Text style={[styles.undoBtnText, { color: '#EF6C00' }]}>-1</Text>
-                        </TouchableOpacity>
-                      )}
-                      {(eventData.leaseCompleted || 0) < eventData.targetLease && (
-                        <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FFF3E0' }]} onPress={() => handleMarkTaskComplete('LEASE')}>
-                          <CheckCircle size={14} color="#EF6C00" />
-                          <Text style={[styles.markCompleteBtnText, { color: '#EF6C00' }]}>+1 Complete</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  )}
-                </View>
-              )}
-              {eventData.targetBtsDown > 0 && (
-                <View style={styles.maintenanceCard}>
-                  <View style={styles.maintenanceHeader}>
-                    <Text style={styles.maintenanceLabel}>BTS Down</Text>
-                    <Text style={styles.maintenanceProgress}>{eventData.btsDownCompleted || 0}/{eventData.targetBtsDown}</Text>
-                  </View>
-                  <View style={styles.progressBar}>
-                    <View style={[styles.progressFill, { width: `${Math.min(((eventData.btsDownCompleted || 0) / eventData.targetBtsDown) * 100, 100)}%`, backgroundColor: '#C62828' }]} />
-                  </View>
-                  {canManageTeam && (
-                    <View style={styles.taskButtonRow}>
-                      {(eventData.btsDownCompleted || 0) > 0 && (
-                        <TouchableOpacity style={[styles.undoBtn, { borderColor: '#C62828' }]} onPress={() => handleMarkTaskComplete('BTS_DOWN', -1)}>
-                          <Text style={[styles.undoBtnText, { color: '#C62828' }]}>-1</Text>
-                        </TouchableOpacity>
-                      )}
-                      {(eventData.btsDownCompleted || 0) < eventData.targetBtsDown && (
-                        <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FFEBEE' }]} onPress={() => handleMarkTaskComplete('BTS_DOWN')}>
-                          <CheckCircle size={14} color="#C62828" />
-                          <Text style={[styles.markCompleteBtnText, { color: '#C62828' }]}>+1 Fixed</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  )}
-                </View>
-              )}
-              {eventData.targetFtthDown > 0 && (
-                <View style={styles.maintenanceCard}>
-                  <View style={styles.maintenanceHeader}>
-                    <Text style={styles.maintenanceLabel}>FTTH Down</Text>
-                    <Text style={styles.maintenanceProgress}>{eventData.ftthDownCompleted || 0}/{eventData.targetFtthDown}</Text>
-                  </View>
-                  <View style={styles.progressBar}>
-                    <View style={[styles.progressFill, { width: `${Math.min(((eventData.ftthDownCompleted || 0) / eventData.targetFtthDown) * 100, 100)}%`, backgroundColor: '#D81B60' }]} />
-                  </View>
-                  {canManageTeam && (
-                    <View style={styles.taskButtonRow}>
-                      {(eventData.ftthDownCompleted || 0) > 0 && (
-                        <TouchableOpacity style={[styles.undoBtn, { borderColor: '#D81B60' }]} onPress={() => handleMarkTaskComplete('FTTH_DOWN', -1)}>
-                          <Text style={[styles.undoBtnText, { color: '#D81B60' }]}>-1</Text>
-                        </TouchableOpacity>
-                      )}
-                      {(eventData.ftthDownCompleted || 0) < eventData.targetFtthDown && (
-                        <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FCE4EC' }]} onPress={() => handleMarkTaskComplete('FTTH_DOWN')}>
-                          <CheckCircle size={14} color="#D81B60" />
-                          <Text style={[styles.markCompleteBtnText, { color: '#D81B60' }]}>+1 Fixed</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  )}
-                </View>
-              )}
-              {eventData.targetRouteFail > 0 && (
-                <View style={styles.maintenanceCard}>
-                  <View style={styles.maintenanceHeader}>
-                    <Text style={styles.maintenanceLabel}>Route Fail</Text>
-                    <Text style={styles.maintenanceProgress}>{eventData.routeFailCompleted || 0}/{eventData.targetRouteFail}</Text>
-                  </View>
-                  <View style={styles.progressBar}>
-                    <View style={[styles.progressFill, { width: `${Math.min(((eventData.routeFailCompleted || 0) / eventData.targetRouteFail) * 100, 100)}%`, backgroundColor: '#E65100' }]} />
-                  </View>
-                  {canManageTeam && (
-                    <View style={styles.taskButtonRow}>
-                      {(eventData.routeFailCompleted || 0) > 0 && (
-                        <TouchableOpacity style={[styles.undoBtn, { borderColor: '#E65100' }]} onPress={() => handleMarkTaskComplete('ROUTE_FAIL', -1)}>
-                          <Text style={[styles.undoBtnText, { color: '#E65100' }]}>-1</Text>
-                        </TouchableOpacity>
-                      )}
-                      {(eventData.routeFailCompleted || 0) < eventData.targetRouteFail && (
-                        <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#FBE9E7' }]} onPress={() => handleMarkTaskComplete('ROUTE_FAIL')}>
-                          <CheckCircle size={14} color="#E65100" />
-                          <Text style={[styles.markCompleteBtnText, { color: '#E65100' }]}>+1 Fixed</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  )}
-                </View>
-              )}
-              {eventData.targetOfcFail > 0 && (
-                <View style={styles.maintenanceCard}>
-                  <View style={styles.maintenanceHeader}>
-                    <Text style={styles.maintenanceLabel}>OFC Fail</Text>
-                    <Text style={styles.maintenanceProgress}>{eventData.ofcFailCompleted || 0}/{eventData.targetOfcFail}</Text>
-                  </View>
-                  <View style={styles.progressBar}>
-                    <View style={[styles.progressFill, { width: `${Math.min(((eventData.ofcFailCompleted || 0) / eventData.targetOfcFail) * 100, 100)}%`, backgroundColor: '#546E7A' }]} />
-                  </View>
-                  {canManageTeam && (
-                    <View style={styles.taskButtonRow}>
-                      {(eventData.ofcFailCompleted || 0) > 0 && (
-                        <TouchableOpacity style={[styles.undoBtn, { borderColor: '#546E7A' }]} onPress={() => handleMarkTaskComplete('OFC_FAIL', -1)}>
-                          <Text style={[styles.undoBtnText, { color: '#546E7A' }]}>-1</Text>
-                        </TouchableOpacity>
-                      )}
-                      {(eventData.ofcFailCompleted || 0) < eventData.targetOfcFail && (
-                        <TouchableOpacity style={[styles.markCompleteBtn, { backgroundColor: '#ECEFF1' }]} onPress={() => handleMarkTaskComplete('OFC_FAIL')}>
-                          <CheckCircle size={14} color="#546E7A" />
-                          <Text style={[styles.markCompleteBtnText, { color: '#546E7A' }]}>+1 Fixed</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  )}
-                </View>
-              )}
-            </View>
-          </View>
-        ) : null}
+        {/* Old Maintenance Tasks section removed - now integrated into Category Cards */}
 
         {/* Activity Log Section */}
         {activityLogs && activityLogs.length > 0 && (
@@ -1036,6 +1658,7 @@ export default function EventDetailScreen() {
           </View>
         )}
 
+        {/* Subtask feature temporarily disabled
         <View style={styles.subtasksSection}>
           <View style={styles.sectionHeader}>
             <View style={styles.sectionTitleRow}>
@@ -1159,6 +1782,7 @@ export default function EventDetailScreen() {
             ))
           )}
         </View>
+        */}
 
         {eventData.assignedToEmployee && (
           <View style={styles.managerSection}>
@@ -1183,99 +1807,9 @@ export default function EventDetailScreen() {
           </View>
         )}
 
-        <View style={styles.teamSection}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Field Team ({eventData.teamWithAllocations?.filter((m: any) => m.employeeId !== eventData.assignedTo).length || 0})</Text>
-            {canManageTeam && dbStatus !== 'completed' && dbStatus !== 'cancelled' && (
-              <TouchableOpacity 
-                style={styles.addButton}
-                onPress={() => setShowAssignModal(true)}
-              >
-                <Plus size={18} color={Colors.light.background} />
-                <Text style={styles.addButtonText}>Assign Field Officer</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          
-          {eventData.teamWithAllocations?.filter((m: any) => m.employeeId !== eventData.assignedTo).length === 0 ? (
-            <View style={styles.emptyTeam}>
-              <Users size={40} color={Colors.light.textSecondary} />
-              <Text style={styles.emptyTeamText}>No field officers assigned yet</Text>
-              {canManageTeam && <Text style={styles.emptyTeamHint}>Tap "Assign Field Officer" to add team members</Text>}
-            </View>
-          ) : (
-            eventData.teamWithAllocations?.filter((m: any) => m.employeeId !== eventData.assignedTo).map((member: any) => (
-              <View key={member.id} style={styles.teamMemberCard}>
-                <View style={styles.memberHeader}>
-                  <View style={styles.memberInfo}>
-                    <View style={styles.avatarCircle}>
-                      <User size={20} color={Colors.light.primary} />
-                    </View>
-                    <View>
-                      <Text style={styles.memberName}>{member.employee?.name || 'Unknown'}</Text>
-                      <Text style={styles.memberRole}>{member.employee?.designation || member.employee?.role}{member.employee?.persNo ? ` | ${member.employee.persNo}` : ''}</Text>
-                    </View>
-                  </View>
-                  {canManageTeam && dbStatus !== 'completed' && dbStatus !== 'cancelled' && (
-                    <View style={styles.memberActions}>
-                      <TouchableOpacity 
-                        onPress={() => openEditTargetModal(member)}
-                        style={styles.editTargetBtn}
-                      >
-                        <Edit3 size={16} color={Colors.light.primary} />
-                      </TouchableOpacity>
-                      <TouchableOpacity 
-                        onPress={() => handleRemoveMember(member.employeeId, member.employee?.name || 'this member')}
-                        style={styles.removeButton}
-                      >
-                        <Trash2 size={16} color={Colors.light.error} />
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                </View>
-                
-                <View style={styles.memberTargets}>
-                  <View style={styles.targetItem}>
-                    <Text style={styles.targetLabel}>SIM Target</Text>
-                    <Text style={styles.targetValue}>{member.actualSimSold} / {member.simTarget}</Text>
-                    <View style={styles.miniProgressBar}>
-                      <View 
-                        style={[
-                          styles.miniProgressFill, 
-                          { 
-                            width: member.simTarget > 0 ? `${Math.min((member.actualSimSold / member.simTarget) * 100, 100)}%` : '0%',
-                            backgroundColor: Colors.light.primary 
-                          }
-                        ]} 
-                      />
-                    </View>
-                  </View>
-                  <View style={styles.targetItem}>
-                    <Text style={styles.targetLabel}>FTTH Target</Text>
-                    <Text style={styles.targetValue}>{member.actualFtthSold} / {member.ftthTarget}</Text>
-                    <View style={styles.miniProgressBar}>
-                      <View 
-                        style={[
-                          styles.miniProgressFill, 
-                          { 
-                            width: member.ftthTarget > 0 ? `${Math.min((member.actualFtthSold / member.ftthTarget) * 100, 100)}%` : '0%',
-                            backgroundColor: Colors.light.success 
-                          }
-                        ]} 
-                      />
-                    </View>
-                  </View>
-                </View>
-                
-                {member.salesEntries?.length > 0 && (
-                  <Text style={styles.entriesCount}>{member.salesEntries.length} sales entries</Text>
-                )}
-              </View>
-            ))
-          )}
-        </View>
+        {/* Old Sales Team section removed - now integrated into Category Cards above */}
 
-        {(isTeamMember || canManageTeam) && dbStatus === 'active' && (
+        {(isTeamMember || canManageTeam) && dbStatus === 'active' && (eventData.category?.includes('SIM') || (eventData.category?.includes('FTTH') && !eventData.category?.includes('FTTH_DOWN'))) && (
           <TouchableOpacity 
             style={styles.submitSalesButton}
             onPress={() => router.push(`/event-sales?eventId=${id}`)}
@@ -1394,45 +1928,176 @@ export default function EventDetailScreen() {
       {/* Edit Event Modal */}
       <Modal visible={showEditModal} animationType="slide" transparent={true} onRequestClose={() => setShowEditModal(false)}>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { maxHeight: '90%' }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Edit Event</Text>
+              <Text style={styles.modalTitle}>Edit Task</Text>
               <TouchableOpacity onPress={() => setShowEditModal(false)}>
                 <X size={24} color={Colors.light.text} />
               </TouchableOpacity>
             </View>
             
-            <ScrollView style={styles.modalBody}>
-              <Text style={styles.inputLabel}>Task Name</Text>
-              <TextInput style={styles.input} value={editName} onChangeText={setEditName} placeholder="Event name" />
-              
-              <Text style={styles.inputLabel}>Location</Text>
-              <TextInput style={styles.input} value={editLocation} onChangeText={setEditLocation} placeholder="Location" />
-              
-              <View style={styles.row}>
-                <View style={styles.halfInput}>
-                  <Text style={styles.inputLabel}>Start Date</Text>
-                  <TextInput style={styles.input} value={editStartDate} onChangeText={setEditStartDate} placeholder="YYYY-MM-DD" />
-                </View>
-                <View style={styles.halfInput}>
-                  <Text style={styles.inputLabel}>End Date</Text>
-                  <TextInput style={styles.input} value={editEndDate} onChangeText={setEditEndDate} placeholder="YYYY-MM-DD" />
-                </View>
-              </View>
-              
-              <View style={styles.row}>
-                <View style={styles.halfInput}>
-                  <Text style={styles.inputLabel}>SIM Target</Text>
-                  <TextInput style={styles.input} value={editTargetSim} onChangeText={setEditTargetSim} keyboardType="number-pad" />
-                </View>
-                <View style={styles.halfInput}>
-                  <Text style={styles.inputLabel}>FTTH Target</Text>
-                  <TextInput style={styles.input} value={editTargetFtth} onChangeText={setEditTargetFtth} keyboardType="number-pad" />
+            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={true}>
+              {/* Basic Info Section */}
+              <View style={styles.editSection}>
+                <Text style={styles.editSectionTitle}>Basic Information</Text>
+                
+                <Text style={styles.inputLabel}>Task Name</Text>
+                <TextInput style={styles.input} value={editName} onChangeText={setEditName} placeholder="Task name" />
+                
+                <Text style={styles.inputLabel}>Location</Text>
+                <TextInput style={styles.input} value={editLocation} onChangeText={setEditLocation} placeholder="Location" />
+                
+                <View style={styles.row}>
+                  <View style={styles.halfInput}>
+                    <Text style={styles.inputLabel}>Start Date</Text>
+                    <TextInput style={styles.input} value={editStartDate} onChangeText={setEditStartDate} placeholder="YYYY-MM-DD" />
+                  </View>
+                  <View style={styles.halfInput}>
+                    <Text style={styles.inputLabel}>End Date</Text>
+                    <TextInput style={styles.input} value={editEndDate} onChangeText={setEditEndDate} placeholder="YYYY-MM-DD" />
+                  </View>
                 </View>
               </View>
 
-              <Text style={styles.inputLabel}>Key Insight</Text>
-              <TextInput style={[styles.input, styles.textArea]} value={editKeyInsight} onChangeText={setEditKeyInsight} placeholder="Key insights" multiline numberOfLines={3} />
+              {/* Category Targets Section - Only show categories that are part of this task */}
+              <View style={styles.editSection}>
+                <Text style={styles.editSectionTitle}>Category Targets</Text>
+                <Text style={styles.editSectionSubtitle}>Categories: {eventData?.category || 'None'}</Text>
+                
+                {/* SIM Target - only show if SIM is in category */}
+                {eventData?.category?.includes('SIM') && (
+                  <View style={styles.targetRow}>
+                    <View style={[styles.targetIndicator, { backgroundColor: CATEGORY_CONFIG.SIM.color }]} />
+                    <View style={styles.targetInputContainer}>
+                      <Text style={styles.inputLabel}>SIM Target</Text>
+                      <TextInput style={styles.input} value={editTargetSim} onChangeText={setEditTargetSim} keyboardType="number-pad" placeholder="0" />
+                    </View>
+                  </View>
+                )}
+                
+                {/* FTTH Target - only show if FTTH (not FTTH_DOWN) is in category */}
+                {eventData?.category?.includes('FTTH') && !eventData?.category?.includes('FTTH_DOWN') && (
+                  <View style={styles.targetRow}>
+                    <View style={[styles.targetIndicator, { backgroundColor: CATEGORY_CONFIG.FTTH.color }]} />
+                    <View style={styles.targetInputContainer}>
+                      <Text style={styles.inputLabel}>FTTH Target</Text>
+                      <TextInput style={styles.input} value={editTargetFtth} onChangeText={setEditTargetFtth} keyboardType="number-pad" placeholder="0" />
+                    </View>
+                  </View>
+                )}
+                
+                {/* Lease Circuit Target */}
+                {eventData?.category?.includes('LEASE_CIRCUIT') && (
+                  <View style={styles.targetRow}>
+                    <View style={[styles.targetIndicator, { backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]} />
+                    <View style={styles.targetInputContainer}>
+                      <Text style={styles.inputLabel}>Lease Circuit Target</Text>
+                      <TextInput style={styles.input} value={editTargetLease} onChangeText={setEditTargetLease} keyboardType="number-pad" placeholder="0" />
+                    </View>
+                  </View>
+                )}
+                
+                {/* BTS Down Target */}
+                {eventData?.category?.includes('BTS_DOWN') && (
+                  <View style={styles.targetRow}>
+                    <View style={[styles.targetIndicator, { backgroundColor: CATEGORY_CONFIG.BTS_DOWN.color }]} />
+                    <View style={styles.targetInputContainer}>
+                      <Text style={styles.inputLabel}>BTS Down Target</Text>
+                      <TextInput style={styles.input} value={editTargetBtsDown} onChangeText={setEditTargetBtsDown} keyboardType="number-pad" placeholder="0" />
+                    </View>
+                  </View>
+                )}
+                
+                {/* Route Fail Target */}
+                {eventData?.category?.includes('ROUTE_FAIL') && (
+                  <View style={styles.targetRow}>
+                    <View style={[styles.targetIndicator, { backgroundColor: CATEGORY_CONFIG.ROUTE_FAIL.color }]} />
+                    <View style={styles.targetInputContainer}>
+                      <Text style={styles.inputLabel}>Route Fail Target</Text>
+                      <TextInput style={styles.input} value={editTargetRouteFail} onChangeText={setEditTargetRouteFail} keyboardType="number-pad" placeholder="0" />
+                    </View>
+                  </View>
+                )}
+                
+                {/* FTTH Down Target */}
+                {eventData?.category?.includes('FTTH_DOWN') && (
+                  <View style={styles.targetRow}>
+                    <View style={[styles.targetIndicator, { backgroundColor: CATEGORY_CONFIG.FTTH_DOWN.color }]} />
+                    <View style={styles.targetInputContainer}>
+                      <Text style={styles.inputLabel}>FTTH Down Target</Text>
+                      <TextInput style={styles.input} value={editTargetFtthDown} onChangeText={setEditTargetFtthDown} keyboardType="number-pad" placeholder="0" />
+                    </View>
+                  </View>
+                )}
+                
+                {/* OFC Fail Target */}
+                {eventData?.category?.includes('OFC_FAIL') && (
+                  <View style={styles.targetRow}>
+                    <View style={[styles.targetIndicator, { backgroundColor: CATEGORY_CONFIG.OFC_FAIL.color }]} />
+                    <View style={styles.targetInputContainer}>
+                      <Text style={styles.inputLabel}>OFC Fail Target</Text>
+                      <TextInput style={styles.input} value={editTargetOfcFail} onChangeText={setEditTargetOfcFail} keyboardType="number-pad" placeholder="0" />
+                    </View>
+                  </View>
+                )}
+                
+                {/* EB Target */}
+                {eventData?.category?.includes('EB') && (
+                  <View style={styles.targetRow}>
+                    <View style={[styles.targetIndicator, { backgroundColor: CATEGORY_CONFIG.EB.color }]} />
+                    <View style={styles.targetInputContainer}>
+                      <Text style={styles.inputLabel}>EB Connections Target</Text>
+                      <TextInput style={styles.input} value={editTargetEb} onChangeText={setEditTargetEb} keyboardType="number-pad" placeholder="0" />
+                    </View>
+                  </View>
+                )}
+              </View>
+
+              {/* Assigned Team Section */}
+              {eventData?.teamWithAllocations && eventData.teamWithAllocations.length > 0 && (
+                <View style={styles.editSection}>
+                  <Text style={styles.editSectionTitle}>Assigned Team ({eventData.teamWithAllocations.length})</Text>
+                  <Text style={styles.editSectionSubtitle}>Team members and their current allocations</Text>
+                  
+                  {eventData.teamWithAllocations.map((member: any) => (
+                    <View key={member.id} style={styles.editTeamMemberCard}>
+                      <View style={styles.editTeamMemberHeader}>
+                        <View style={[styles.assigneeAvatar, { backgroundColor: getAvatarColor(member.employee?.name || 'U') }]}>
+                          <Text style={[styles.assigneeAvatarText, { color: '#fff' }]}>
+                            {(member.employee?.name || 'U').split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase()}
+                          </Text>
+                        </View>
+                        <View style={styles.editTeamMemberInfo}>
+                          <Text style={styles.editTeamMemberName}>{member.employee?.name || 'Unknown'}</Text>
+                          <Text style={styles.editTeamMemberRole}>{member.employee?.designation || 'N/A'}{member.employee?.persNo ? ` | ${member.employee.persNo}` : ''}</Text>
+                        </View>
+                      </View>
+                      <View style={styles.editTeamMemberTargets}>
+                        {eventData?.category?.includes('SIM') && (
+                          <View style={styles.editMemberTargetBadge}>
+                            <Text style={styles.editMemberTargetLabel}>SIM</Text>
+                            <Text style={styles.editMemberTargetValue}>{member.simTarget || 0}</Text>
+                          </View>
+                        )}
+                        {eventData?.category?.includes('FTTH') && !eventData?.category?.includes('FTTH_DOWN') && (
+                          <View style={styles.editMemberTargetBadge}>
+                            <Text style={styles.editMemberTargetLabel}>FTTH</Text>
+                            <Text style={styles.editMemberTargetValue}>{member.ftthTarget || 0}</Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  ))}
+                  <Text style={styles.editTeamNote}>To edit individual team member targets, use the Team Management section on the task detail page.</Text>
+                </View>
+              )}
+
+              {/* Key Insight Section */}
+              <View style={styles.editSection}>
+                <Text style={styles.editSectionTitle}>Additional Information</Text>
+                <Text style={styles.inputLabel}>Key Insight / Notes</Text>
+                <TextInput style={[styles.input, styles.textArea]} value={editKeyInsight} onChangeText={setEditKeyInsight} placeholder="Key insights or notes about this task" multiline numberOfLines={4} />
+              </View>
             </ScrollView>
             
             <View style={styles.modalFooter}>
@@ -1706,7 +2371,7 @@ const styles = StyleSheet.create({
   headerButton: { marginRight: 16, padding: 4 },
   header: { backgroundColor: Colors.light.card, padding: 16, marginBottom: 12 },
   headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
-  eventName: { fontSize: 22, fontWeight: 'bold' as const, color: Colors.light.text, flex: 1, marginRight: 12 },
+  eventName: { fontSize: 22, fontWeight: 'bold' as const, color: Colors.light.primary, backgroundColor: '#E3F2FD', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, flex: 1, marginRight: 12, borderLeftWidth: 4, borderLeftColor: Colors.light.primary },
   statusBadge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 4 },
   statusText: { fontSize: 12, fontWeight: '600' as const },
   eventInfo: { gap: 8 },
@@ -1738,10 +2403,20 @@ const styles = StyleSheet.create({
   progressBar: { height: 6, backgroundColor: '#E0E0E0', borderRadius: 3, overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 3 },
   maintenanceTasksGrid: { gap: 10 },
+  maintenanceSectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  timerBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#E8F5E9', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
+  timerBadgeText: { fontSize: 10, color: '#2E7D32', fontWeight: '600' as const },
   maintenanceCard: { backgroundColor: Colors.light.backgroundSecondary, padding: 12, borderRadius: 8 },
   maintenanceHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  maintenanceTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
   maintenanceLabel: { fontSize: 13, fontWeight: '600' as const, color: Colors.light.text },
   maintenanceProgress: { fontSize: 13, fontWeight: 'bold' as const, color: Colors.light.textSecondary },
+  urgencyBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  urgencyBadgeText: { fontSize: 9, fontWeight: '700' as const },
+  maintenanceStats: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 },
+  maintenanceStat: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  maintenanceStatText: { fontSize: 11, color: Colors.light.textSecondary },
+  trendIndicator: { fontSize: 11, fontWeight: '600' as const },
   taskButtonRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
   markCompleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6, gap: 6 },
   markCompleteBtnText: { fontSize: 12, fontWeight: '600' as const },
@@ -1901,4 +2576,59 @@ const styles = StyleSheet.create({
   draftActivateButtonText: { fontSize: 15, fontWeight: '600' as const, color: '#fff' },
   draftWarning: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF3E0', padding: 12, borderRadius: 8, marginTop: 12, gap: 8 },
   draftWarningText: { flex: 1, fontSize: 12, color: '#EF6C00' },
+  
+  // Category Cards Styles
+  categoryCardsSection: { backgroundColor: Colors.light.card, padding: 16, marginBottom: 12 },
+  categoryCard: { backgroundColor: '#FAFAFA', borderRadius: 12, padding: 16, marginBottom: 12, borderLeftWidth: 4 },
+  categoryCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
+  categoryTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  categoryIconCircle: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+  categoryIconText: { fontSize: 12, fontWeight: 'bold' as const },
+  categoryTitleInfo: { flex: 1 },
+  categoryCardTitle: { fontSize: 16, fontWeight: '600' as const, color: Colors.light.text, marginBottom: 2 },
+  categoryDueDate: { fontSize: 12, color: Colors.light.textSecondary },
+  categoryTargetBadge: { backgroundColor: Colors.light.backgroundSecondary, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
+  categoryTargetText: { fontSize: 14, fontWeight: '600' as const, color: Colors.light.text },
+  categoryProgressBar: { height: 6, backgroundColor: '#E0E0E0', borderRadius: 3, marginBottom: 12, overflow: 'hidden' as const },
+  categoryProgressFill: { height: '100%' as const, borderRadius: 3 },
+  categoryAssignees: { borderTopWidth: 1, borderTopColor: '#E0E0E0', paddingTop: 12 },
+  assigneesLabel: { fontSize: 12, fontWeight: '600' as const, color: Colors.light.textSecondary, marginBottom: 8, textTransform: 'uppercase' as const, letterSpacing: 0.5 },
+  assigneeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  assigneeInfo: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  assigneeAvatar: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+  assigneeAvatarText: { fontSize: 14, fontWeight: '600' as const },
+  assigneeDetails: { flex: 1 },
+  assigneeName: { fontSize: 14, fontWeight: '500' as const, color: Colors.light.text },
+  assigneeRole: { fontSize: 11, color: Colors.light.textSecondary, marginTop: 1 },
+  assigneeProgress: { alignItems: 'flex-end' },
+  assigneeProgressText: { fontSize: 14, fontWeight: '600' as const, color: Colors.light.text, marginBottom: 4 },
+  assigneeMiniBar: { width: 60, height: 4, backgroundColor: '#E0E0E0', borderRadius: 2, overflow: 'hidden' as const },
+  assigneeMiniBarFill: { height: '100%' as const, borderRadius: 2 },
+  noAssigneesText: { fontSize: 13, color: Colors.light.textSecondary, fontStyle: 'italic' as const, paddingVertical: 8 },
+  statusBadgeMini: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10 },
+  statusBadgeMiniText: { fontSize: 10, fontWeight: '600' as const },
+  maintenanceStatItem: { flex: 1, alignItems: 'center' as const, paddingVertical: 8 },
+  maintenanceStatLabel: { fontSize: 10, color: Colors.light.textSecondary, textTransform: 'uppercase' as const, marginBottom: 4 },
+  maintenanceStatValue: { fontSize: 16, fontWeight: '700' as const, color: Colors.light.text },
+  maintenanceActions: { flexDirection: 'row', gap: 12, marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#E0E0E0' },
+  maintenanceActionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8, borderWidth: 1.5 },
+  maintenanceActionBtnText: { fontSize: 14, fontWeight: '600' as const },
+  maintenanceActionBtnPrimary: { flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8 },
+  maintenanceActionBtnPrimaryText: { fontSize: 14, fontWeight: '600' as const, color: '#fff' },
+  editSection: { marginBottom: 20, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
+  editSectionTitle: { fontSize: 16, fontWeight: '700' as const, color: Colors.light.text, marginBottom: 4 },
+  editSectionSubtitle: { fontSize: 12, color: Colors.light.textSecondary, marginBottom: 12 },
+  targetRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
+  targetIndicator: { width: 4, height: 50, borderRadius: 2 },
+  targetInputContainer: { flex: 1 },
+  editTeamMemberCard: { backgroundColor: Colors.light.backgroundSecondary, borderRadius: 10, padding: 12, marginBottom: 8 },
+  editTeamMemberHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  editTeamMemberInfo: { flex: 1 },
+  editTeamMemberName: { fontSize: 14, fontWeight: '600' as const, color: Colors.light.text },
+  editTeamMemberRole: { fontSize: 11, color: Colors.light.textSecondary },
+  editTeamMemberTargets: { flexDirection: 'row', gap: 12, marginTop: 4 },
+  editMemberTargetBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.light.lightBlue, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  editMemberTargetLabel: { fontSize: 11, color: Colors.light.primary, fontWeight: '500' as const },
+  editMemberTargetValue: { fontSize: 13, color: Colors.light.primary, fontWeight: '700' as const },
+  editTeamNote: { fontSize: 11, color: Colors.light.textSecondary, fontStyle: 'italic' as const, marginTop: 8, textAlign: 'center' as const },
 });

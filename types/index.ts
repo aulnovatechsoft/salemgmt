@@ -1,4 +1,4 @@
-export type UserRole = 'GM' | 'CGM' | 'DGM' | 'AGM' | 'SD_JTO' | 'SALES_STAFF';
+export type UserRole = 'ADMIN' | 'GM' | 'CGM' | 'DGM' | 'AGM' | 'SD_JTO' | 'SALES_STAFF';
 
 export type EventCategory = string;
 

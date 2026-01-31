@@ -173,34 +173,41 @@ export default function TeamHierarchyPicker({
           activeOpacity={0.7}
         >
           <View style={styles.employeeLeft}>
-            {hasSubordinates && (
-              <TouchableOpacity
-                style={styles.expandButton}
-                onPress={() => toggleExpand(employee.persNo)}
-              >
-                {isExpanded ? (
-                  <ChevronDown size={18} color={Colors.light.textSecondary} />
-                ) : (
-                  <ChevronRight size={18} color={Colors.light.textSecondary} />
-                )}
-              </TouchableOpacity>
-            )}
-            {!hasSubordinates && <View style={styles.expandPlaceholder} />}
-            
             <View style={[styles.avatar, assignedCount > 0 && styles.avatarAssigned]}>
               <Text style={styles.avatarText}>{getInitials(employee.name)}</Text>
             </View>
             
             <View style={styles.employeeInfo}>
-              <Text style={styles.employeeName} numberOfLines={1}>{employee.name}</Text>
+              <View style={styles.nameRow}>
+                <Text style={styles.employeeName} numberOfLines={1}>{employee.name}</Text>
+                <View style={[styles.levelBadge, isLevel2 ? styles.levelBadgeL2 : styles.levelBadgeL1]}>
+                  <Text style={[styles.levelBadgeText, isLevel2 ? styles.levelBadgeTextL2 : styles.levelBadgeTextL1]}>
+                    {isLevel2 ? 'L2' : 'L1'}
+                  </Text>
+                </View>
+              </View>
               <Text style={styles.employeeMeta} numberOfLines={1}>
                 {employee.persNo} {employee.designation ? `• ${employee.designation}` : ''}
               </Text>
-              {employee.directReportsCount > 0 && (
-                <View style={styles.teamBadge}>
-                  <Users size={10} color={Colors.light.primary} />
-                  <Text style={styles.teamBadgeText}>{employee.directReportsCount} reports</Text>
-                </View>
+              {hasSubordinates && (
+                <TouchableOpacity
+                  style={[styles.viewTeamButton, isExpanded && styles.viewTeamButtonExpanded]}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    toggleExpand(employee.persNo);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Users size={12} color={isExpanded ? '#fff' : Colors.light.primary} />
+                  <Text style={[styles.viewTeamButtonText, isExpanded && styles.viewTeamButtonTextExpanded]}>
+                    {isExpanded ? 'Hide' : 'View'} {employee.directReportsCount} L2 Team
+                  </Text>
+                  {isExpanded ? (
+                    <ChevronDown size={14} color="#fff" />
+                  ) : (
+                    <ChevronRight size={14} color={Colors.light.primary} />
+                  )}
+                </TouchableOpacity>
               )}
             </View>
           </View>
@@ -495,10 +502,37 @@ const styles = StyleSheet.create({
   employeeInfo: {
     flex: 1,
   },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   employeeName: {
     fontSize: 14,
     fontWeight: '600',
     color: Colors.light.text,
+    flex: 1,
+  },
+  levelBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  levelBadgeL1: {
+    backgroundColor: '#E3F2FD',
+  },
+  levelBadgeL2: {
+    backgroundColor: '#FFF3E0',
+  },
+  levelBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  levelBadgeTextL1: {
+    color: '#1565C0',
+  },
+  levelBadgeTextL2: {
+    color: '#E65100',
   },
   employeeMeta: {
     fontSize: 12,
@@ -515,6 +549,30 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.light.primary,
     fontWeight: '500',
+  },
+  viewTeamButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: '#E3F2FD',
+    borderRadius: 16,
+    gap: 4,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: Colors.light.primary,
+  },
+  viewTeamButtonExpanded: {
+    backgroundColor: Colors.light.primary,
+  },
+  viewTeamButtonText: {
+    fontSize: 11,
+    color: Colors.light.primary,
+    fontWeight: '600',
+  },
+  viewTeamButtonTextExpanded: {
+    color: '#fff',
   },
   assignedBadge: {
     backgroundColor: Colors.light.success,
