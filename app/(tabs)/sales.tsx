@@ -59,16 +59,6 @@ export default function SalesScreen() {
             fontWeight: 'bold' as const,
           },
           headerShown: true,
-          headerRight: () => (
-            employee?.role === 'SALES_STAFF' ? (
-              <TouchableOpacity 
-                onPress={() => router.push('/submit-sales')}
-                style={styles.headerButton}
-              >
-                <Plus size={24} color={Colors.light.background} />
-              </TouchableOpacity>
-            ) : null
-          ),
         }} 
       />
       <ScrollView style={styles.container}>

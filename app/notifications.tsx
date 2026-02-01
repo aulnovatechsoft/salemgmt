@@ -15,7 +15,14 @@ type NotificationType =
   | 'SUBTASK_ASSIGNED'
   | 'SUBTASK_DUE_SOON'
   | 'SUBTASK_OVERDUE'
-  | 'SUBTASK_COMPLETED';
+  | 'SUBTASK_COMPLETED'
+  | 'TASK_SUBMITTED'
+  | 'TASK_APPROVED'
+  | 'TASK_REJECTED'
+  | 'SLA_WARNING'
+  | 'SLA_BREACHED'
+  | 'DEADLINE_WARNING'
+  | 'TASK_ENDING_TODAY';
 
 interface Notification {
   id: string;
@@ -49,6 +56,20 @@ const getNotificationIcon = (type: NotificationType): { name: keyof typeof Ionic
       return { name: 'time', color: '#f59e0b' };
     case 'SUBTASK_COMPLETED':
       return { name: 'checkmark-done', color: '#22c55e' };
+    case 'TASK_SUBMITTED':
+      return { name: 'paper-plane', color: '#3b82f6' };
+    case 'TASK_APPROVED':
+      return { name: 'checkmark-circle', color: '#22c55e' };
+    case 'TASK_REJECTED':
+      return { name: 'close-circle', color: '#ef4444' };
+    case 'SLA_WARNING':
+      return { name: 'warning', color: '#f59e0b' };
+    case 'SLA_BREACHED':
+      return { name: 'alert', color: '#dc2626' };
+    case 'DEADLINE_WARNING':
+      return { name: 'hourglass', color: '#f97316' };
+    case 'TASK_ENDING_TODAY':
+      return { name: 'today', color: '#dc2626' };
     default:
       return { name: 'notifications', color: '#6b7280' };
   }

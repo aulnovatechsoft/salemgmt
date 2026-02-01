@@ -2,8 +2,8 @@ import React, { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, TextInput, Modal, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { MapPin, Calendar, Target, Check, X, Plus, Minus, Wrench } from 'lucide-react-native';
+import { useQueryClient } from '@tanstack/react-query';
+import { MapPin, Calendar, Target, Check, X, Plus, Minus, Wrench, Send, RotateCcw, CircleCheck, Hourglass, CircleDot } from 'lucide-react-native';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/auth';
 import { trpc } from '@/lib/trpc';
@@ -35,50 +35,76 @@ export default function MyTasksScreen() {
   const [simSold, setSimSold] = useState('');
   const [ftthSold, setFtthSold] = useState('');
 
-  const { data: myTasks, isLoading, refetch } = useQuery({
-    queryKey: ['myAssignedTasks', employee?.id],
-    queryFn: () => trpc.events.getMyAssignedTasks.query({ employeeId: employee?.id || '' }),
-    enabled: !!employee?.id,
-    staleTime: 30000,
-  });
+  const { data: myTasks, isLoading, refetch } = trpc.events.getMyAssignedTasks.useQuery(
+    { employeeId: employee?.id || '' },
+    {
+      enabled: !!employee?.id,
+      staleTime: 5000,
+      refetchOnMount: 'always',
+      refetchOnWindowFocus: true,
+    }
+  );
 
-  const submitMutation = useMutation({
-    mutationFn: (data: { eventId: string; simSold?: number; ftthSold?: number }) =>
-      trpc.events.submitMyProgress.mutate({
-        employeeId: employee?.id || '',
-        eventId: data.eventId,
-        simSold: data.simSold,
-        ftthSold: data.ftthSold,
-      }),
+  const utils = trpc.useUtils();
+  
+  const submitMutation = trpc.events.submitMyProgress.useMutation({
     onSuccess: () => {
       Alert.alert('Success', 'Progress submitted successfully!');
       setSubmitModalVisible(false);
       setSelectedTask(null);
       setSimSold('');
       setFtthSold('');
-      queryClient.invalidateQueries({ queryKey: ['myAssignedTasks'] });
+      utils.events.getMyAssignedTasks.invalidate();
     },
     onError: (error: any) => {
       Alert.alert('Error', error.message || 'Failed to submit progress');
     },
   });
 
-  const maintenanceMutation = useMutation({
-    mutationFn: (data: { eventId: string; taskType: string; increment: number }) =>
-      trpc.events.updateTaskProgress.mutate({
-        eventId: data.eventId,
-        taskType: data.taskType as any,
-        increment: data.increment,
-        updatedBy: employee?.id || '',
-      }),
+  const maintenanceMutation = trpc.events.updateTaskProgress.useMutation({
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['myAssignedTasks'] });
-      queryClient.invalidateQueries({ queryKey: ['events'] });
+      utils.events.getMyAssignedTasks.invalidate();
+      utils.events.getMyEvents.invalidate();
     },
     onError: (error: any) => {
       Alert.alert('Error', error.message || 'Failed to update maintenance progress');
     },
   });
+
+  const submitForReviewMutation = trpc.events.submitTaskForReview.useMutation({
+    onSuccess: () => {
+      Alert.alert('Success', 'Task submitted for review!');
+      utils.events.getMyAssignedTasks.invalidate();
+    },
+    onError: (error: any) => {
+      Alert.alert('Error', error.message || 'Failed to submit task');
+    },
+  });
+
+  const getStatusIndicator = (status: string, allTargetsAchieved: boolean = false) => {
+    switch (status) {
+      case 'approved':
+        return { icon: <CircleCheck size={14} color="#2E7D32" />, label: 'Approved', color: '#2E7D32', bgColor: '#E8F5E9' };
+      case 'submitted':
+        return { icon: <Send size={14} color="#1565C0" />, label: 'Submitted', color: '#1565C0', bgColor: '#E3F2FD' };
+      case 'rejected':
+        return { icon: <RotateCcw size={14} color="#C62828" />, label: 'Rejected', color: '#C62828', bgColor: '#FFEBEE' };
+      case 'in_progress':
+        // Show "Ready to Submit" if all targets are achieved
+        if (allTargetsAchieved) {
+          return { icon: <CircleCheck size={14} color="#4CAF50" />, label: 'Ready to Submit', color: '#4CAF50', bgColor: '#E8F5E9' };
+        }
+        return { icon: <Hourglass size={14} color="#EF6C00" />, label: 'In Progress', color: '#EF6C00', bgColor: '#FFF3E0' };
+      case 'not_started':
+        // Also show "Ready to Submit" if targets are achieved even before officially starting
+        if (allTargetsAchieved) {
+          return { icon: <CircleCheck size={14} color="#4CAF50" />, label: 'Ready to Submit', color: '#4CAF50', bgColor: '#E8F5E9' };
+        }
+        return { icon: <CircleDot size={14} color="#78909C" />, label: 'Not Started', color: '#78909C', bgColor: '#ECEFF1' };
+      default:
+        return { icon: <CircleDot size={14} color="#78909C" />, label: 'Not Started', color: '#78909C', bgColor: '#ECEFF1' };
+    }
+  };
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -99,27 +125,30 @@ export default function MyTasksScreen() {
   };
 
   const handleMaintenanceComplete = (taskType: string) => {
-    if (!selectedTask) return;
+    if (!selectedTask || !employee?.id) return;
     maintenanceMutation.mutate({
       eventId: selectedTask.id,
-      taskType,
+      taskType: taskType as any,
       increment: 1,
+      updatedBy: employee.id,
     });
   };
 
   const handleMaintenanceUndo = (taskType: string) => {
-    if (!selectedTask) return;
+    if (!selectedTask || !employee?.id) return;
     maintenanceMutation.mutate({
       eventId: selectedTask.id,
-      taskType,
+      taskType: taskType as any,
       increment: -1,
+      updatedBy: employee.id,
     });
   };
 
   const handleSubmit = () => {
-    if (!selectedTask) return;
+    if (!selectedTask || !employee?.id) return;
     
     submitMutation.mutate({
+      employeeId: employee.id,
       eventId: selectedTask.id,
       simSold: parseInt(simSold) || 0,
       ftthSold: parseInt(ftthSold) || 0,
@@ -135,14 +164,54 @@ export default function MyTasksScreen() {
     setter(Math.max(0, val - 1) + '');
   };
 
+  const getRoleBadge = (role: string) => {
+    switch (role) {
+      case 'creator':
+        return { label: 'Creator', color: '#6B21A8', bgColor: '#F3E8FF' };
+      case 'manager':
+        return { label: 'Manager', color: '#0369A1', bgColor: '#E0F2FE' };
+      case 'assigned':
+        return { label: 'Assigned', color: '#166534', bgColor: '#DCFCE7' };
+      default:
+        return { label: 'Team', color: '#78716C', bgColor: '#F5F5F4' };
+    }
+  };
+
   const renderTaskCard = ({ item }: { item: any }) => {
     const categories = (item.category || '').split(',').filter(Boolean);
     const isCompleted = item.status === 'completed';
+    const roleBadge = getRoleBadge(item.myRole || 'team_member');
     
     const hasTargets = item.myTargets.sim > 0 || item.myTargets.ftth > 0 || 
       item.myTargets.lease > 0 || item.myTargets.btsDown > 0 || 
       item.myTargets.routeFail > 0 || item.myTargets.ftthDown > 0 || 
       item.myTargets.ofcFail > 0 || item.myTargets.eb > 0;
+
+    const canSubmit = item.assignmentId && 
+      (item.submissionStatus === 'in_progress' || item.submissionStatus === 'rejected' || item.submissionStatus === 'not_started');
+
+    // Check if sales targets are fully achieved
+    const salesTargetsAchieved = 
+      (!item.categories.hasSIM || item.myProgress.simSold >= item.myTargets.sim) &&
+      (!item.categories.hasFTTH || item.myProgress.ftthSold >= item.myTargets.ftth);
+    
+    // Check if maintenance targets are fully achieved  
+    const maintenanceTargetsAchieved =
+      (!item.categories.hasLease || item.maintenanceProgress.lease >= item.maintenanceProgress.leaseTarget) &&
+      (!item.categories.hasBtsDown || item.maintenanceProgress.btsDown >= item.maintenanceProgress.btsDownTarget) &&
+      (!item.categories.hasRouteFail || item.maintenanceProgress.routeFail >= item.maintenanceProgress.routeFailTarget) &&
+      (!item.categories.hasFtthDown || item.maintenanceProgress.ftthDown >= item.maintenanceProgress.ftthDownTarget) &&
+      (!item.categories.hasOfcFail || item.maintenanceProgress.ofcFail >= item.maintenanceProgress.ofcFailTarget) &&
+      (!item.categories.hasEb || item.maintenanceProgress.eb >= item.maintenanceProgress.ebTarget);
+    
+    // All targets achieved when both sales and maintenance are done
+    const allTargetsAchieved = hasTargets && salesTargetsAchieved && maintenanceTargetsAchieved;
+    
+    // Get status indicator with targets achieved info
+    const statusIndicator = getStatusIndicator(item.submissionStatus || 'not_started', allTargetsAchieved);
+    
+    // Disable action buttons if already submitted/approved
+    const isAlreadySubmittedOrApproved = item.submissionStatus === 'submitted' || item.submissionStatus === 'approved';
 
     return (
       <TouchableOpacity 
@@ -151,10 +220,18 @@ export default function MyTasksScreen() {
         activeOpacity={0.7}
       >
         <View style={styles.cardHeader}>
-          <Text style={styles.taskName} numberOfLines={2}>{item.name}</Text>
-          <View style={[styles.statusBadge, { backgroundColor: isCompleted ? '#E8F5E9' : '#E3F2FD' }]}>
-            <Text style={[styles.statusText, { color: isCompleted ? '#4CAF50' : '#1976D2' }]}>
-              {isCompleted ? 'Completed' : 'Active'}
+          <View style={{ flex: 1 }}>
+            <Text style={styles.taskName} numberOfLines={2}>{item.name}</Text>
+            <View style={[styles.roleBadge, { backgroundColor: roleBadge.bgColor }]}>
+              <Text style={[styles.roleBadgeText, { color: roleBadge.color }]}>
+                {roleBadge.label}
+              </Text>
+            </View>
+          </View>
+          <View style={[styles.statusBadge, { backgroundColor: statusIndicator.bgColor }]}>
+            {statusIndicator.icon}
+            <Text style={[styles.statusText, { color: statusIndicator.color, marginLeft: 4 }]}>
+              {statusIndicator.label}
             </Text>
           </View>
         </View>
@@ -275,25 +352,66 @@ export default function MyTasksScreen() {
           )}
         </View>
 
-        {!isCompleted && (item.categories.hasSIM || item.categories.hasFTTH) && (
+        {!isCompleted && !isAlreadySubmittedOrApproved && (item.categories.hasSIM || item.categories.hasFTTH) && (
+          salesTargetsAchieved ? (
+            <View style={[styles.submitButton, styles.disabledButton]}>
+              <Check size={16} color="#fff" />
+              <Text style={styles.submitButtonText}>Sales Targets Achieved</Text>
+            </View>
+          ) : (
+            <TouchableOpacity 
+              style={styles.submitButton}
+              onPress={() => openSubmitModal(item)}
+            >
+              <Target size={16} color="#fff" />
+              <Text style={styles.submitButtonText}>Submit Sales Progress</Text>
+            </TouchableOpacity>
+          )
+        )}
+
+        {!isCompleted && !isAlreadySubmittedOrApproved && (item.categories.hasLease || item.categories.hasBtsDown || item.categories.hasRouteFail || 
+          item.categories.hasFtthDown || item.categories.hasOfcFail || item.categories.hasEb) && (
+          maintenanceTargetsAchieved ? (
+            <View style={[styles.submitButton, { backgroundColor: '#4CAF50' }]}>
+              <Check size={16} color="#fff" />
+              <Text style={styles.submitButtonText}>Maintenance Complete</Text>
+            </View>
+          ) : (
+            <TouchableOpacity 
+              style={[styles.submitButton, { backgroundColor: '#9C27B0' }]}
+              onPress={() => openMaintenanceModal(item)}
+            >
+              <Wrench size={16} color="#fff" />
+              <Text style={styles.submitButtonText}>Complete Maintenance</Text>
+            </TouchableOpacity>
+          )
+        )}
+        
+        {canSubmit && !isCompleted && (
           <TouchableOpacity 
-            style={styles.submitButton}
-            onPress={() => openSubmitModal(item)}
+            style={[styles.submitButton, { backgroundColor: '#1565C0', marginTop: 8 }]}
+            onPress={(e) => {
+              e.stopPropagation();
+              Alert.alert(
+                'Submit for Review',
+                'Are you sure you want to submit this task for review?',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Submit', onPress: () => submitForReviewMutation.mutate({ assignmentId: item.assignmentId, employeeId: employee?.id || '' }) }
+                ]
+              );
+            }}
           >
-            <Target size={16} color="#fff" />
-            <Text style={styles.submitButtonText}>Submit Sales Progress</Text>
+            <Send size={16} color="#fff" />
+            <Text style={styles.submitButtonText}>Submit for Review</Text>
           </TouchableOpacity>
         )}
 
-        {!isCompleted && (item.categories.hasLease || item.categories.hasBtsDown || item.categories.hasRouteFail || 
-          item.categories.hasFtthDown || item.categories.hasOfcFail || item.categories.hasEb) && (
-          <TouchableOpacity 
-            style={[styles.submitButton, { backgroundColor: '#9C27B0' }]}
-            onPress={() => openMaintenanceModal(item)}
-          >
-            <Wrench size={16} color="#fff" />
-            <Text style={styles.submitButtonText}>Complete Maintenance</Text>
-          </TouchableOpacity>
+        {item.submissionStatus === 'rejected' && item.rejectionReason && (
+          <View style={styles.rejectionReasonBox}>
+            <Text style={styles.rejectionReasonLabel}>Rejection Reason:</Text>
+            <Text style={styles.rejectionReasonText}>{item.rejectionReason}</Text>
+          </View>
         )}
       </TouchableOpacity>
     );
@@ -674,6 +792,8 @@ const styles = StyleSheet.create({
   taskName: { fontSize: 18, fontWeight: '600', color: Colors.light.primary, flex: 1, marginRight: 8, backgroundColor: '#E3F2FD', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderLeftWidth: 3, borderLeftColor: Colors.light.primary },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   statusText: { fontSize: 12, fontWeight: '600' },
+  roleBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, alignSelf: 'flex-start', marginTop: 4 },
+  roleBadgeText: { fontSize: 10, fontWeight: '600' },
   infoRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   infoText: { fontSize: 13, color: Colors.light.textSecondary, flex: 1 },
   categoriesRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8, marginBottom: 12 },
@@ -688,6 +808,7 @@ const styles = StyleSheet.create({
   targetLabel: { fontSize: 11, color: Colors.light.textSecondary },
   targetValue: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
   submitButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.light.primary, borderRadius: 8, padding: 12, marginTop: 12, gap: 8 },
+  disabledButton: { backgroundColor: '#4CAF50', opacity: 1 },
   submitButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: Colors.light.background, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 40 },
@@ -713,4 +834,7 @@ const styles = StyleSheet.create({
   maintenanceBtn: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
   closeModalButton: { backgroundColor: Colors.light.primary, borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 8 },
   closeModalButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  rejectionReasonBox: { backgroundColor: '#FFEBEE', borderRadius: 8, padding: 12, marginTop: 12, borderLeftWidth: 3, borderLeftColor: '#C62828' },
+  rejectionReasonLabel: { fontSize: 12, fontWeight: '600', color: '#C62828', marginBottom: 4 },
+  rejectionReasonText: { fontSize: 13, color: '#B71C1C' },
 });

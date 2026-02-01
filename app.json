@@ -2,6 +2,7 @@
   "expo": {
     "name": "BSNL Sales & Event App",
     "slug": "bsnl-sales-event-app",
+    "owner": "nirajbsnl",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -35,8 +36,17 @@
         }
       ],
       "expo-font",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-dev-client"
     ],
+    "extra": {
+      "eas": {
+        "projectId": "251466b9-dda2-432d-a1bf-def5c96b45bc"
+      },
+      "router": {
+        "origin": "https://rork.com/"
+      }
+    },
     "experiments": {
       "typedRoutes": true
     }

@@ -2,6 +2,16 @@ import { z } from "zod";
 import { eq, and, desc, gte, lte, sql, or, inArray } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
 import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations } from "@/backend/db";
+import { 
+  notifyEventAssignment, 
+  notifyTaskSubmitted, 
+  notifyTaskApproved, 
+  notifyTaskRejected,
+  notifyIssueRaised,
+  notifySubtaskAssigned,
+  notifySubtaskCompleted,
+  notifySubtaskReassigned
+} from "@/backend/services/notification.service";
 
 function getISTDate(): Date {
   const now = new Date();
@@ -291,14 +301,18 @@ export const eventsRouter = createTRPCRouter({
       const allVisiblePersNos = [employeePersNo, ...subordinatePersNos].filter(Boolean) as string[];
       
       // Query non-draft events: visible if created by user, assigned to user/subordinates, or user/subordinates are in assignedTeam
+      // Build the team check condition - using EXISTS with jsonb_array_elements_text to avoid ? operator issue
+      const teamCheckCondition = allVisiblePersNos.length > 0
+        ? sql`EXISTS (SELECT 1 FROM jsonb_array_elements_text(${events.assignedTeam}::jsonb) AS elem WHERE elem IN (${sql.raw(allVisiblePersNos.map(p => `'${p}'`).join(','))}))`
+        : sql`false`;
+      
       const nonDraftResults = await db.select().from(events)
         .where(and(
           sql`${events.status} != 'draft'`,
           or(
             eq(events.createdBy, input.employeeId),
             inArray(events.assignedTo, allVisibleIds),
-            // Check if employee or subordinates' persNo is in assignedTeam array
-            sql`${events.assignedTeam}::jsonb ?| array[${sql.raw(allVisiblePersNos.map(p => `'${p}'`).join(',') || "''")}]`
+            teamCheckCondition
           )
         ))
         .orderBy(desc(events.createdAt));
@@ -390,6 +404,24 @@ export const eventsRouter = createTRPCRouter({
         const simSold = eventAssigns.reduce((sum, a) => sum + a.simSold, 0);
         const ftthSold = eventAssigns.reduce((sum, a) => sum + a.ftthSold, 0);
         
+        // Find the current user's assignment for this event to get their submissionStatus
+        const myAssignment = eventAssigns.find(a => a.employeeId === input.employeeId);
+        
+        // Determine the overall submission status:
+        // 1. If user has their own assignment, use their status
+        // 2. If user is the event creator/manager, aggregate the team's status
+        let submissionStatus: string = 'not_started';
+        if (myAssignment) {
+          submissionStatus = myAssignment.submissionStatus || 'not_started';
+        } else if (event.createdBy === input.employeeId || event.assignedTo === input.employeeId) {
+          // For managers/creators: show the most advanced status of the team
+          const statuses = eventAssigns.map(a => a.submissionStatus || 'not_started');
+          if (statuses.includes('approved')) submissionStatus = 'approved';
+          else if (statuses.includes('submitted')) submissionStatus = 'submitted';
+          else if (statuses.includes('rejected')) submissionStatus = 'rejected';
+          else if (statuses.includes('in_progress')) submissionStatus = 'in_progress';
+        }
+        
         const assignedTeamPurseIds = (event.assignedTeam || []) as string[];
         const teamMembers = assignedTeamPurseIds.map(persNo => {
           const member = masterMap.get(persNo);
@@ -406,6 +438,7 @@ export const eventsRouter = createTRPCRouter({
           status: correctedStatus,
           simSold,
           ftthSold,
+          submissionStatus,
           teamMembers,
           creatorName: creatorInfo?.name || null,
           assigneeName: assigneeInfo?.name || null,
@@ -442,6 +475,12 @@ export const eventsRouter = createTRPCRouter({
       targetFtthDown: z.number().min(0).optional(),
       targetRouteFail: z.number().min(0).optional(),
       targetOfcFail: z.number().min(0).optional(),
+      ebEstHours: z.number().min(0).optional(),
+      leaseEstHours: z.number().min(0).optional(),
+      btsDownEstHours: z.number().min(0).optional(),
+      ftthDownEstHours: z.number().min(0).optional(),
+      routeFailEstHours: z.number().min(0).optional(),
+      ofcFailEstHours: z.number().min(0).optional(),
       assignedTeam: z.array(z.string()).optional(),
       allocatedSim: z.number().min(0),
       allocatedFtth: z.number().min(0),
@@ -510,6 +549,12 @@ export const eventsRouter = createTRPCRouter({
         targetFtthDown: input.targetFtthDown || 0,
         targetRouteFail: input.targetRouteFail || 0,
         targetOfcFail: input.targetOfcFail || 0,
+        ebEstHours: input.ebEstHours || 0,
+        leaseEstHours: input.leaseEstHours || 0,
+        btsDownEstHours: input.btsDownEstHours || 0,
+        ftthDownEstHours: input.ftthDownEstHours || 0,
+        routeFailEstHours: input.routeFailEstHours || 0,
+        ofcFailEstHours: input.ofcFailEstHours || 0,
         assignedTeam: input.assignedTeam || [],
         allocatedSim: input.allocatedSim,
         allocatedFtth: input.allocatedFtth,
@@ -985,6 +1030,10 @@ export const eventsRouter = createTRPCRouter({
               assignedBy: eventResult[0].createdBy,
               assignedAt: new Date(),
               updatedAt: new Date(),
+              submissionStatus: 'not_started',
+              submittedAt: null,
+              reviewedAt: null,
+              rejectionReason: null,
               employee: {
                 id: employeeIdToUse,
                 name: master.name,
@@ -1029,12 +1078,79 @@ export const eventsRouter = createTRPCRouter({
         }
       }
       
+      const calculateSlaStatus = (
+        startedAt: Date | null,
+        estHours: number,
+        completed: number,
+        target: number
+      ) => {
+        if (!estHours || estHours === 0) {
+          return { status: 'no_sla', message: 'No SLA set', remainingMs: 0, elapsedMs: 0 };
+        }
+        
+        if (target > 0 && completed >= target) {
+          return { status: 'completed', message: 'Completed', remainingMs: 0, elapsedMs: 0 };
+        }
+        
+        if (!startedAt) {
+          return { status: 'not_started', message: `SLA: ${estHours}h`, remainingMs: estHours * 60 * 60 * 1000, elapsedMs: 0 };
+        }
+        
+        const now = new Date();
+        const startTime = new Date(startedAt).getTime();
+        const deadlineMs = startTime + (estHours * 60 * 60 * 1000);
+        const elapsedMs = now.getTime() - startTime;
+        const remainingMs = deadlineMs - now.getTime();
+        
+        if (remainingMs <= 0) {
+          const overdueMs = Math.abs(remainingMs);
+          const overdueHours = Math.floor(overdueMs / (60 * 60 * 1000));
+          const overdueMins = Math.floor((overdueMs % (60 * 60 * 1000)) / (60 * 1000));
+          return { 
+            status: 'breached', 
+            message: `Overdue by ${overdueHours}h ${overdueMins}m`,
+            remainingMs,
+            elapsedMs,
+          };
+        }
+        
+        const remainingHours = Math.floor(remainingMs / (60 * 60 * 1000));
+        const remainingMins = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+        
+        if (remainingMs <= 60 * 60 * 1000) {
+          return { 
+            status: 'warning', 
+            message: `${remainingMins}m remaining`,
+            remainingMs,
+            elapsedMs,
+          };
+        }
+        
+        return { 
+          status: 'in_progress', 
+          message: `${remainingHours}h ${remainingMins}m remaining`,
+          remainingMs,
+          elapsedMs,
+        };
+      };
+      
+      const e = eventResult[0];
+      const slaStatus = {
+        eb: calculateSlaStatus(e.ebStartedAt, e.ebEstHours, e.ebCompleted, e.targetEb),
+        lease: calculateSlaStatus(e.leaseStartedAt, e.leaseEstHours, e.leaseCompleted, e.targetLease),
+        btsDown: calculateSlaStatus(e.btsDownStartedAt, e.btsDownEstHours, e.btsDownCompleted, e.targetBtsDown),
+        ftthDown: calculateSlaStatus(e.ftthDownStartedAt, e.ftthDownEstHours, e.ftthDownCompleted, e.targetFtthDown),
+        routeFail: calculateSlaStatus(e.routeFailStartedAt, e.routeFailEstHours, e.routeFailCompleted, e.targetRouteFail),
+        ofcFail: calculateSlaStatus(e.ofcFailStartedAt, e.ofcFailEstHours, e.ofcFailCompleted, e.targetOfcFail),
+      };
+      
       const result = {
           ...eventResult[0],
           assignedToEmployee,
           teamWithAllocations,
           salesEntries,
           subtasks: subtasksWithAssignees,
+          slaStatus,
           summary: {
             totalSimsSold,
             totalFtthSold,
@@ -1156,6 +1272,26 @@ export const eventsRouter = createTRPCRouter({
         performedBy: input.assignedBy,
         details: { employeeId: input.employeeId, simTarget: input.simTarget, ftthTarget: input.ftthTarget },
       });
+
+      // Send notification to assigned team member (only for new assignments)
+      if (!existing) {
+        try {
+          const assigner = await db.select().from(employees)
+            .where(eq(employees.id, input.assignedBy));
+          
+          if (assigner[0]) {
+            await notifyEventAssignment(
+              input.employeeId,
+              event[0].name,
+              input.eventId,
+              assigner[0].name
+            );
+            console.log("Assignment notification sent to:", input.employeeId);
+          }
+        } catch (notifError) {
+          console.error("Failed to send assignment notification:", notifError);
+        }
+      }
 
       return { success: true };
     }),
@@ -1514,15 +1650,176 @@ export const eventsRouter = createTRPCRouter({
         .where(eq(events.id, input.eventId))
         .returning();
       
+      // Auto-update submission status to 'in_progress' if work is being done
+      if (hasAssignmentRecord && hasAssignment[0].submissionStatus === 'not_started' && input.increment > 0) {
+        await db.update(eventAssignments)
+          .set({ submissionStatus: 'in_progress', updatedAt: new Date() })
+          .where(eq(eventAssignments.id, hasAssignment[0].id));
+      }
+      
       await db.insert(auditLogs).values({
         action: 'UPDATE_TASK_PROGRESS',
         entityType: 'EVENT',
         entityId: input.eventId,
         performedBy: input.updatedBy,
+        timestamp: new Date(),
         details: { taskType: input.taskType, increment: input.increment, newCompleted },
       });
       
       return result[0];
+    }),
+
+  updateMemberTaskProgress: publicProcedure
+    .input(z.object({
+      eventId: z.string().uuid(),
+      employeeId: z.string().uuid(),
+      taskType: z.enum(['EB', 'LEASE', 'BTS_DOWN', 'FTTH_DOWN', 'ROUTE_FAIL', 'OFC_FAIL']),
+      increment: z.number().int().default(1),
+      updatedBy: z.string().uuid(),
+    }))
+    .mutation(async ({ input }) => {
+      console.log("Updating member task progress:", input);
+      
+      const event = await db.select().from(events).where(eq(events.id, input.eventId));
+      console.log("Found event:", event[0] ? event[0].name : "NOT FOUND");
+      if (!event[0]) throw new Error("Event not found");
+      
+      const assignment = await db.select().from(eventAssignments)
+        .where(and(
+          eq(eventAssignments.eventId, input.eventId),
+          eq(eventAssignments.employeeId, input.employeeId)
+        ));
+      
+      console.log("Found assignment:", assignment[0] ? "YES" : "NOT FOUND");
+      if (!assignment[0]) throw new Error("Team member assignment not found");
+      
+      console.log("Assignment data:", JSON.stringify(assignment[0]));
+      
+      const memberCompletedMap: Record<string, keyof typeof eventAssignments.$inferSelect> = {
+        'EB': 'ebCompleted',
+        'LEASE': 'leaseCompleted',
+        'BTS_DOWN': 'btsDownCompleted',
+        'FTTH_DOWN': 'ftthDownCompleted',
+        'ROUTE_FAIL': 'routeFailCompleted',
+        'OFC_FAIL': 'ofcFailCompleted',
+      };
+      
+      const memberTargetMap: Record<string, keyof typeof eventAssignments.$inferSelect> = {
+        'EB': 'ebTarget',
+        'LEASE': 'leaseTarget',
+        'BTS_DOWN': 'btsDownTarget',
+        'FTTH_DOWN': 'ftthDownTarget',
+        'ROUTE_FAIL': 'routeFailTarget',
+        'OFC_FAIL': 'ofcFailTarget',
+      };
+      
+      const eventCompletedMap: Record<string, keyof typeof events.$inferSelect> = {
+        'EB': 'ebCompleted',
+        'LEASE': 'leaseCompleted',
+        'BTS_DOWN': 'btsDownCompleted',
+        'FTTH_DOWN': 'ftthDownCompleted',
+        'ROUTE_FAIL': 'routeFailCompleted',
+        'OFC_FAIL': 'ofcFailCompleted',
+      };
+      
+      const eventStartedAtMap: Record<string, string> = {
+        'EB': 'ebStartedAt',
+        'LEASE': 'leaseStartedAt',
+        'BTS_DOWN': 'btsDownStartedAt',
+        'FTTH_DOWN': 'ftthDownStartedAt',
+        'ROUTE_FAIL': 'routeFailStartedAt',
+        'OFC_FAIL': 'ofcFailStartedAt',
+      };
+      
+      const completedColumn = memberCompletedMap[input.taskType];
+      const targetColumn = memberTargetMap[input.taskType];
+      const eventCompletedColumn = eventCompletedMap[input.taskType];
+      const eventStartedAtColumn = eventStartedAtMap[input.taskType];
+      
+      const currentMemberCompleted = (assignment[0] as any)[completedColumn] || 0;
+      let memberTarget = (assignment[0] as any)[targetColumn] || 0;
+      
+      // If member has no individual target, use distributed target from event level
+      if (memberTarget === 0) {
+        const eventTargetMap: Record<string, keyof typeof events.$inferSelect> = {
+          'EB': 'targetEb',
+          'LEASE': 'targetLease',
+          'BTS_DOWN': 'targetBtsDown',
+          'FTTH_DOWN': 'targetFtthDown',
+          'ROUTE_FAIL': 'targetRouteFail',
+          'OFC_FAIL': 'targetOfcFail',
+        };
+        const eventTargetColumn = eventTargetMap[input.taskType];
+        const eventTarget = (event[0] as any)[eventTargetColumn] || 0;
+        
+        // Get all assignments to calculate distributed target
+        const allAssignmentsForDistribution = await db.select().from(eventAssignments)
+          .where(eq(eventAssignments.eventId, input.eventId));
+        const teamSize = allAssignmentsForDistribution.length;
+        const memberIdx = allAssignmentsForDistribution.findIndex(a => a.employeeId === input.employeeId);
+        
+        if (teamSize > 0) {
+          const baseTarget = Math.floor(eventTarget / teamSize);
+          const remainder = eventTarget % teamSize;
+          memberTarget = baseTarget + (memberIdx < remainder ? 1 : 0);
+        }
+        console.log(`Using distributed target: ${memberTarget} (event target: ${eventTarget}, team size: ${teamSize})`);
+      }
+      
+      console.log(`Task type: ${input.taskType}, Current: ${currentMemberCompleted}, Target: ${memberTarget}`);
+      
+      let newMemberCompleted = currentMemberCompleted + input.increment;
+      newMemberCompleted = Math.max(0, Math.min(newMemberCompleted, memberTarget));
+      
+      console.log(`New completed value: ${newMemberCompleted}`);
+      
+      await db.update(eventAssignments)
+        .set({ [completedColumn]: newMemberCompleted, updatedAt: new Date() } as any)
+        .where(and(
+          eq(eventAssignments.eventId, input.eventId),
+          eq(eventAssignments.employeeId, input.employeeId)
+        ));
+      
+      const allAssignments = await db.select().from(eventAssignments)
+        .where(eq(eventAssignments.eventId, input.eventId));
+      
+      const totalCompleted = allAssignments.reduce((sum, a) => sum + ((a as any)[completedColumn] || 0), 0);
+      
+      const currentStartedAt = (event[0] as any)[eventStartedAtColumn];
+      const updateData: any = { 
+        [eventCompletedColumn]: totalCompleted, 
+        updatedAt: new Date() 
+      };
+      if (!currentStartedAt && totalCompleted > 0) {
+        updateData[eventStartedAtColumn] = new Date();
+      }
+      
+      const result = await db.update(events)
+        .set(updateData)
+        .where(eq(events.id, input.eventId))
+        .returning();
+      
+      await db.insert(auditLogs).values({
+        action: 'UPDATE_MEMBER_TASK_PROGRESS',
+        entityType: 'EVENT',
+        entityId: input.eventId,
+        performedBy: input.updatedBy,
+        timestamp: new Date(),
+        details: { 
+          taskType: input.taskType, 
+          employeeId: input.employeeId,
+          increment: input.increment, 
+          newMemberCompleted,
+          totalCompleted,
+        },
+      });
+      
+      return { 
+        memberCompleted: newMemberCompleted, 
+        memberTarget,
+        totalCompleted,
+        event: result[0] 
+      };
     }),
 
   getTaskProgress: publicProcedure
@@ -1626,6 +1923,21 @@ export const eventsRouter = createTRPCRouter({
         details: { subtaskId: result[0].id, title: input.title, assignedTo: assignedEmployeeId },
       });
 
+      if (assignedEmployeeId && assignedEmployeeId !== input.createdBy) {
+        const event = await db.select({ name: events.name }).from(events).where(eq(events.id, input.eventId));
+        const creator = await db.select({ name: employees.name }).from(employees).where(eq(employees.id, input.createdBy));
+        if (event[0] && creator[0]) {
+          notifySubtaskAssigned(
+            assignedEmployeeId,
+            result[0].id,
+            input.title,
+            event[0].name,
+            creator[0].name,
+            input.dueDate
+          ).catch(err => console.error('Failed to notify subtask assignment:', err));
+        }
+      }
+
       return result[0];
     }),
 
@@ -1648,6 +1960,9 @@ export const eventsRouter = createTRPCRouter({
       console.log("Updating subtask:", input);
       
       const { subtaskId, updatedBy, dueDate, ...updateData } = input;
+      
+      const oldSubtask = await db.select().from(eventSubtasks).where(eq(eventSubtasks.id, subtaskId));
+      const previousAssignee = oldSubtask[0]?.assignedTo;
       
       const updateValues: Record<string, unknown> = { ...updateData, updatedAt: new Date() };
       if (dueDate !== undefined) {
@@ -1672,6 +1987,33 @@ export const eventsRouter = createTRPCRouter({
           performedBy: updatedBy,
           details: { subtaskId, changes: updateData },
         });
+
+        if (input.assignedTo !== undefined && input.assignedTo !== previousAssignee && input.assignedTo && input.assignedTo !== updatedBy) {
+          const event = await db.select({ name: events.name }).from(events).where(eq(events.id, result[0].eventId));
+          const updater = await db.select({ name: employees.name }).from(employees).where(eq(employees.id, updatedBy));
+          if (event[0] && updater[0]) {
+            notifySubtaskReassigned(
+              input.assignedTo,
+              subtaskId,
+              result[0].title,
+              event[0].name,
+              updater[0].name,
+              result[0].dueDate?.toISOString()
+            ).catch(err => console.error('Failed to notify subtask reassignment:', err));
+          }
+        }
+
+        if (input.status === 'completed' && result[0].createdBy && result[0].createdBy !== updatedBy) {
+          const completedByEmployee = await db.select({ name: employees.name }).from(employees).where(eq(employees.id, updatedBy));
+          if (completedByEmployee[0]) {
+            notifySubtaskCompleted(
+              result[0].createdBy,
+              subtaskId,
+              result[0].title,
+              completedByEmployee[0].name
+            ).catch(err => console.error('Failed to notify subtask completion:', err));
+          }
+        }
       }
 
       return result[0];
@@ -1956,37 +2298,58 @@ export const eventsRouter = createTRPCRouter({
       employeeId: z.string().uuid(),
     }))
     .query(async ({ input }) => {
-      console.log("Fetching assigned tasks for employee:", input.employeeId);
+      console.log("=== FETCHING MY ASSIGNED TASKS ===");
+      console.log("Employee ID:", input.employeeId);
       
       const employee = await db.select().from(employees)
         .where(eq(employees.id, input.employeeId));
       
       if (!employee[0]) {
+        console.log("Employee not found, returning empty");
         return [];
       }
       
       const employeePersNo = employee[0].persNo;
+      console.log("Employee persNo:", employeePersNo);
       
+      // Get events where employee has direct assignment in event_assignments table
       const myAssignments = await db.select().from(eventAssignments)
         .where(eq(eventAssignments.employeeId, input.employeeId));
-      
-      if (myAssignments.length === 0 && !employeePersNo) {
-        return [];
-      }
+      console.log("Direct assignments count:", myAssignments.length);
       
       const assignedEventIds = myAssignments.map(a => a.eventId);
+      console.log("Direct assignment event IDs:", assignedEventIds);
       
-      let additionalEventIds: string[] = [];
+      // Get events where employee is in assignedTeam array (by persNo)
+      let teamEventIds: string[] = [];
       if (employeePersNo) {
         const eventsWithPersNoAssignment = await db.select({ id: events.id })
           .from(events)
-          .where(sql`${events.assignedTeam}::jsonb ? ${employeePersNo}`);
-        additionalEventIds = eventsWithPersNoAssignment.map(e => e.id);
+          .where(sql`EXISTS (SELECT 1 FROM jsonb_array_elements_text(${events.assignedTeam}::jsonb) AS elem WHERE elem = ${employeePersNo})`);
+        teamEventIds = eventsWithPersNoAssignment.map(e => e.id);
+        console.log("Events from assignedTeam (persNo match):", teamEventIds.length);
       }
       
-      const allEventIds = [...new Set([...assignedEventIds, ...additionalEventIds])];
+      // Get events where employee is the assigned manager (assignedTo)
+      const managerEvents = await db.select({ id: events.id })
+        .from(events)
+        .where(eq(events.assignedTo, input.employeeId));
+      const managerEventIds = managerEvents.map(e => e.id);
+      console.log("Events as manager (assignedTo):", managerEventIds.length);
+      
+      // Get events where employee is the creator
+      const creatorEvents = await db.select({ id: events.id })
+        .from(events)
+        .where(eq(events.createdBy, input.employeeId));
+      const creatorEventIds = creatorEvents.map(e => e.id);
+      console.log("Events as creator:", creatorEventIds.length);
+      
+      // Combine all event IDs (deduplicated)
+      const allEventIds = [...new Set([...assignedEventIds, ...teamEventIds, ...managerEventIds, ...creatorEventIds])];
+      console.log("Total unique event IDs:", allEventIds.length);
       
       if (allEventIds.length === 0) {
+        console.log("No events found for this employee's tasks");
         return [];
       }
       
@@ -2021,6 +2384,17 @@ export const eventsRouter = createTRPCRouter({
           return effectiveIndex < remainder ? base + 1 : base;
         };
         
+        // Determine employee's role in this task
+        const isCreator = event.createdBy === input.employeeId;
+        const isManager = event.assignedTo === input.employeeId;
+        const isTeamMember = employeePersNo ? (event.assignedTeam as string[] || []).includes(employeePersNo) : false;
+        const hasDirectAssignment = !!assignment;
+        
+        let myRole: 'creator' | 'manager' | 'team_member' | 'assigned' = 'team_member';
+        if (isCreator) myRole = 'creator';
+        else if (isManager) myRole = 'manager';
+        else if (hasDirectAssignment) myRole = 'assigned';
+        
         return {
           id: event.id,
           name: event.name,
@@ -2031,6 +2405,11 @@ export const eventsRouter = createTRPCRouter({
           endDate: event.endDate,
           status: event.status,
           category: event.category,
+          myRole,
+          isCreator,
+          isManager,
+          isTeamMember,
+          hasDirectAssignment,
           assignmentId: assignment?.id || null,
           myTargets: {
             sim: assignment?.simTarget || (hasSIM ? getDistributedTarget(event.targetSim) : 0),
@@ -2070,6 +2449,26 @@ export const eventsRouter = createTRPCRouter({
             hasOfcFail,
             hasEb,
           },
+          submissionStatus: (() => {
+            // If already has a submission status, use it
+            if (assignment?.submissionStatus && assignment.submissionStatus !== 'not_started') {
+              return assignment.submissionStatus;
+            }
+            // Calculate effective status based on actual progress
+            const hasProgress = 
+              (assignment?.simSold || 0) > 0 || 
+              (assignment?.ftthSold || 0) > 0 ||
+              (event.leaseCompleted || 0) > 0 ||
+              (event.btsDownCompleted || 0) > 0 ||
+              (event.routeFailCompleted || 0) > 0 ||
+              (event.ftthDownCompleted || 0) > 0 ||
+              (event.ofcFailCompleted || 0) > 0 ||
+              (event.ebCompleted || 0) > 0;
+            return hasProgress ? 'in_progress' : 'not_started';
+          })(),
+          submittedAt: assignment?.submittedAt || null,
+          reviewedAt: assignment?.reviewedAt || null,
+          rejectionReason: assignment?.rejectionReason || null,
         };
       });
     }),
@@ -2134,5 +2533,168 @@ export const eventsRouter = createTRPCRouter({
       });
       
       return { success: true, message: 'Progress submitted successfully' };
+    }),
+
+  submitTaskForReview: publicProcedure
+    .input(z.object({
+      assignmentId: z.string().uuid(),
+      employeeId: z.string().uuid(),
+    }))
+    .mutation(async ({ input }) => {
+      console.log("Submitting task for review:", input);
+      
+      const assignment = await db.select().from(eventAssignments)
+        .where(eq(eventAssignments.id, input.assignmentId));
+      
+      if (!assignment[0]) {
+        throw new Error('Assignment not found');
+      }
+      
+      if (assignment[0].employeeId !== input.employeeId) {
+        throw new Error('You can only submit your own tasks');
+      }
+      
+      await db.update(eventAssignments)
+        .set({ 
+          submissionStatus: 'submitted',
+          submittedAt: new Date(),
+          updatedAt: new Date()
+        })
+        .where(eq(eventAssignments.id, input.assignmentId));
+      
+      // Send notification to task creator
+      try {
+        const event = await db.select().from(events)
+          .where(eq(events.id, assignment[0].eventId));
+        const submitter = await db.select().from(employees)
+          .where(eq(employees.id, input.employeeId));
+        
+        if (event[0] && submitter[0]) {
+          await notifyTaskSubmitted(
+            event[0].createdBy,
+            event[0].id,
+            event[0].name,
+            submitter[0].name
+          );
+          console.log("Notification sent to task creator:", event[0].createdBy);
+        }
+      } catch (notifError) {
+        console.error("Failed to send submission notification:", notifError);
+      }
+      
+      return { success: true, message: 'Task submitted for review' };
+    }),
+
+  approveTask: publicProcedure
+    .input(z.object({
+      assignmentId: z.string().uuid(),
+      reviewerId: z.string().uuid(),
+    }))
+    .mutation(async ({ input }) => {
+      console.log("Approving task:", input);
+      
+      const assignment = await db.select().from(eventAssignments)
+        .where(eq(eventAssignments.id, input.assignmentId));
+      
+      if (!assignment[0]) {
+        throw new Error('Assignment not found');
+      }
+      
+      const event = await db.select().from(events)
+        .where(eq(events.id, assignment[0].eventId));
+      
+      if (!event[0] || event[0].createdBy !== input.reviewerId) {
+        const assignedBy = assignment[0].assignedBy;
+        if (assignedBy !== input.reviewerId) {
+          throw new Error('Only the task creator or assigner can approve');
+        }
+      }
+      
+      await db.update(eventAssignments)
+        .set({ 
+          submissionStatus: 'approved',
+          reviewedAt: new Date(),
+          reviewedBy: input.reviewerId,
+          updatedAt: new Date()
+        })
+        .where(eq(eventAssignments.id, input.assignmentId));
+      
+      // Send notification to team member
+      try {
+        const reviewer = await db.select().from(employees)
+          .where(eq(employees.id, input.reviewerId));
+        
+        if (event[0] && reviewer[0]) {
+          await notifyTaskApproved(
+            assignment[0].employeeId,
+            event[0].id,
+            event[0].name,
+            reviewer[0].name
+          );
+          console.log("Approval notification sent to:", assignment[0].employeeId);
+        }
+      } catch (notifError) {
+        console.error("Failed to send approval notification:", notifError);
+      }
+      
+      return { success: true, message: 'Task approved' };
+    }),
+
+  rejectTask: publicProcedure
+    .input(z.object({
+      assignmentId: z.string().uuid(),
+      reviewerId: z.string().uuid(),
+      reason: z.string().optional(),
+    }))
+    .mutation(async ({ input }) => {
+      console.log("Rejecting task:", input);
+      
+      const assignment = await db.select().from(eventAssignments)
+        .where(eq(eventAssignments.id, input.assignmentId));
+      
+      if (!assignment[0]) {
+        throw new Error('Assignment not found');
+      }
+      
+      const event = await db.select().from(events)
+        .where(eq(events.id, assignment[0].eventId));
+      
+      if (!event[0] || event[0].createdBy !== input.reviewerId) {
+        const assignedBy = assignment[0].assignedBy;
+        if (assignedBy !== input.reviewerId) {
+          throw new Error('Only the task creator or assigner can reject');
+        }
+      }
+      
+      await db.update(eventAssignments)
+        .set({ 
+          submissionStatus: 'rejected',
+          reviewedAt: new Date(),
+          reviewedBy: input.reviewerId,
+          rejectionReason: input.reason || null,
+          updatedAt: new Date()
+        })
+        .where(eq(eventAssignments.id, input.assignmentId));
+      
+      // Send notification to team member
+      try {
+        const reviewer = await db.select().from(employees)
+          .where(eq(employees.id, input.reviewerId));
+        
+        if (event[0] && reviewer[0]) {
+          await notifyTaskRejected(
+            assignment[0].employeeId,
+            event[0].id,
+            event[0].name,
+            reviewer[0].name,
+            input.reason
+          );
+          console.log("Rejection notification sent to:", assignment[0].employeeId);
+        }
+      } catch (notifError) {
+        console.error("Failed to send rejection notification:", notifError);
+      }
+      
+      return { success: true, message: 'Task rejected' };
     }),
 });

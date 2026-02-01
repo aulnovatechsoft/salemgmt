@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
-import { db, issues, auditLogs } from "@/backend/db";
+import { db, issues, auditLogs, events, employees } from "@/backend/db";
+import { notifyIssueRaised, notifyIssueResolved, notifyIssueEscalated } from "@/backend/services/notification.service";
 
 export const issuesRouter = createTRPCRouter({
   getAll: publicProcedure
@@ -59,10 +60,11 @@ export const issuesRouter = createTRPCRouter({
       raisedBy: z.string().uuid(),
       type: z.enum(['MATERIAL_SHORTAGE', 'SITE_ACCESS', 'EQUIPMENT', 'NETWORK_PROBLEM', 'OTHER']),
       description: z.string().min(1),
-      escalatedTo: z.string().uuid().optional(),
+      escalatedTo: z.string().uuid().optional().nullable(),
     }))
     .mutation(async ({ input }) => {
       console.log("Creating issue for event:", input.eventId);
+      console.log("Issue input:", JSON.stringify(input, null, 2));
       
       const timeline = [{
         action: 'Issue Created',
@@ -70,27 +72,55 @@ export const issuesRouter = createTRPCRouter({
         timestamp: new Date().toISOString(),
       }];
 
-      const result = await db.insert(issues).values({
-        eventId: input.eventId,
-        raisedBy: input.raisedBy,
-        type: input.type,
-        description: input.description,
-        escalatedTo: input.escalatedTo,
-        timeline: timeline,
-      }).returning();
-
-      await db.insert(auditLogs).values({
-        action: 'CREATE_ISSUE',
-        entityType: 'ISSUE',
-        entityId: result[0].id,
-        performedBy: input.raisedBy,
-        details: { 
+      try {
+        const result = await db.insert(issues).values({
           eventId: input.eventId,
+          raisedBy: input.raisedBy,
           type: input.type,
-        },
-      });
+          description: input.description,
+          escalatedTo: input.escalatedTo || null,
+          timeline: timeline,
+        }).returning();
 
-      return result[0];
+        console.log("Issue created successfully:", result[0]?.id);
+
+        await db.insert(auditLogs).values({
+          action: 'CREATE_ISSUE',
+          entityType: 'ISSUE',
+          entityId: result[0].id,
+          performedBy: input.raisedBy,
+          details: { 
+            eventId: input.eventId,
+            type: input.type,
+          },
+        });
+
+        // Send notification to task creator
+        try {
+          const event = await db.select().from(events)
+            .where(eq(events.id, input.eventId));
+          const raiser = await db.select().from(employees)
+            .where(eq(employees.id, input.raisedBy));
+          
+          if (event[0] && raiser[0]) {
+            await notifyIssueRaised(
+              event[0].createdBy,
+              result[0].id,
+              input.type,
+              event[0].name,
+              raiser[0].name
+            );
+            console.log("Issue notification sent to task creator:", event[0].createdBy);
+          }
+        } catch (notifError) {
+          console.error("Failed to send issue notification:", notifError);
+        }
+
+        return result[0];
+      } catch (error: any) {
+        console.error("Error creating issue:", error.message);
+        throw new Error(`Failed to create issue: ${error.message}`);
+      }
     }),
 
   updateStatus: publicProcedure
@@ -142,6 +172,29 @@ export const issuesRouter = createTRPCRouter({
         details: { status: input.status },
       });
 
+      // Send notification when issue is resolved
+      if (input.status === 'RESOLVED' || input.status === 'CLOSED') {
+        try {
+          const event = await db.select().from(events)
+            .where(eq(events.id, existing[0].eventId));
+          const resolver = await db.select().from(employees)
+            .where(eq(employees.id, input.updatedBy));
+          
+          if (event[0] && resolver[0]) {
+            await notifyIssueResolved(
+              existing[0].raisedBy,
+              input.id,
+              existing[0].type,
+              event[0].name,
+              resolver[0].name
+            );
+            console.log("Issue resolution notification sent to raiser:", existing[0].raisedBy);
+          }
+        } catch (notifError) {
+          console.error("Failed to send issue resolution notification:", notifError);
+        }
+      }
+
       return result[0];
     }),
 
@@ -186,6 +239,27 @@ export const issuesRouter = createTRPCRouter({
         performedBy: input.escalatedBy,
         details: { escalatedTo: input.escalatedTo },
       });
+
+      // Send notification to the person the issue is escalated to
+      try {
+        const event = await db.select().from(events)
+          .where(eq(events.id, existing[0].eventId));
+        const escalator = await db.select().from(employees)
+          .where(eq(employees.id, input.escalatedBy));
+        
+        if (event[0] && escalator[0]) {
+          await notifyIssueEscalated(
+            input.escalatedTo,
+            input.id,
+            existing[0].type,
+            event[0].name,
+            escalator[0].name
+          );
+          console.log("Issue escalation notification sent to:", input.escalatedTo);
+        }
+      } catch (notifError) {
+        console.error("Failed to send issue escalation notification:", notifError);
+      }
 
       return result[0];
     }),

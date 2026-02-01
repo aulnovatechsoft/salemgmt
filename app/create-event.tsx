@@ -68,7 +68,9 @@ export default function CreateEventScreen() {
   const [targetSim, setTargetSim] = useState('');
   const [targetFtth, setTargetFtth] = useState('');
   const [targetLeaseCircuit, setTargetLeaseCircuit] = useState('');
+  const [leaseEstHours, setLeaseEstHours] = useState('');
   const [targetEb, setTargetEb] = useState('');
+  const [ebEstHours, setEbEstHours] = useState('');
   const [maintenanceDetails, setMaintenanceDetails] = useState<Record<string, { priority: 'low' | 'medium' | 'high' | 'critical'; sites: string; hours: string }>>({
     BTS_DOWN: { priority: 'medium', sites: '', hours: '' },
     FTTH_DOWN: { priority: 'medium', sites: '', hours: '' },
@@ -77,10 +79,19 @@ export default function CreateEventScreen() {
   });
   const [keyInsight, setKeyInsight] = useState('');
 
+  const validateEstHours = (value: string): string => {
+    const num = parseFloat(value);
+    if (isNaN(num) || value === '') return value;
+    if (num < 0) return '0';
+    if (num > 168) return '168';
+    return value;
+  };
+
   const updateMaintenanceDetail = (taskId: string, field: 'priority' | 'sites' | 'hours', value: string) => {
+    const validatedValue = field === 'hours' ? validateEstHours(value) : value;
     setMaintenanceDetails(prev => ({
       ...prev,
-      [taskId]: { ...prev[taskId], [field]: value }
+      [taskId]: { ...prev[taskId], [field]: validatedValue }
     }));
   };
 
@@ -458,6 +469,12 @@ export default function CreateEventScreen() {
         targetFtthDown: selectedCategories.includes('FTTH_DOWN') ? (parseInt(maintenanceDetails.FTTH_DOWN?.sites) || 0) : 0,
         targetRouteFail: selectedCategories.includes('ROUTE_FAIL') ? (parseInt(maintenanceDetails.ROUTE_FAIL?.sites) || 0) : 0,
         targetOfcFail: selectedCategories.includes('OFC_FAIL') ? (parseInt(maintenanceDetails.OFC_FAIL?.sites) || 0) : 0,
+        ebEstHours: showEbTarget ? (parseFloat(ebEstHours) || 0) : undefined,
+        leaseEstHours: showLeaseCircuitTarget ? (parseFloat(leaseEstHours) || 0) : undefined,
+        btsDownEstHours: selectedCategories.includes('BTS_DOWN') ? (parseFloat(maintenanceDetails.BTS_DOWN?.hours) || 0) : undefined,
+        ftthDownEstHours: selectedCategories.includes('FTTH_DOWN') ? (parseFloat(maintenanceDetails.FTTH_DOWN?.hours) || 0) : undefined,
+        routeFailEstHours: selectedCategories.includes('ROUTE_FAIL') ? (parseFloat(maintenanceDetails.ROUTE_FAIL?.hours) || 0) : undefined,
+        ofcFailEstHours: selectedCategories.includes('OFC_FAIL') ? (parseFloat(maintenanceDetails.OFC_FAIL?.hours) || 0) : undefined,
         assignedTeam: teamMemberPurseIds,
         allocatedSim: 0,
         allocatedFtth: 0,
@@ -1017,6 +1034,14 @@ export default function CreateEventScreen() {
                       onChangeText={setTargetLeaseCircuit}
                       keyboardType="number-pad"
                     />
+                    <Text style={[styles.label, { marginTop: 10 }]}>Est. Hours (SLA)</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Hours (max 168)"
+                      value={leaseEstHours}
+                      onChangeText={(v) => setLeaseEstHours(validateEstHours(v))}
+                      keyboardType="number-pad"
+                    />
                   </View>
                 )}
 
@@ -1028,6 +1053,14 @@ export default function CreateEventScreen() {
                       placeholder="0"
                       value={targetEb}
                       onChangeText={setTargetEb}
+                      keyboardType="number-pad"
+                    />
+                    <Text style={[styles.label, { marginTop: 10 }]}>Est. Hours (SLA)</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Hours (max 168)"
+                      value={ebEstHours}
+                      onChangeText={(v) => setEbEstHours(validateEstHours(v))}
                       keyboardType="number-pad"
                     />
                   </View>
