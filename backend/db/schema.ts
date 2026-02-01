@@ -32,6 +32,8 @@ export const subtaskPriorityEnum = pgEnum('subtask_priority', ['low', 'medium', 
 
 export const salesReportStatusEnum = pgEnum('sales_report_status', ['pending', 'approved', 'rejected']);
 
+export const taskSubmissionStatusEnum = pgEnum('task_submission_status', ['not_started', 'in_progress', 'submitted', 'approved', 'rejected']);
+
 export const notificationTypeEnum = pgEnum('notification_type', [
   'EVENT_ASSIGNED',
   'EVENT_STATUS_CHANGED',
@@ -42,7 +44,14 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'SUBTASK_ASSIGNED',
   'SUBTASK_DUE_SOON',
   'SUBTASK_OVERDUE',
-  'SUBTASK_COMPLETED'
+  'SUBTASK_COMPLETED',
+  'TASK_SUBMITTED',
+  'TASK_APPROVED',
+  'TASK_REJECTED',
+  'SLA_WARNING',
+  'SLA_BREACHED',
+  'DEADLINE_WARNING',
+  'TASK_ENDING_TODAY'
 ]);
 
 export const auditEntityTypeEnum = pgEnum('audit_entity_type', ['EVENT', 'SALES', 'RESOURCE', 'ISSUE', 'EMPLOYEE']);
@@ -93,6 +102,18 @@ export const events = pgTable('events', {
   ftthDownCompleted: integer('ftth_down_completed').default(0).notNull(),
   routeFailCompleted: integer('route_fail_completed').default(0).notNull(),
   ofcFailCompleted: integer('ofc_fail_completed').default(0).notNull(),
+  ebEstHours: integer('eb_est_hours').default(0).notNull(),
+  leaseEstHours: integer('lease_est_hours').default(0).notNull(),
+  btsDownEstHours: integer('bts_down_est_hours').default(0).notNull(),
+  ftthDownEstHours: integer('ftth_down_est_hours').default(0).notNull(),
+  routeFailEstHours: integer('route_fail_est_hours').default(0).notNull(),
+  ofcFailEstHours: integer('ofc_fail_est_hours').default(0).notNull(),
+  ebStartedAt: timestamp('eb_started_at'),
+  leaseStartedAt: timestamp('lease_started_at'),
+  btsDownStartedAt: timestamp('bts_down_started_at'),
+  ftthDownStartedAt: timestamp('ftth_down_started_at'),
+  routeFailStartedAt: timestamp('route_fail_started_at'),
+  ofcFailStartedAt: timestamp('ofc_fail_started_at'),
   keyInsight: text('key_insight'),
   status: varchar('status', { length: 50 }).default('active'),
   assignedTo: uuid('assigned_to').references(() => employees.id),
@@ -178,6 +199,23 @@ export const eventAssignments = pgTable('event_assignments', {
   ftthTarget: integer('ftth_target').default(0).notNull(),
   simSold: integer('sim_sold').default(0).notNull(),
   ftthSold: integer('ftth_sold').default(0).notNull(),
+  leaseTarget: integer('lease_target').default(0).notNull(),
+  leaseCompleted: integer('lease_completed').default(0).notNull(),
+  btsDownTarget: integer('bts_down_target').default(0).notNull(),
+  btsDownCompleted: integer('bts_down_completed').default(0).notNull(),
+  routeFailTarget: integer('route_fail_target').default(0).notNull(),
+  routeFailCompleted: integer('route_fail_completed').default(0).notNull(),
+  ftthDownTarget: integer('ftth_down_target').default(0).notNull(),
+  ftthDownCompleted: integer('ftth_down_completed').default(0).notNull(),
+  ofcFailTarget: integer('ofc_fail_target').default(0).notNull(),
+  ofcFailCompleted: integer('ofc_fail_completed').default(0).notNull(),
+  ebTarget: integer('eb_target').default(0).notNull(),
+  ebCompleted: integer('eb_completed').default(0).notNull(),
+  submissionStatus: taskSubmissionStatusEnum('submission_status').default('not_started'),
+  submittedAt: timestamp('submitted_at'),
+  reviewedAt: timestamp('reviewed_at'),
+  reviewedBy: uuid('reviewed_by').references(() => employees.id),
+  rejectionReason: text('rejection_reason'),
   assignedBy: uuid('assigned_by').references(() => employees.id),
   assignedAt: timestamp('assigned_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -309,6 +347,38 @@ export const ftthOrderPending = pgTable('ftth_order_pending', {
   persNo: varchar('pers_no', { length: 50 }).notNull(),
   ba: varchar('ba', { length: 50 }).notNull(),
   totalFtthOrdersPending: integer('total_ftth_orders_pending').default(0).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const notificationPreferences = pgTable('notification_preferences', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  employeeId: uuid('employee_id').notNull().references(() => employees.id),
+  notificationType: notificationTypeEnum('notification_type').notNull(),
+  enabled: boolean('enabled').default(true).notNull(),
+  pushEnabled: boolean('push_enabled').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const pushNotificationQueueStatusEnum = pgEnum('push_notification_queue_status', [
+  'pending',
+  'processing',
+  'completed',
+  'failed'
+]);
+
+export const pushNotificationQueue = pgTable('push_notification_queue', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  notificationId: uuid('notification_id').notNull().references(() => notifications.id),
+  token: varchar('token', { length: 255 }).notNull(),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+  status: pushNotificationQueueStatusEnum('status').default('pending').notNull(),
+  attempts: integer('attempts').default(0).notNull(),
+  maxAttempts: integer('max_attempts').default(5).notNull(),
+  lastAttemptAt: timestamp('last_attempt_at'),
+  nextRetryAt: timestamp('next_retry_at'),
+  errorMessage: text('error_message'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });

@@ -6,6 +6,7 @@ import { createContext } from './backend/trpc/create-context';
 import { join } from 'path';
 import { db, employees } from './backend/db';
 import { sql } from 'drizzle-orm';
+import { startNotificationScheduler } from './backend/services/notification-scheduler.service';
 
 const distDir = join(import.meta.dir, 'dist');
 
@@ -34,6 +35,9 @@ app.use(
     createContext,
     onError: ({ error, path }) => {
       console.error(`tRPC error on path '${path}':`, error.message);
+      if (error.cause) {
+        console.error('Error cause:', error.cause);
+      }
     },
   }),
 );
@@ -84,6 +88,9 @@ Bun.serve({
 });
 
 console.log(`Server running at http://0.0.0.0:${port}`);
+
+// Start notification scheduler (checks SLA and deadlines every 15 minutes)
+startNotificationScheduler(15);
 
 // Debug: Check outstanding dues data at startup
 (async () => {

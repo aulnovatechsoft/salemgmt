@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { eq, desc, and, gte, lte } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
-import { db, auditLogs } from "@/backend/db";
+import { db, auditLogs, employees } from "@/backend/db";
 
 export const auditRouter = createTRPCRouter({
   getAll: publicProcedure
@@ -28,7 +28,18 @@ export const auditRouter = createTRPCRouter({
     }))
     .query(async ({ input }) => {
       console.log("Fetching audit logs for entity:", input.entityType, input.entityId);
-      const result = await db.select().from(auditLogs)
+      const result = await db.select({
+        id: auditLogs.id,
+        action: auditLogs.action,
+        entityType: auditLogs.entityType,
+        entityId: auditLogs.entityId,
+        performedBy: auditLogs.performedBy,
+        details: auditLogs.details,
+        timestamp: auditLogs.timestamp,
+        performerName: employees.name,
+      })
+        .from(auditLogs)
+        .leftJoin(employees, eq(auditLogs.performedBy, employees.id))
         .where(and(
           eq(auditLogs.entityType, input.entityType),
           eq(auditLogs.entityId, input.entityId)

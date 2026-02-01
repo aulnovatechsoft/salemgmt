@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, Modal, FlatList, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, Clock, CalendarCheck, AlertTriangle, IndianRupee, X } from 'lucide-react-native';
+import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, Clock, CalendarCheck, AlertTriangle, IndianRupee, X, Hourglass, CircleCheck, CircleDot, Send, RotateCcw } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
@@ -79,6 +79,7 @@ export default function DashboardScreen() {
       ftthDownCompleted: e.ftthDownCompleted || 0,
       routeFailCompleted: e.routeFailCompleted || 0,
       ofcFailCompleted: e.ofcFailCompleted || 0,
+      submissionStatus: e.submissionStatus || 'not_started',
     }));
   }, [myEventsData]);
 
@@ -342,6 +343,7 @@ export default function DashboardScreen() {
                     key={event.id} 
                     event={event} 
                     onPress={() => router.push(`/event-detail?id=${event.id}`)}
+                    submissionStatus={(event as any).submissionStatus}
                   />
                 ))}
                 {stats.activeEventsList.length > MAX_DISPLAYED_WORKS && (
@@ -370,6 +372,7 @@ export default function DashboardScreen() {
                     event={event} 
                     onPress={() => router.push(`/event-detail?id=${event.id}`)}
                     isCompleted
+                    submissionStatus={(event as any).submissionStatus}
                   />
                 ))}
                 {stats.recentCompletedList.length > MAX_DISPLAYED_WORKS && (
@@ -399,18 +402,11 @@ export default function DashboardScreen() {
               />
             )}
             {!isAdminRole(employee?.role || 'SALES_STAFF') && (
-              <>
-                <ActionButton 
-                  label="Submit Sales" 
-                  icon={<TrendingUp size={24} color={Colors.light.background} />} 
-                  onPress={() => router.push('/submit-sales')}
-                />
-                <ActionButton 
-                  label="Raise Issue" 
-                  icon={<AlertCircle size={24} color={Colors.light.background} />} 
-                  onPress={() => router.push('/raise-issue')}
-                />
-              </>
+              <ActionButton 
+                label="Raise Issue" 
+                icon={<AlertCircle size={24} color={Colors.light.background} />} 
+                onPress={() => router.push('/raise-issue')}
+              />
             )}
             <ActionButton 
               label="View Reports" 
@@ -804,7 +800,7 @@ const TASK_TYPE_LABELS: Record<string, string> = {
   'OFC_FAIL': 'OFC-Fail',
 };
 
-function EventProgressMeter({ event, onPress, isCompleted }: { event: Event & { teamMembers?: { persNo: string; name: string; designation: string | null }[]; creatorName?: string | null; assigneeName?: string | null; targetEb?: number; targetLease?: number; ebCompleted?: number; leaseCompleted?: number }; onPress: () => void; isCompleted?: boolean }) {
+function EventProgressMeter({ event, onPress, isCompleted, submissionStatus }: { event: Event & { teamMembers?: { persNo: string; name: string; designation: string | null }[]; creatorName?: string | null; assigneeName?: string | null; targetEb?: number; targetLease?: number; ebCompleted?: number; leaseCompleted?: number }; onPress: () => void; isCompleted?: boolean; submissionStatus?: string }) {
   const simTarget = event.allocatedSim || event.targetSim || 0;
   const ftthTarget = event.allocatedFtth || event.targetFtth || 0;
   const ebTarget = (event as any).targetEb || 0;
@@ -865,6 +861,25 @@ function EventProgressMeter({ event, onPress, isCompleted }: { event: Event & { 
   const teamMembers = (event as any).teamMembers || [];
   const assigneeName = (event as any).assigneeName;
   
+  const getTaskStatusIndicator = () => {
+    if (submissionStatus === 'approved') {
+      return { icon: <CircleCheck size={14} color="#2E7D32" />, label: 'Approved', color: '#2E7D32' };
+    } else if (submissionStatus === 'submitted') {
+      return { icon: <Send size={14} color="#1565C0" />, label: 'Submitted', color: '#1565C0' };
+    } else if (submissionStatus === 'rejected') {
+      return { icon: <RotateCcw size={14} color="#C62828" />, label: 'Rejected', color: '#C62828' };
+    } else if (overallPercentage >= 100) {
+      // Targets achieved but not yet submitted - show ready to submit
+      return { icon: <CircleCheck size={14} color="#4CAF50" />, label: 'Ready to Submit', color: '#4CAF50' };
+    } else if (submissionStatus === 'in_progress' || overallPercentage > 0) {
+      return { icon: <Hourglass size={14} color="#EF6C00" />, label: 'In Progress', color: '#EF6C00' };
+    } else {
+      return { icon: <CircleDot size={14} color="#78909C" />, label: 'Not Started', color: '#78909C' };
+    }
+  };
+  
+  const taskStatusIndicator = getTaskStatusIndicator();
+  
   return (
     <TouchableOpacity 
       style={[styles.progressMeterCard, isCompleted && styles.progressMeterCompleted]}
@@ -873,6 +888,10 @@ function EventProgressMeter({ event, onPress, isCompleted }: { event: Event & { 
     >
       <View style={styles.progressMeterLeft}>
         <CircularProgress percentage={Math.min(overallPercentage, 100)} color={overallColor} />
+        <View style={styles.taskStatusRow}>
+          {taskStatusIndicator.icon}
+          <Text style={[styles.taskStatusLabel, { color: taskStatusIndicator.color }]}>{taskStatusIndicator.label}</Text>
+        </View>
       </View>
       
       <View style={styles.progressMeterContent}>
@@ -1231,6 +1250,17 @@ const styles = StyleSheet.create({
   },
   progressMeterLeft: {
     marginRight: 12,
+    alignItems: 'center',
+  },
+  taskStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    gap: 3,
+  },
+  taskStatusLabel: {
+    fontSize: 9,
+    fontWeight: '500' as const,
   },
   progressMeterContent: {
     flex: 1,

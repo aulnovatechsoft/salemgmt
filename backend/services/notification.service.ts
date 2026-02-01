@@ -1,6 +1,6 @@
 import { db } from '../db';
-import { notifications, pushTokens } from '../db/schema';
-import { eq, and, desc, sql, lt, gte } from 'drizzle-orm';
+import { notifications, pushTokens, notificationPreferences, pushNotificationQueue } from '../db/schema';
+import { eq, and, desc, sql, lt, gte, lte, inArray } from 'drizzle-orm';
 
 type NotificationType = 
   | 'EVENT_ASSIGNED'
@@ -12,7 +12,14 @@ type NotificationType =
   | 'SUBTASK_ASSIGNED'
   | 'SUBTASK_DUE_SOON'
   | 'SUBTASK_OVERDUE'
-  | 'SUBTASK_COMPLETED';
+  | 'SUBTASK_COMPLETED'
+  | 'TASK_SUBMITTED'
+  | 'TASK_APPROVED'
+  | 'TASK_REJECTED'
+  | 'SLA_WARNING'
+  | 'SLA_BREACHED'
+  | 'DEADLINE_WARNING'
+  | 'TASK_ENDING_TODAY';
 
 interface CreateNotificationParams {
   recipientId: string;
@@ -64,7 +71,14 @@ async function sendExpoPushNotificationsBatch(messages: PushMessage[]): Promise<
       });
 
       if (!response.ok) {
-        console.error('Expo push API error:', response.status, await response.text());
+        const errorText = await response.text();
+        console.error('Expo push API error:', response.status, errorText);
+        const errorTickets: ExpoPushTicket[] = batch.map(() => ({
+          status: 'error' as const,
+          message: `API error: ${response.status}`,
+          details: { error: 'BatchFailed' }
+        }));
+        tickets.push(...errorTickets);
         continue;
       }
 
@@ -75,6 +89,12 @@ async function sendExpoPushNotificationsBatch(messages: PushMessage[]): Promise<
       console.log(`Push batch sent: ${batch.length} messages, ${batchTickets.length} tickets`);
     } catch (error) {
       console.error('Failed to send push notification batch:', error);
+      const errorTickets: ExpoPushTicket[] = batch.map(() => ({
+        status: 'error' as const,
+        message: `Fetch error: ${error instanceof Error ? error.message : 'Unknown'}`,
+        details: { error: 'NetworkError' }
+      }));
+      tickets.push(...errorTickets);
     }
   }
   
@@ -138,8 +158,61 @@ async function isDuplicateNotification(
   return existing.length > 0;
 }
 
+async function checkUserPreference(employeeId: string, type: NotificationType): Promise<{ enabled: boolean; pushEnabled: boolean }> {
+  try {
+    const pref = await db.select()
+      .from(notificationPreferences)
+      .where(and(
+        eq(notificationPreferences.employeeId, employeeId),
+        eq(notificationPreferences.notificationType, type)
+      ));
+    
+    if (pref[0]) {
+      return { enabled: pref[0].enabled, pushEnabled: pref[0].pushEnabled };
+    }
+    return { enabled: true, pushEnabled: true };
+  } catch (error) {
+    console.error('Error checking user preference:', error);
+    return { enabled: true, pushEnabled: true };
+  }
+}
+
+async function queuePushNotification(
+  notificationId: string,
+  token: string,
+  payload: PushMessage
+): Promise<void> {
+  try {
+    await db.insert(pushNotificationQueue).values({
+      notificationId,
+      token,
+      payload: payload as unknown as Record<string, unknown>,
+      status: 'pending',
+      attempts: 0,
+      maxAttempts: 5,
+      nextRetryAt: new Date(),
+    });
+  } catch (error) {
+    console.error('Error queuing push notification:', error);
+  }
+}
+
+function calculateNextRetryTime(attempts: number): Date {
+  const baseDelay = 1000;
+  const maxDelay = 3600000;
+  const delay = Math.min(baseDelay * Math.pow(2, attempts), maxDelay);
+  return new Date(Date.now() + delay);
+}
+
 export async function createNotification(params: CreateNotificationParams): Promise<{ id: string } | null> {
   try {
+    const prefs = await checkUserPreference(params.recipientId, params.type);
+    
+    if (!prefs.enabled) {
+      console.log(`Notification disabled by user preference: ${params.type} for ${params.recipientId}`);
+      return null;
+    }
+    
     const dedupeKey = params.dedupeKey || 
       (params.entityType && params.entityId ? `${params.entityType}:${params.entityId}:${params.type}` : undefined);
     
@@ -161,6 +234,11 @@ export async function createNotification(params: CreateNotificationParams): Prom
 
     console.log('Notification created:', result[0]?.id);
 
+    if (!prefs.pushEnabled) {
+      console.log(`Push notifications disabled for: ${params.type} for ${params.recipientId}`);
+      return result[0] || null;
+    }
+
     const tokenRecords = await db.select()
       .from(pushTokens)
       .where(and(
@@ -169,7 +247,7 @@ export async function createNotification(params: CreateNotificationParams): Prom
         lt(pushTokens.failureCount, MAX_FAILURE_COUNT)
       ));
 
-    if (tokenRecords.length > 0) {
+    if (tokenRecords.length > 0 && result[0]) {
       const messages: PushMessage[] = tokenRecords.map(record => ({
         to: record.token,
         sound: 'default',
@@ -184,11 +262,30 @@ export async function createNotification(params: CreateNotificationParams): Prom
       }));
 
       const tickets = await sendExpoPushNotificationsBatch(messages);
-      await handlePushTickets(tickets, tokenRecords.map(r => ({ 
-        id: r.id, 
-        token: r.token, 
-        failureCount: r.failureCount 
-      })));
+      
+      for (let i = 0; i < tickets.length; i++) {
+        const ticket = tickets[i];
+        const tokenRecord = tokenRecords[i];
+        
+        if (ticket.status === 'error' && tokenRecord) {
+          await queuePushNotification(result[0].id, tokenRecord.token, messages[i]);
+          
+          await db.update(pushTokens)
+            .set({ 
+              failureCount: tokenRecord.failureCount + 1,
+              updatedAt: new Date()
+            })
+            .where(eq(pushTokens.id, tokenRecord.id));
+        } else if (ticket.status === 'ok' && tokenRecord) {
+          await db.update(pushTokens)
+            .set({ 
+              lastUsedAt: new Date(),
+              failureCount: 0,
+              updatedAt: new Date()
+            })
+            .where(eq(pushTokens.id, tokenRecord.id));
+        }
+      }
     }
 
     return result[0] || null;
@@ -291,16 +388,35 @@ export async function notifyIssueResolved(
   raisedById: string,
   issueId: string,
   issueType: string,
+  eventName: string,
   resolvedByName: string
 ): Promise<void> {
   await createNotification({
     recipientId: raisedById,
     type: 'ISSUE_RESOLVED',
     title: 'Issue Resolved',
-    message: `Your ${issueType} issue has been resolved by ${resolvedByName}`,
+    message: `Your ${issueType} issue for "${eventName}" has been resolved by ${resolvedByName}`,
     entityType: 'ISSUE',
     entityId: issueId,
-    metadata: { issueType, resolvedByName },
+    metadata: { issueType, eventName, resolvedByName },
+  });
+}
+
+export async function notifyIssueEscalated(
+  escalatedToId: string,
+  issueId: string,
+  issueType: string,
+  eventName: string,
+  escalatedByName: string
+): Promise<void> {
+  await createNotification({
+    recipientId: escalatedToId,
+    type: 'ISSUE_ESCALATED',
+    title: 'Issue Escalated to You',
+    message: `A ${issueType} issue for "${eventName}" has been escalated to you by ${escalatedByName}`,
+    entityType: 'ISSUE',
+    entityId: issueId,
+    metadata: { issueType, eventName, escalatedByName },
   });
 }
 
@@ -395,5 +511,175 @@ export async function notifySubtaskCompleted(
     entityType: 'SUBTASK',
     entityId: subtaskId,
     metadata: { subtaskTitle, completedByName },
+  });
+}
+
+export async function notifyTaskSubmitted(
+  creatorId: string,
+  eventId: string,
+  eventName: string,
+  submittedByName: string
+): Promise<void> {
+  await createNotification({
+    recipientId: creatorId,
+    type: 'TASK_SUBMITTED',
+    title: 'Task Submitted for Review',
+    message: `${submittedByName} has submitted their work for "${eventName}" and is awaiting your approval`,
+    entityType: 'EVENT',
+    entityId: eventId,
+    metadata: { eventName, submittedByName },
+  });
+}
+
+export async function notifyTaskApproved(
+  employeeId: string,
+  eventId: string,
+  eventName: string,
+  approvedByName: string
+): Promise<void> {
+  await createNotification({
+    recipientId: employeeId,
+    type: 'TASK_APPROVED',
+    title: 'Task Approved!',
+    message: `Your work for "${eventName}" has been approved by ${approvedByName}`,
+    entityType: 'EVENT',
+    entityId: eventId,
+    metadata: { eventName, approvedByName },
+  });
+}
+
+export async function notifyTaskRejected(
+  employeeId: string,
+  eventId: string,
+  eventName: string,
+  rejectedByName: string,
+  reason?: string
+): Promise<void> {
+  let message = `Your work for "${eventName}" was rejected by ${rejectedByName}`;
+  if (reason) {
+    message += `. Reason: ${reason}`;
+  }
+  
+  await createNotification({
+    recipientId: employeeId,
+    type: 'TASK_REJECTED',
+    title: 'Task Rejected',
+    message,
+    entityType: 'EVENT',
+    entityId: eventId,
+    metadata: { eventName, rejectedByName, reason },
+  });
+}
+
+export async function notifySlaWarning(
+  employeeId: string,
+  eventId: string,
+  eventName: string,
+  category: string,
+  remainingMinutes: number
+): Promise<void> {
+  await createNotification({
+    recipientId: employeeId,
+    type: 'SLA_WARNING',
+    title: 'SLA Warning!',
+    message: `${category} task for "${eventName}" has only ${remainingMinutes} minutes left before SLA breach`,
+    entityType: 'EVENT',
+    entityId: eventId,
+    metadata: { eventName, category, remainingMinutes },
+  });
+}
+
+export async function notifySlaBreached(
+  employeeId: string,
+  eventId: string,
+  eventName: string,
+  category: string
+): Promise<void> {
+  await createNotification({
+    recipientId: employeeId,
+    type: 'SLA_BREACHED',
+    title: 'SLA Breached!',
+    message: `${category} task for "${eventName}" has exceeded the SLA. Please take immediate action!`,
+    entityType: 'EVENT',
+    entityId: eventId,
+    metadata: { eventName, category },
+  });
+}
+
+export async function notifyManagerSlaBreached(
+  managerId: string,
+  eventId: string,
+  eventName: string,
+  category: string,
+  teamMemberName: string
+): Promise<void> {
+  await createNotification({
+    recipientId: managerId,
+    type: 'SLA_BREACHED',
+    title: 'Team SLA Breach Alert',
+    message: `${teamMemberName}'s ${category} task for "${eventName}" has exceeded the SLA. Review and take action.`,
+    entityType: 'EVENT',
+    entityId: eventId,
+    metadata: { eventName, category, teamMemberName, isManagerAlert: true },
+  });
+}
+
+export async function notifySubtaskReassigned(
+  newAssigneeId: string,
+  subtaskId: string,
+  subtaskTitle: string,
+  eventName: string,
+  assignedByName: string,
+  dueDate?: string
+): Promise<void> {
+  let message = `You have been reassigned to task "${subtaskTitle}" for "${eventName}" by ${assignedByName}`;
+  if (dueDate) {
+    message += `. Due: ${new Date(dueDate).toLocaleDateString()}`;
+  }
+
+  await createNotification({
+    recipientId: newAssigneeId,
+    type: 'SUBTASK_ASSIGNED',
+    title: 'Task Reassigned to You',
+    message,
+    entityType: 'SUBTASK',
+    entityId: subtaskId,
+    metadata: { subtaskTitle, eventName, assignedByName, dueDate, isReassignment: true },
+  });
+}
+
+export async function notifyDeadlineWarning(
+  employeeId: string,
+  eventId: string,
+  eventName: string,
+  daysRemaining: number,
+  currentProgress: number,
+  targetProgress: number
+): Promise<void> {
+  const urgency = daysRemaining === 0 ? 'ends today' : `ends in ${daysRemaining} day${daysRemaining > 1 ? 's' : ''}`;
+  await createNotification({
+    recipientId: employeeId,
+    type: 'DEADLINE_WARNING',
+    title: 'Deadline Approaching!',
+    message: `Task "${eventName}" ${urgency}. Your progress: ${currentProgress}/${targetProgress}`,
+    entityType: 'EVENT',
+    entityId: eventId,
+    metadata: { eventName, daysRemaining, currentProgress, targetProgress },
+  });
+}
+
+export async function notifyTaskEndingToday(
+  employeeId: string,
+  eventId: string,
+  eventName: string
+): Promise<void> {
+  await createNotification({
+    recipientId: employeeId,
+    type: 'TASK_ENDING_TODAY',
+    title: 'Task Ending Today',
+    message: `Task "${eventName}" ends today. Please complete and submit your work.`,
+    entityType: 'EVENT',
+    entityId: eventId,
+    metadata: { eventName },
   });
 }

@@ -1,34 +1,52 @@
 import { useState } from 'react';
-import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/auth';
-import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
-import { Issue } from '@/types';
 import { ISSUE_TYPES } from '@/constants/app';
+import { trpc } from '@/lib/trpc';
+import { ChevronDown, Check, X } from 'lucide-react-native';
 
 export default function RaiseIssueScreen() {
   const router = useRouter();
   const { employee } = useAuth();
-  const { events, employees, addIssue, addAuditLog } = useApp();
   
   const [selectedEventId, setSelectedEventId] = useState('');
-  const [issueType, setIssueType] = useState<any>('MATERIAL_SHORTAGE');
+  const [issueType, setIssueType] = useState<'MATERIAL_SHORTAGE' | 'SITE_ACCESS' | 'EQUIPMENT' | 'NETWORK_PROBLEM' | 'OTHER'>('MATERIAL_SHORTAGE');
   const [description, setDescription] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [showEventPicker, setShowEventPicker] = useState(false);
   const [showTypePicker, setShowTypePicker] = useState(false);
 
-  const myEvents = events.filter(e => {
+  // Fetch events assigned to this employee
+  const { data: myEventsData, isLoading: eventsLoading } = trpc.events.getMyAssignedTasks.useQuery(
+    { employeeId: employee?.id || '' },
+    { enabled: !!employee?.id }
+  );
+
+  const createIssueMutation = trpc.issues.create.useMutation({
+    onSuccess: () => {
+      Alert.alert('Success', 'Issue raised successfully', [
+        { text: 'OK', onPress: () => router.back() },
+      ]);
+    },
+    onError: (error) => {
+      Alert.alert('Error', error.message || 'Failed to raise issue');
+    },
+  });
+
+  // Filter active events only
+  const myEvents = (myEventsData || []).filter(e => {
     const today = new Date();
-    const endDate = new Date(e.dateRange.endDate);
-    return endDate >= today;
+    today.setHours(0, 0, 0, 0);
+    const endDate = new Date(e.endDate);
+    endDate.setHours(23, 59, 59, 999);
+    return endDate >= today || e.status === 'active';
   });
 
   const handleSubmit = async () => {
     if (!selectedEventId) {
-      Alert.alert('Error', 'Please select an event');
+      Alert.alert('Error', 'Please select a task');
       return;
     }
     if (!description.trim()) {
@@ -36,53 +54,20 @@ export default function RaiseIssueScreen() {
       return;
     }
 
-    setIsSubmitting(true);
+    // Find the manager to escalate to (use event creator or current manager)
+    const selectedEvent = myEvents.find(e => e.id === selectedEventId);
+    const escalateTo = (selectedEvent as any)?.createdBy || undefined;
 
-    const escalateTo = employee?.reportingPersNo || employees.find(emp => 
-      emp.role === 'AGM' || emp.role === 'DGM'
-    )?.id;
-
-    const newIssue: Issue = {
-      id: Date.now().toString(),
+    createIssueMutation.mutate({
       eventId: selectedEventId,
       raisedBy: employee?.id || '',
       type: issueType,
       description: description.trim(),
-      status: 'OPEN',
       escalatedTo: escalateTo,
-      createdAt: new Date().toISOString(),
-      timeline: [
-        {
-          action: 'Issue raised',
-          performedBy: employee?.id || '',
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    };
-
-    try {
-      await addIssue(newIssue);
-      await addAuditLog({
-        id: Date.now().toString(),
-        action: 'Raised Issue',
-        entityType: 'ISSUE',
-        entityId: newIssue.id,
-        performedBy: employee?.id || '',
-        timestamp: new Date().toISOString(),
-        details: { type: newIssue.type, eventId: selectedEventId },
-      });
-      
-      Alert.alert('Success', 'Issue raised successfully', [
-        { text: 'OK', onPress: () => router.back() },
-      ]);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to raise issue');
-    } finally {
-      setIsSubmitting(false);
-    }
+    });
   };
 
-  const selectedEvent = events.find(e => e.id === selectedEventId);
+  const selectedEvent = myEvents.find(e => e.id === selectedEventId);
   const issueTypeLabel = ISSUE_TYPES.find(t => t.value === issueType)?.label || issueType;
 
   return (
@@ -99,106 +84,147 @@ export default function RaiseIssueScreen() {
           },
         }} 
       />
+
       <ScrollView style={styles.container}>
         <View style={styles.form}>
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Select Task *</Text>
-            <TouchableOpacity 
-              style={styles.picker}
-              onPress={() => setShowEventPicker(!showEventPicker)}
-            >
-              <Text style={styles.pickerText}>
-                {selectedEvent ? selectedEvent.name : 'Choose a task'}
-              </Text>
-            </TouchableOpacity>
-            {showEventPicker && (
-              <View style={styles.pickerOptions}>
-                <ScrollView nestedScrollEnabled={true} showsVerticalScrollIndicator={true}>
-                  {myEvents.map((event) => (
-                    <TouchableOpacity
-                      key={event.id}
-                      style={styles.pickerOption}
-                      onPress={() => {
-                        setSelectedEventId(event.id);
-                        setShowEventPicker(false);
-                      }}
-                    >
-                      <Text style={styles.pickerOptionText}>{event.name}</Text>
-                      <Text style={styles.pickerOptionSubtext}>{event.location}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-            )}
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Issue Type *</Text>
-            <TouchableOpacity 
-              style={styles.picker}
-              onPress={() => setShowTypePicker(!showTypePicker)}
-            >
-              <Text style={styles.pickerText}>{issueTypeLabel}</Text>
-            </TouchableOpacity>
-            {showTypePicker && (
-              <View style={styles.pickerOptions}>
-                <ScrollView nestedScrollEnabled={true} showsVerticalScrollIndicator={true}>
-                  {ISSUE_TYPES.map((type) => (
-                    <TouchableOpacity
-                      key={type.value}
-                      style={styles.pickerOption}
-                      onPress={() => {
-                        setIssueType(type.value);
-                        setShowTypePicker(false);
-                      }}
-                    >
-                      <Text style={styles.pickerOptionText}>{type.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-            )}
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Description *</Text>
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              placeholder="Describe the issue in detail..."
-              value={description}
-              onChangeText={setDescription}
-              multiline
-              numberOfLines={6}
-              textAlignVertical="top"
-            />
-          </View>
-
-          <View style={styles.infoCard}>
-            <Text style={styles.infoTitle}>What happens next?</Text>
-            <Text style={styles.infoText}>
-              • Your issue will be escalated to your reporting officer
+          <Text style={styles.label}>Select Task *</Text>
+          <TouchableOpacity 
+            style={styles.selector}
+            onPress={() => setShowEventPicker(true)}
+          >
+            <Text style={selectedEvent ? styles.selectorText : styles.selectorPlaceholder}>
+              {selectedEvent ? `${selectedEvent.name} - ${selectedEvent.location}` : 'Select a task'}
             </Text>
+            <ChevronDown size={20} color={Colors.light.textSecondary} />
+          </TouchableOpacity>
+
+          <Text style={styles.label}>Issue Type *</Text>
+          <TouchableOpacity 
+            style={styles.selector}
+            onPress={() => setShowTypePicker(true)}
+          >
+            <Text style={styles.selectorText}>{issueTypeLabel}</Text>
+            <ChevronDown size={20} color={Colors.light.textSecondary} />
+          </TouchableOpacity>
+
+          <Text style={styles.label}>Description *</Text>
+          <TextInput
+            style={styles.textArea}
+            placeholder="Describe the issue in detail..."
+            placeholderTextColor={Colors.light.textSecondary}
+            value={description}
+            onChangeText={setDescription}
+            multiline
+            numberOfLines={5}
+            textAlignVertical="top"
+          />
+
+          <View style={styles.infoBox}>
             <Text style={styles.infoText}>
-              • You will receive updates on the resolution progress
-            </Text>
-            <Text style={styles.infoText}>
-              • Check the Issues tab to track your issue status
+              This issue will be escalated to your task manager or reporting manager for resolution.
             </Text>
           </View>
 
           <TouchableOpacity 
-            style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
+            style={[styles.submitButton, (!selectedEventId || !description.trim() || createIssueMutation.isPending) && styles.submitButtonDisabled]}
             onPress={handleSubmit}
-            disabled={isSubmitting}
+            disabled={!selectedEventId || !description.trim() || createIssueMutation.isPending}
           >
-            <Text style={styles.submitButtonText}>
-              {isSubmitting ? 'Submitting...' : 'Raise Issue'}
-            </Text>
+            {createIssueMutation.isPending ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.submitButtonText}>Raise Issue</Text>
+            )}
           </TouchableOpacity>
         </View>
-
-        <View style={styles.bottomSpacer} />
       </ScrollView>
+
+      {/* Event Picker Modal */}
+      <Modal
+        visible={showEventPicker}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowEventPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Task</Text>
+              <TouchableOpacity onPress={() => setShowEventPicker(false)}>
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+            
+            {eventsLoading ? (
+              <View style={styles.modalLoading}>
+                <ActivityIndicator size="large" color={Colors.light.primary} />
+              </View>
+            ) : myEvents.length === 0 ? (
+              <View style={styles.modalEmpty}>
+                <Text style={styles.modalEmptyText}>No active tasks found</Text>
+              </View>
+            ) : (
+              <ScrollView style={styles.modalList}>
+                {myEvents.map(event => (
+                  <TouchableOpacity
+                    key={event.id}
+                    style={[styles.modalItem, selectedEventId === event.id && styles.modalItemSelected]}
+                    onPress={() => {
+                      setSelectedEventId(event.id);
+                      setShowEventPicker(false);
+                    }}
+                  >
+                    <View style={styles.modalItemContent}>
+                      <Text style={styles.modalItemTitle}>{event.name}</Text>
+                      <Text style={styles.modalItemSubtitle}>{event.location}</Text>
+                    </View>
+                    {selectedEventId === event.id && (
+                      <Check size={20} color={Colors.light.primary} />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Issue Type Picker Modal */}
+      <Modal
+        visible={showTypePicker}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowTypePicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Issue Type</Text>
+              <TouchableOpacity onPress={() => setShowTypePicker(false)}>
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+            
+            <ScrollView style={styles.modalList}>
+              {ISSUE_TYPES.map(type => (
+                <TouchableOpacity
+                  key={type.value}
+                  style={[styles.modalItem, issueType === type.value && styles.modalItemSelected]}
+                  onPress={() => {
+                    setIssueType(type.value as any);
+                    setShowTypePicker(false);
+                  }}
+                >
+                  <Text style={styles.modalItemTitle}>{type.label}</Text>
+                  {issueType === type.value && (
+                    <Check size={20} color={Colors.light.primary} />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }
@@ -206,99 +232,135 @@ export default function RaiseIssueScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.light.backgroundSecondary,
+    backgroundColor: Colors.light.background,
   },
   form: {
     padding: 16,
   },
-  inputGroup: {
-    marginBottom: 20,
-  },
   label: {
     fontSize: 14,
-    fontWeight: '600' as const,
+    fontWeight: '600',
     color: Colors.light.text,
     marginBottom: 8,
+    marginTop: 16,
   },
-  input: {
-    backgroundColor: Colors.light.background,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
+  selector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
     borderRadius: 8,
     padding: 14,
-    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  selectorText: {
+    fontSize: 15,
     color: Colors.light.text,
+    flex: 1,
+  },
+  selectorPlaceholder: {
+    fontSize: 15,
+    color: Colors.light.textSecondary,
+    flex: 1,
   },
   textArea: {
-    minHeight: 150,
-  },
-  picker: {
-    backgroundColor: Colors.light.background,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
+    backgroundColor: '#fff',
     borderRadius: 8,
     padding: 14,
-  },
-  pickerText: {
-    fontSize: 16,
-    color: Colors.light.text,
-  },
-  pickerOptions: {
-    backgroundColor: Colors.light.background,
     borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: 8,
-    marginTop: 8,
-    maxHeight: 200,
-  },
-  pickerOption: {
-    padding: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-  },
-  pickerOptionText: {
-    fontSize: 16,
+    borderColor: '#ddd',
+    fontSize: 15,
     color: Colors.light.text,
+    minHeight: 120,
   },
-  pickerOptionSubtext: {
-    fontSize: 12,
-    color: Colors.light.textSecondary,
-    marginTop: 2,
-  },
-  infoCard: {
-    backgroundColor: Colors.light.lightBlue,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
-  },
-  infoTitle: {
-    fontSize: 16,
-    fontWeight: 'bold' as const,
-    color: Colors.light.primary,
-    marginBottom: 12,
+  infoBox: {
+    backgroundColor: '#E3F2FD',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 20,
   },
   infoText: {
-    fontSize: 14,
+    fontSize: 13,
     color: Colors.light.primary,
-    marginBottom: 6,
-    lineHeight: 20,
+    lineHeight: 18,
   },
   submitButton: {
-    backgroundColor: Colors.light.error,
+    backgroundColor: Colors.light.primary,
     borderRadius: 8,
     padding: 16,
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 24,
   },
   submitButtonDisabled: {
-    opacity: 0.6,
+    backgroundColor: '#ccc',
   },
   submitButtonText: {
-    color: Colors.light.background,
+    color: '#fff',
     fontSize: 16,
-    fontWeight: 'bold' as const,
+    fontWeight: '600',
   },
-  bottomSpacer: {
-    height: 20,
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: Colors.light.background,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '70%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: Colors.light.text,
+  },
+  modalLoading: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  modalEmpty: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  modalEmptyText: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+  },
+  modalList: {
+    maxHeight: 400,
+  },
+  modalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  modalItemSelected: {
+    backgroundColor: '#E3F2FD',
+  },
+  modalItemContent: {
+    flex: 1,
+  },
+  modalItemTitle: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: Colors.light.text,
+  },
+  modalItemSubtitle: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+    marginTop: 2,
   },
 });

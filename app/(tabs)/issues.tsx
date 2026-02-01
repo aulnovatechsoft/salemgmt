@@ -1,27 +1,62 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, RefreshControl, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { Plus, AlertCircle, Clock, CheckCircle, XCircle } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
-import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
-import { useMemo } from 'react';
-import { Issue } from '@/types';
+import { useMemo, useCallback, useState } from 'react';
 import { ISSUE_TYPES } from '@/constants/app';
+import { trpc } from '@/lib/trpc';
 
 export default function IssuesScreen() {
   const router = useRouter();
   const { employee } = useAuth();
-  const { issues, events, employees, updateIssue } = useApp();
+  const [refreshing, setRefreshing] = useState(false);
+  
+  // Fetch issues from database using tRPC
+  const { data: allIssues, isLoading, refetch } = trpc.issues.getAll.useQuery(undefined, {
+    enabled: !!employee?.id,
+  });
+
+  // Fetch events for issue context
+  const { data: myEventsData } = trpc.events.getMyEvents.useQuery(
+    { employeeId: employee?.id || '' },
+    { enabled: !!employee?.id }
+  );
+
+  // Fetch employees for display
+  const { data: allEmployees } = trpc.employees.getAll.useQuery(undefined, {
+    enabled: !!employee?.id,
+  });
+
+  const updateStatusMutation = trpc.issues.updateStatus.useMutation({
+    onSuccess: () => {
+      Alert.alert('Success', 'Issue resolved successfully');
+      refetch();
+    },
+    onError: (error) => {
+      Alert.alert('Error', error.message || 'Failed to resolve issue');
+    },
+  });
 
   const myIssues = useMemo(() => {
-    if (employee?.role === 'SALES_STAFF') {
-      return issues.filter(i => i.raisedBy === employee.id);
+    if (!allIssues || !employee) return [];
+    
+    if (employee.role === 'SALES_STAFF') {
+      // Sales staff sees issues they raised
+      return allIssues.filter(i => i.raisedBy === employee.id);
     }
-    return issues.filter(i => i.escalatedTo === employee?.id);
-  }, [issues, employee]);
+    // Managers see issues escalated to them
+    return allIssues.filter(i => i.escalatedTo === employee.id);
+  }, [allIssues, employee]);
 
   const openIssues = myIssues.filter(i => i.status === 'OPEN' || i.status === 'IN_PROGRESS');
   const closedIssues = myIssues.filter(i => i.status === 'RESOLVED' || i.status === 'CLOSED');
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
 
   const handleResolveIssue = async (issueId: string) => {
     Alert.alert(
@@ -31,18 +66,47 @@ export default function IssuesScreen() {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Resolve',
-          onPress: async () => {
-            await updateIssue(issueId, {
+          onPress: () => {
+            updateStatusMutation.mutate({
+              id: issueId,
               status: 'RESOLVED',
-              resolvedBy: employee?.id,
-              resolvedAt: new Date().toISOString(),
+              updatedBy: employee?.id || '',
             });
-            Alert.alert('Success', 'Issue marked as resolved');
           },
         },
       ]
     );
   };
+
+  const getEventForIssue = (eventId: string | null) => {
+    if (!eventId || !myEventsData?.events) return undefined;
+    return myEventsData.events.find(e => e.id === eventId);
+  };
+
+  const getEmployeeForIssue = (employeeId: string | null) => {
+    if (!employeeId || !allEmployees) return undefined;
+    return allEmployees.find(emp => emp.id === employeeId);
+  };
+
+  if (isLoading) {
+    return (
+      <>
+        <Stack.Screen 
+          options={{ 
+            title: 'Issues',
+            headerStyle: { backgroundColor: Colors.light.primary },
+            headerTintColor: Colors.light.background,
+            headerTitleStyle: { fontWeight: 'bold' as const },
+            headerShown: true,
+          }} 
+        />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={Colors.light.primary} />
+          <Text style={styles.loadingText}>Loading issues...</Text>
+        </View>
+      </>
+    );
+  }
 
   return (
     <>
@@ -58,24 +122,27 @@ export default function IssuesScreen() {
           },
           headerShown: true,
           headerRight: () => (
-            employee?.role === 'SALES_STAFF' ? (
-              <TouchableOpacity 
-                onPress={() => router.push('/raise-issue')}
-                style={styles.headerButton}
-              >
-                <Plus size={24} color={Colors.light.background} />
-              </TouchableOpacity>
-            ) : null
+            <TouchableOpacity 
+              onPress={() => router.push('/raise-issue')}
+              style={styles.headerButton}
+            >
+              <Plus size={24} color={Colors.light.background} />
+            </TouchableOpacity>
           ),
         }} 
       />
-      <ScrollView style={styles.container}>
+      <ScrollView 
+        style={styles.container}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.light.primary]} />
+        }
+      >
         {openIssues.length > 0 && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Open Issues</Text>
+            <Text style={styles.sectionTitle}>Open Issues ({openIssues.length})</Text>
             {openIssues.map(issue => {
-              const event = events.find(e => e.id === issue.eventId);
-              const raisedByUser = employees.find(emp => emp.id === issue.raisedBy);
+              const event = getEventForIssue(issue.eventId);
+              const raisedByUser = getEmployeeForIssue(issue.raisedBy);
               return (
                 <IssueCard 
                   key={issue.id} 
@@ -92,10 +159,10 @@ export default function IssuesScreen() {
 
         {closedIssues.length > 0 && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Resolved Issues</Text>
+            <Text style={styles.sectionTitle}>Resolved Issues ({closedIssues.length})</Text>
             {closedIssues.map(issue => {
-              const event = events.find(e => e.id === issue.eventId);
-              const raisedByUser = employees.find(emp => emp.id === issue.raisedBy);
+              const event = getEventForIssue(issue.eventId);
+              const raisedByUser = getEmployeeForIssue(issue.raisedBy);
               return (
                 <IssueCard 
                   key={issue.id} 
@@ -128,7 +195,7 @@ export default function IssuesScreen() {
 }
 
 function IssueCard({ issue, event, raisedByUser, canResolve, onResolve }: { 
-  issue: Issue; 
+  issue: any; 
   event?: any;
   raisedByUser?: any;
   canResolve: boolean;
@@ -140,6 +207,7 @@ function IssueCard({ issue, event, raisedByUser, canResolve, onResolve }: {
       case 'IN_PROGRESS': return <Clock size={20} color={Colors.light.warning} />;
       case 'RESOLVED': return <CheckCircle size={20} color={Colors.light.success} />;
       case 'CLOSED': return <XCircle size={20} color={Colors.light.textSecondary} />;
+      default: return <AlertCircle size={20} color={Colors.light.textSecondary} />;
     }
   };
 
@@ -149,11 +217,13 @@ function IssueCard({ issue, event, raisedByUser, canResolve, onResolve }: {
       case 'IN_PROGRESS': return { bg: '#FFF3E0', text: Colors.light.warning };
       case 'RESOLVED': return { bg: '#E8F5E9', text: Colors.light.success };
       case 'CLOSED': return { bg: '#F5F5F5', text: Colors.light.textSecondary };
+      default: return { bg: '#F5F5F5', text: Colors.light.textSecondary };
     }
   };
 
   const statusColor = getStatusColor();
   const issueTypeLabel = ISSUE_TYPES.find(t => t.value === issue.type)?.label || issue.type;
+  const timeline = Array.isArray(issue.timeline) ? issue.timeline : [];
 
   return (
     <View style={styles.issueCard}>
@@ -164,7 +234,7 @@ function IssueCard({ issue, event, raisedByUser, canResolve, onResolve }: {
         <View style={[styles.statusBadge, { backgroundColor: statusColor.bg }]}>
           {getStatusIcon()}
           <Text style={[styles.statusText, { color: statusColor.text }]}>
-            {issue.status.replace('_', ' ')}
+            {issue.status?.replace('_', ' ') || 'UNKNOWN'}
           </Text>
         </View>
       </View>
@@ -191,10 +261,10 @@ function IssueCard({ issue, event, raisedByUser, canResolve, onResolve }: {
         })}
       </Text>
 
-      {issue.timeline.length > 0 && (
+      {timeline.length > 0 && (
         <View style={styles.timeline}>
           <Text style={styles.timelineTitle}>Timeline:</Text>
-          {issue.timeline.map((item, index) => (
+          {timeline.map((item: any, index: number) => (
             <View key={index} style={styles.timelineItem}>
               <View style={styles.timelineDot} />
               <View style={styles.timelineContent}>
@@ -213,9 +283,9 @@ function IssueCard({ issue, event, raisedByUser, canResolve, onResolve }: {
         </View>
       )}
 
-      {canResolve && (issue.status === 'OPEN' || issue.status === 'IN_PROGRESS') && (
+      {canResolve && issue.status !== 'RESOLVED' && issue.status !== 'CLOSED' && onResolve && (
         <TouchableOpacity style={styles.resolveButton} onPress={onResolve}>
-          <CheckCircle size={20} color={Colors.light.background} />
+          <CheckCircle size={18} color="#fff" />
           <Text style={styles.resolveButtonText}>Mark as Resolved</Text>
         </TouchableOpacity>
       )}
@@ -226,25 +296,60 @@ function IssueCard({ issue, event, raisedByUser, canResolve, onResolve }: {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.light.backgroundSecondary,
+    backgroundColor: Colors.light.background,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Colors.light.background,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: Colors.light.textSecondary,
   },
   headerButton: {
     marginRight: 16,
+    padding: 4,
   },
   section: {
     padding: 16,
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: 'bold' as const,
+    fontWeight: 'bold',
     color: Colors.light.text,
     marginBottom: 12,
   },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 80,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: Colors.light.text,
+    marginTop: 16,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  bottomSpacer: {
+    height: 100,
+  },
   issueCard: {
-    backgroundColor: Colors.light.card,
+    backgroundColor: '#fff',
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.light.primary,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -258,42 +363,42 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   issueTypeContainer: {
-    backgroundColor: Colors.light.lightBlue,
+    backgroundColor: '#E3F2FD',
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
+    paddingVertical: 4,
+    borderRadius: 12,
   },
   issueType: {
     fontSize: 12,
+    fontWeight: '600',
     color: Colors.light.primary,
-    fontWeight: '600' as const,
   },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingVertical: 4,
     borderRadius: 12,
-    gap: 6,
+    gap: 4,
   },
   statusText: {
     fontSize: 12,
-    fontWeight: '600' as const,
-    textTransform: 'capitalize' as const,
+    fontWeight: '600',
   },
   eventName: {
     fontSize: 14,
-    color: Colors.light.textSecondary,
+    fontWeight: '600',
+    color: Colors.light.primary,
     marginBottom: 8,
   },
   issueDescription: {
-    fontSize: 16,
+    fontSize: 14,
     color: Colors.light.text,
-    lineHeight: 24,
     marginBottom: 12,
+    lineHeight: 20,
   },
   raisedBy: {
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.light.textSecondary,
     marginBottom: 4,
   },
@@ -302,39 +407,39 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
   },
   timeline: {
-    marginTop: 16,
-    paddingTop: 16,
+    marginTop: 12,
+    paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: Colors.light.border,
+    borderTopColor: '#eee',
   },
   timelineTitle: {
-    fontSize: 14,
-    fontWeight: '600' as const,
+    fontSize: 12,
+    fontWeight: '600',
     color: Colors.light.text,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   timelineItem: {
     flexDirection: 'row',
-    marginBottom: 12,
+    alignItems: 'flex-start',
+    marginBottom: 8,
   },
   timelineDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
     backgroundColor: Colors.light.primary,
-    marginTop: 6,
-    marginRight: 12,
+    marginTop: 4,
+    marginRight: 8,
   },
   timelineContent: {
     flex: 1,
   },
   timelineAction: {
-    fontSize: 14,
+    fontSize: 12,
     color: Colors.light.text,
-    marginBottom: 2,
   },
   timelineDate: {
-    fontSize: 12,
+    fontSize: 10,
     color: Colors.light.textSecondary,
   },
   resolveButton: {
@@ -342,36 +447,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: Colors.light.success,
-    paddingVertical: 12,
+    paddingVertical: 10,
     borderRadius: 8,
     marginTop: 12,
     gap: 8,
   },
   resolveButtonText: {
-    color: Colors.light.background,
-    fontSize: 16,
-    fontWeight: '600' as const,
-  },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 60,
-    paddingHorizontal: 40,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: 'bold' as const,
-    color: Colors.light.text,
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  emptySubtitle: {
+    color: '#fff',
     fontSize: 14,
-    color: Colors.light.textSecondary,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  bottomSpacer: {
-    height: 20,
+    fontWeight: '600',
   },
 });
