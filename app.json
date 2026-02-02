@@ -36,6 +36,14 @@
           "origin": "https://rork.com/"
         }
       ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
       "expo-font",
       "expo-web-browser",
       "expo-dev-client"
