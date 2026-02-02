@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Image, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Image, Platform, Modal, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
-import { User, Eye, EyeOff, Phone, MessageSquare } from 'lucide-react-native';
+import { User, Eye, EyeOff, Phone, MessageSquare, HelpCircle, X, Shield, Users, Key } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
@@ -48,6 +48,7 @@ export default function LoginScreen() {
   const [pendingEmployee, setPendingEmployee] = useState<any>(null);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
 
   const handleLogin = async () => {
     if (!username.trim() || !password.trim()) {
@@ -337,6 +338,14 @@ export default function LoginScreen() {
                 <Text style={styles.buttonText}>Login</Text>
               )}
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.forgotPasswordLink}
+              onPress={() => setShowForgotPassword(true)}
+            >
+              <HelpCircle size={14} color={Colors.light.primary} />
+              <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+            </TouchableOpacity>
           </>
         ) : (
           <View style={styles.otpNotImplemented}>
@@ -366,6 +375,113 @@ export default function LoginScreen() {
       </TouchableOpacity>
 
       <Text style={styles.footer}>BSNL - Connecting India</Text>
+
+      <Modal
+        visible={showForgotPassword}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowForgotPassword(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <TouchableOpacity
+              style={styles.modalCloseButton}
+              onPress={() => setShowForgotPassword(false)}
+            >
+              <X size={24} color={Colors.light.textSecondary} />
+            </TouchableOpacity>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalIconContainer}>
+                  <Key size={40} color={Colors.light.primary} />
+                </View>
+                <Text style={styles.modalTitle}>Forgot Password?</Text>
+                <Text style={styles.modalSubtitle}>
+                  Don't worry! Here's how to reset your password
+                </Text>
+              </View>
+
+              <View style={styles.instructionCard}>
+                <View style={styles.instructionStep}>
+                  <View style={styles.stepNumber}>
+                    <Text style={styles.stepNumberText}>1</Text>
+                  </View>
+                  <View style={styles.stepContent}>
+                    <Text style={styles.stepTitle}>Contact Your Manager</Text>
+                    <Text style={styles.stepDescription}>
+                      Reach out to your reporting manager or supervisor through phone or in person.
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.instructionStep}>
+                  <View style={styles.stepNumber}>
+                    <Text style={styles.stepNumberText}>2</Text>
+                  </View>
+                  <View style={styles.stepContent}>
+                    <Text style={styles.stepTitle}>Request Password Reset</Text>
+                    <Text style={styles.stepDescription}>
+                      Ask them to reset your password from their "Team Management" section in the app.
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.instructionStep}>
+                  <View style={styles.stepNumber}>
+                    <Text style={styles.stepNumberText}>3</Text>
+                  </View>
+                  <View style={styles.stepContent}>
+                    <Text style={styles.stepTitle}>Login with Default Password</Text>
+                    <Text style={styles.stepDescription}>
+                      Your password will be reset to: BSNL@ + last 4 digits of your Pers Number.{"\n"}
+                      Example: Pers No 198012345 → Password: BSNL@2345
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.instructionStep}>
+                  <View style={[styles.stepNumber, { backgroundColor: Colors.light.success }]}>
+                    <Text style={styles.stepNumberText}>4</Text>
+                  </View>
+                  <View style={styles.stepContent}>
+                    <Text style={styles.stepTitle}>Set New Password</Text>
+                    <Text style={styles.stepDescription}>
+                      After logging in, you'll be prompted to create a new secure password.
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.managerInfoBox}>
+                <Users size={20} color={Colors.light.info} />
+                <View style={styles.managerInfoContent}>
+                  <Text style={styles.managerInfoTitle}>Who Can Reset My Password?</Text>
+                  <Text style={styles.managerInfoText}>
+                    • Your direct reporting manager{"\n"}
+                    • Any manager with a higher role{"\n"}
+                    • DGM, AGM, GM, or CGM in your circle
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.securityNote}>
+                <Shield size={16} color={Colors.light.warning} />
+                <Text style={styles.securityNoteText}>
+                  For security, only authorized managers can reset passwords. This ensures your account stays protected.
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.modalButton}
+                onPress={() => setShowForgotPassword(false)}
+              >
+                <Text style={styles.modalButtonText}>Got It</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -574,5 +690,148 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingHorizontal: 16,
     lineHeight: 18,
+  },
+  forgotPasswordLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+    gap: 6,
+  },
+  forgotPasswordText: {
+    fontSize: 14,
+    color: Colors.light.primary,
+    fontWeight: '500',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: Colors.light.background,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    maxHeight: '90%',
+  },
+  modalCloseButton: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    zIndex: 1,
+    padding: 4,
+  },
+  modalHeader: {
+    alignItems: 'center',
+    marginBottom: 24,
+    paddingTop: 8,
+  },
+  modalIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: Colors.light.backgroundSecondary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: Colors.light.text,
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+    textAlign: 'center',
+  },
+  instructionCard: {
+    backgroundColor: Colors.light.backgroundSecondary,
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 16,
+  },
+  instructionStep: {
+    flexDirection: 'row',
+    marginBottom: 20,
+  },
+  stepNumber: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Colors.light.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  stepNumberText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  stepContent: {
+    flex: 1,
+  },
+  stepTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.light.text,
+    marginBottom: 4,
+  },
+  stepDescription: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+    lineHeight: 18,
+  },
+  managerInfoBox: {
+    flexDirection: 'row',
+    backgroundColor: '#E3F2FD',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    gap: 12,
+  },
+  managerInfoContent: {
+    flex: 1,
+  },
+  managerInfoTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.light.info,
+    marginBottom: 6,
+  },
+  managerInfoText: {
+    fontSize: 13,
+    color: Colors.light.text,
+    lineHeight: 20,
+  },
+  securityNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FFF8E1',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 20,
+    gap: 10,
+  },
+  securityNoteText: {
+    flex: 1,
+    fontSize: 12,
+    color: Colors.light.text,
+    lineHeight: 18,
+  },
+  modalButton: {
+    backgroundColor: Colors.light.primary,
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
   },
 });

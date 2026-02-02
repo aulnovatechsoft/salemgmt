@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/auth';
+import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
 import { ISSUE_TYPES } from '@/constants/app';
 import { trpc } from '@/lib/trpc';
@@ -10,6 +11,7 @@ import { ChevronDown, Check, X } from 'lucide-react-native';
 export default function RaiseIssueScreen() {
   const router = useRouter();
   const { employee } = useAuth();
+  const { refetchIssues } = useApp();
   
   const [selectedEventId, setSelectedEventId] = useState('');
   const [issueType, setIssueType] = useState<'MATERIAL_SHORTAGE' | 'SITE_ACCESS' | 'EQUIPMENT' | 'NETWORK_PROBLEM' | 'OTHER'>('MATERIAL_SHORTAGE');
@@ -26,6 +28,7 @@ export default function RaiseIssueScreen() {
 
   const createIssueMutation = trpc.issues.create.useMutation({
     onSuccess: () => {
+      refetchIssues();
       Alert.alert('Success', 'Issue raised successfully', [
         { text: 'OK', onPress: () => router.back() },
       ]);

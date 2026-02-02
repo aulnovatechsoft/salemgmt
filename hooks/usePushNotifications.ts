@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Platform } from 'react-native';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
+import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/auth';
 import { trpc } from '@/lib/trpc';
 
@@ -85,16 +86,35 @@ export function usePushNotifications() {
   const [notification, setNotification] = useState<Notifications.Notification | null>(null);
   const notificationListener = useRef<Notifications.Subscription | null>(null);
   const responseListener = useRef<Notifications.Subscription | null>(null);
+  const tokenRegistered = useRef(false);
   const { employee } = useAuth();
+  const router = useRouter();
 
   const registerTokenMutation = trpc.notifications.registerPushToken.useMutation({
     onSuccess: () => {
       console.log('Push token registered successfully');
+      tokenRegistered.current = true;
     },
     onError: (error: unknown) => {
       console.error('Failed to register push token:', error);
+      tokenRegistered.current = false;
     },
   });
+
+  const handleNotificationNavigation = useCallback((data: Record<string, unknown>) => {
+    const entityType = data?.entityType as string | undefined;
+    const entityId = data?.entityId as string | undefined;
+    
+    if (entityType === 'EVENT' && entityId) {
+      router.push(`/event-detail?id=${entityId}`);
+    } else if (entityType === 'ISSUE') {
+      router.push('/(tabs)/issues');
+    } else if (entityType === 'SUBTASK') {
+      router.push('/(tabs)/events');
+    } else {
+      router.push('/notifications');
+    }
+  }, [router]);
 
   useEffect(() => {
     registerForPushNotificationsAsync().then((token) => {
@@ -104,13 +124,15 @@ export function usePushNotifications() {
       }
     });
 
-    notificationListener.current = Notifications.addNotificationReceivedListener((notification) => {
-      setNotification(notification);
-      console.log('Notification received:', notification);
+    notificationListener.current = Notifications.addNotificationReceivedListener((receivedNotification) => {
+      setNotification(receivedNotification);
+      console.log('Notification received:', receivedNotification.request.content.title);
     });
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
-      console.log('Notification response:', response);
+      console.log('Notification tapped:', response.notification.request.content.title);
+      const data = response.notification.request.content.data || {};
+      handleNotificationNavigation(data);
     });
 
     return () => {
@@ -121,10 +143,10 @@ export function usePushNotifications() {
         responseListener.current.remove();
       }
     };
-  }, []);
+  }, [handleNotificationNavigation]);
 
   useEffect(() => {
-    if (expoPushToken && employee?.id) {
+    if (expoPushToken && employee?.id && !tokenRegistered.current) {
       const platform = Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web';
       registerTokenMutation.mutate({
         token: expoPushToken,

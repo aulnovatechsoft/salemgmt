@@ -33,13 +33,16 @@ export default function DashboardScreen() {
       enabled: !!employee?.id,
       retry: 1,
       refetchOnWindowFocus: true,
-      refetchInterval: 10000,
-      staleTime: 5000,
+      refetchInterval: 5000,
+      staleTime: 0,
     }
   );
   
   const events: Event[] = useMemo(() => {
     if (!myEventsData) return [];
+    const totalSim = myEventsData.reduce((acc: number, e: any) => acc + (e.simSold || 0), 0);
+    const totalFtth = myEventsData.reduce((acc: number, e: any) => acc + (e.ftthSold || 0), 0);
+    console.log("Dashboard sales totals - SIM:", totalSim, "FTTH:", totalFtth, "from", myEventsData.length, "events");
     return myEventsData.map((e: any) => ({
       id: e.id,
       name: e.name,
@@ -106,9 +109,13 @@ export default function DashboardScreen() {
   const stats = useMemo(() => {
     const myEvents = events;
     
-    const totalSimsSold = salesReports.reduce((acc, r) => acc + r.simsSold, 0);
+    // Calculate sales from live events data (from database via tRPC)
+    const totalSimsSold = myEvents.reduce((acc, e) => acc + (e.simsSold || 0), 0);
+    const totalFtthSold = myEvents.reduce((acc, e) => acc + (e.ftthSold || 0), 0);
+    
+    // Fallback to salesReports for activated counts if available
     const totalSimsActivated = salesReports.reduce((acc, r) => acc + r.simsActivated, 0);
-    const totalFtthLeads = salesReports.reduce((acc, r) => acc + r.ftthLeads, 0);
+    const totalFtthLeads = totalFtthSold;
     const totalFtthInstalled = salesReports.reduce((acc, r) => acc + r.ftthInstalled, 0);
     
     const today = new Date();
@@ -146,7 +153,14 @@ export default function DashboardScreen() {
       return endDate < today;
     });
 
-    const pendingIssues = issues.filter(i => i.status === 'OPEN' || i.status === 'IN_PROGRESS');
+    // Filter issues relevant to the current user
+    const myRelevantIssues = issues.filter(i => {
+      if (employee?.role === 'SALES_STAFF' || employee?.role === 'SD_JTO') {
+        return i.raisedBy === employee?.id;
+      }
+      return i.escalatedTo === employee?.id || i.raisedBy === employee?.id;
+    });
+    const pendingIssues = myRelevantIssues.filter(i => i.status === 'OPEN' || i.status === 'IN_PROGRESS');
 
     const simResources = resources.find(r => r.type === 'SIM' && r.circle === employee?.circle);
     const ftthResources = resources.find(r => r.type === 'FTTH' && r.circle === employee?.circle);

@@ -1,7 +1,45 @@
 import { z } from "zod";
-import { eq, and, ilike, desc, isNotNull } from "drizzle-orm";
+import { eq, and, ilike, desc, isNotNull, inArray } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
-import { db, employees, employeeMaster } from "@/backend/db";
+import { db, employees, employeeMaster, auditLogs } from "@/backend/db";
+import bcrypt from "bcryptjs";
+
+const SALT_ROUNDS = 10;
+
+const passwordResetRateLimit = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+const MAX_RESETS_PER_HOUR = 10;
+
+function checkRateLimit(managerId: string): { allowed: boolean; remainingResets: number } {
+  const now = Date.now();
+  const record = passwordResetRateLimit.get(managerId);
+  
+  if (!record || now > record.resetAt) {
+    passwordResetRateLimit.set(managerId, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return { allowed: true, remainingResets: MAX_RESETS_PER_HOUR - 1 };
+  }
+  
+  if (record.count >= MAX_RESETS_PER_HOUR) {
+    const minutesRemaining = Math.ceil((record.resetAt - now) / 60000);
+    return { allowed: false, remainingResets: 0 };
+  }
+  
+  record.count++;
+  return { allowed: true, remainingResets: MAX_RESETS_PER_HOUR - record.count };
+}
+
+async function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, SALT_ROUNDS);
+}
+
+async function verifyPassword(password: string, hashedPassword: string): Promise<boolean> {
+  // Check if password is already hashed (starts with $2a$ or $2b$)
+  if (hashedPassword.startsWith('$2a$') || hashedPassword.startsWith('$2b$')) {
+    return bcrypt.compare(password, hashedPassword);
+  }
+  // Legacy plain text comparison for old passwords
+  return password === hashedPassword;
+}
 
 export const employeesRouter = createTRPCRouter({
   getAll: publicProcedure
@@ -130,11 +168,13 @@ export const employeesRouter = createTRPCRouter({
         throw new Error("An account with this email already exists. Please login instead.");
       }
       
+      const hashedPassword = input.password ? await hashPassword(input.password) : null;
+      
       const result = await db.insert(employees).values({
         name: input.name,
         email: input.email,
         phone: input.phone,
-        password: input.password,
+        password: hashedPassword,
         role: input.role,
         circle: input.circle,
         zone: input.zone,
@@ -236,7 +276,8 @@ export const employeesRouter = createTRPCRouter({
         const inputPassword = input.password || '';
         console.log("Password check - stored length:", storedPassword.length, "input length:", inputPassword.length);
         
-        if (storedPassword !== inputPassword) {
+        const isPasswordValid = await verifyPassword(inputPassword, storedPassword);
+        if (!isPasswordValid) {
           console.log("Password mismatch for employee:", employee.id);
           throw new Error("Invalid password");
         }
@@ -275,13 +316,15 @@ export const employeesRouter = createTRPCRouter({
       
       const employee = result[0];
       
-      if ((employee.password || '') !== input.currentPassword) {
+      const isCurrentPasswordValid = await verifyPassword(input.currentPassword, employee.password || '');
+      if (!isCurrentPasswordValid) {
         throw new Error("Current password is incorrect");
       }
       
+      const hashedNewPassword = await hashPassword(input.newPassword);
       await db.update(employees)
         .set({
-          password: input.newPassword,
+          password: hashedNewPassword,
           needsPasswordChange: false,
           updatedAt: new Date(),
         })
@@ -289,6 +332,194 @@ export const employeesRouter = createTRPCRouter({
       
       console.log("Password changed for employee:", input.employeeId);
       return { success: true };
+    }),
+
+  resetPasswordByManager: publicProcedure
+    .input(z.object({
+      managerId: z.string().uuid(),
+      employeeId: z.string().uuid(),
+    }))
+    .mutation(async ({ input }) => {
+      console.log("=== MANAGER PASSWORD RESET REQUEST ===");
+      console.log("Manager ID:", input.managerId);
+      console.log("Employee ID:", input.employeeId);
+      
+      const rateCheck = checkRateLimit(input.managerId);
+      if (!rateCheck.allowed) {
+        console.log("Rate limit exceeded for manager:", input.managerId);
+        throw new Error("Rate limit exceeded. You can reset a maximum of 10 passwords per hour. Please try again later.");
+      }
+      
+      const [managerResult, employeeResult] = await Promise.all([
+        db.select().from(employees).where(eq(employees.id, input.managerId)),
+        db.select().from(employees).where(eq(employees.id, input.employeeId)),
+      ]);
+      
+      if (managerResult.length === 0) {
+        throw new Error("Manager not found");
+      }
+      
+      if (employeeResult.length === 0) {
+        throw new Error("Employee not found");
+      }
+      
+      const manager = managerResult[0];
+      const employee = employeeResult[0];
+      
+      const roleHierarchy: Record<string, number> = {
+        'GM': 6,
+        'CGM': 5,
+        'DGM': 4,
+        'AGM': 3,
+        'SD_JTO': 2,
+        'SALES_STAFF': 1,
+      };
+      
+      const managerLevel = roleHierarchy[manager.role] || 0;
+      const employeeLevel = roleHierarchy[employee.role] || 0;
+      
+      if (managerLevel <= employeeLevel) {
+        await db.insert(auditLogs).values({
+          action: 'PASSWORD_RESET_DENIED',
+          entityType: 'EMPLOYEE',
+          entityId: input.employeeId,
+          performedBy: input.managerId,
+          details: { reason: 'Insufficient role level', managerRole: manager.role, employeeRole: employee.role },
+        });
+        throw new Error("You can only reset passwords for employees below your role level");
+      }
+      
+      if (manager.circle !== employee.circle && manager.role !== 'GM' && manager.role !== 'CGM') {
+        await db.insert(auditLogs).values({
+          action: 'PASSWORD_RESET_DENIED',
+          entityType: 'EMPLOYEE',
+          entityId: input.employeeId,
+          performedBy: input.managerId,
+          details: { reason: 'Circle mismatch', managerCircle: manager.circle, employeeCircle: employee.circle },
+        });
+        throw new Error("You can only reset passwords for employees in your circle");
+      }
+      
+      if (!employee.persNo) {
+        throw new Error("Employee does not have a Pers Number. Cannot generate default password.");
+      }
+      
+      const last4 = employee.persNo.slice(-4).padStart(4, '0');
+      const defaultPassword = `BSNL@${last4}`;
+      const hashedPassword = await hashPassword(defaultPassword);
+      
+      await db.update(employees)
+        .set({
+          password: hashedPassword,
+          needsPasswordChange: true,
+          updatedAt: new Date(),
+        })
+        .where(eq(employees.id, input.employeeId));
+      
+      await db.insert(auditLogs).values({
+        action: 'PASSWORD_RESET_BY_MANAGER',
+        entityType: 'EMPLOYEE',
+        entityId: input.employeeId,
+        performedBy: input.managerId,
+        details: { 
+          employeeName: employee.name,
+          employeePersNo: employee.persNo,
+          managerName: manager.name,
+          managerRole: manager.role,
+          resetMethod: 'default_password',
+        },
+      });
+      
+      console.log("Password reset successfully for employee:", input.employeeId);
+      console.log("Audit log created for password reset");
+      console.log("Remaining resets this hour:", rateCheck.remainingResets);
+      
+      return { 
+        success: true, 
+        message: `Password reset to default. Employee must change password on next login.`,
+        passwordHint: `Default password: BSNL@ + last 4 digits of Pers No (${last4})`,
+        remainingResets: rateCheck.remainingResets,
+      };
+    }),
+
+  getSubordinates: publicProcedure
+    .input(z.object({
+      managerId: z.string().uuid(),
+    }))
+    .query(async ({ input }) => {
+      console.log("Fetching subordinates for manager:", input.managerId);
+      
+      const managerResult = await db.select().from(employees).where(eq(employees.id, input.managerId));
+      
+      if (managerResult.length === 0) {
+        throw new Error("Manager not found");
+      }
+      
+      const manager = managerResult[0];
+      
+      const roleHierarchy: Record<string, number> = {
+        'GM': 6,
+        'CGM': 5,
+        'DGM': 4,
+        'AGM': 3,
+        'SD_JTO': 2,
+        'SALES_STAFF': 1,
+      };
+      
+      const managerLevel = roleHierarchy[manager.role] || 0;
+      
+      const subordinateRoles = Object.entries(roleHierarchy)
+        .filter(([_, level]) => level < managerLevel)
+        .map(([role]) => role);
+      
+      if (subordinateRoles.length === 0) {
+        return [];
+      }
+      
+      let query = db.select({
+        id: employees.id,
+        name: employees.name,
+        email: employees.email,
+        phone: employees.phone,
+        role: employees.role,
+        circle: employees.circle,
+        zone: employees.zone,
+        persNo: employees.persNo,
+        designation: employees.designation,
+        isActive: employees.isActive,
+        needsPasswordChange: employees.needsPasswordChange,
+      }).from(employees).where(
+        and(
+          eq(employees.isActive, true),
+          inArray(employees.role, subordinateRoles as any)
+        )
+      );
+      
+      if (manager.role !== 'GM' && manager.role !== 'CGM') {
+        const results = await db.select({
+          id: employees.id,
+          name: employees.name,
+          email: employees.email,
+          phone: employees.phone,
+          role: employees.role,
+          circle: employees.circle,
+          zone: employees.zone,
+          persNo: employees.persNo,
+          designation: employees.designation,
+          isActive: employees.isActive,
+          needsPasswordChange: employees.needsPasswordChange,
+        }).from(employees).where(
+          and(
+            eq(employees.isActive, true),
+            eq(employees.circle, manager.circle),
+            inArray(employees.role, subordinateRoles as any)
+          )
+        );
+        return results;
+      }
+      
+      const results = await query;
+      return results;
     }),
 
   getByCircle: publicProcedure

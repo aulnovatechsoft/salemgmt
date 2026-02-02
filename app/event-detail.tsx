@@ -2140,9 +2140,9 @@ export default function EventDetailScreen() {
           
           if (allTargetsAchieved) {
             return (
-              <View style={[styles.submitSalesButton, { backgroundColor: '#4CAF50' }]}>
-                <Check size={20} color={Colors.light.background} />
-                <Text style={styles.submitSalesText}>Sales Targets Achieved</Text>
+              <View style={styles.targetsAchievedBadge}>
+                <Check size={18} color="#16a34a" />
+                <Text style={styles.targetsAchievedText}>Sales Targets Achieved</Text>
               </View>
             );
           }
@@ -2862,6 +2862,8 @@ const styles = StyleSheet.create({
   entriesCount: { fontSize: 12, color: Colors.light.info, marginTop: 8 },
   submitSalesButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.light.success, marginHorizontal: 16, marginBottom: 12, padding: 16, borderRadius: 12, gap: 8 },
   submitSalesText: { color: Colors.light.background, fontSize: 16, fontWeight: 'bold' as const },
+  targetsAchievedBadge: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#dcfce7', borderWidth: 1, borderColor: '#86efac', marginHorizontal: 16, marginBottom: 12, padding: 14, borderRadius: 12, gap: 8 },
+  targetsAchievedText: { color: '#16a34a', fontSize: 15, fontWeight: '600' as const },
   salesSection: { backgroundColor: Colors.light.card, padding: 16, marginBottom: 12 },
   salesEntry: { backgroundColor: Colors.light.backgroundSecondary, padding: 12, borderRadius: 8, marginBottom: 8 },
   salesEntryHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },

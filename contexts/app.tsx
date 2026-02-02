@@ -25,6 +25,13 @@ export const [AppProvider, useApp] = createContextHook(() => {
     staleTime: 10000,
   });
 
+  const issuesQuery = trpc.issues.getAll.useQuery(undefined, {
+    retry: 1,
+    refetchOnWindowFocus: true,
+    refetchInterval: 15000,
+    staleTime: 10000,
+  });
+
   useEffect(() => {
     if (resourcesQuery.data) {
       const formattedResources: Resource[] = resourcesQuery.data.map((r: any) => ({
@@ -41,6 +48,27 @@ export const [AppProvider, useApp] = createContextHook(() => {
       AsyncStorage.setItem(RESOURCES_KEY, JSON.stringify(formattedResources));
     }
   }, [resourcesQuery.data]);
+
+  useEffect(() => {
+    if (issuesQuery.data) {
+      const formattedIssues: Issue[] = issuesQuery.data.map((i: any) => ({
+        id: i.id,
+        eventId: i.eventId,
+        raisedBy: i.raisedBy,
+        type: i.type,
+        description: i.description,
+        status: i.status,
+        escalatedTo: i.escalatedTo,
+        resolvedBy: i.resolvedBy,
+        resolvedAt: i.resolvedAt,
+        timeline: i.timeline,
+        createdAt: i.createdAt,
+        updatedAt: i.updatedAt,
+      }));
+      setIssues(formattedIssues);
+      AsyncStorage.setItem(ISSUES_KEY, JSON.stringify(formattedIssues));
+    }
+  }, [issuesQuery.data]);
 
   useEffect(() => {
     loadData();
@@ -71,6 +99,10 @@ export const [AppProvider, useApp] = createContextHook(() => {
   const refetchResources = useCallback(() => {
     resourcesQuery.refetch();
   }, [resourcesQuery]);
+
+  const refetchIssues = useCallback(() => {
+    issuesQuery.refetch();
+  }, [issuesQuery]);
 
   const addSalesReport = useCallback(async (report: SalesReport) => {
     const updated = [...salesReports, report];
@@ -124,6 +156,7 @@ export const [AppProvider, useApp] = createContextHook(() => {
     employees,
     isLoading,
     isLoadingResources: resourcesQuery.isLoading,
+    isLoadingIssues: issuesQuery.isLoading,
     addSalesReport,
     updateResource,
     addIssue,
@@ -132,5 +165,6 @@ export const [AppProvider, useApp] = createContextHook(() => {
     addEmployees,
     clearAllData,
     refetchResources,
+    refetchIssues,
   };
 });

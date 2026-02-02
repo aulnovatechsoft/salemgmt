@@ -2,6 +2,9 @@ import { z } from "zod";
 import { eq, sql, desc, and, isNull, inArray } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
 import { db, employees, employeeMaster, auditLogs, events } from "@/backend/db";
+import bcrypt from "bcryptjs";
+
+const SALT_ROUNDS = 10;
 
 export const adminRouter = createTRPCRouter({
   importEmployeeMaster: publicProcedure
@@ -1408,14 +1411,15 @@ export const adminRouter = createTRPCRouter({
             continue;
           }
           
-          const password = generateDefaultPassword(emp.persNo);
+          const plainPassword = generateDefaultPassword(emp.persNo);
+          const hashedPassword = await bcrypt.hash(plainPassword, SALT_ROUNDS);
           const role = mapDesignationToRole(emp.designation);
           
           const newEmployee = await db.insert(employees).values({
             name: emp.name,
             email: null,
             phone: null,
-            password: password,
+            password: hashedPassword,
             role: role,
             circle: emp.circle || 'Unknown',
             zone: emp.zone || 'Default',

@@ -41,12 +41,12 @@ export default function IssuesScreen() {
   const myIssues = useMemo(() => {
     if (!allIssues || !employee) return [];
     
-    if (employee.role === 'SALES_STAFF') {
+    if (employee.role === 'SALES_STAFF' || employee.role === 'SD_JTO') {
       // Sales staff sees issues they raised
       return allIssues.filter(i => i.raisedBy === employee.id);
     }
-    // Managers see issues escalated to them
-    return allIssues.filter(i => i.escalatedTo === employee.id);
+    // Managers see issues escalated to them OR issues they raised
+    return allIssues.filter(i => i.escalatedTo === employee.id || i.raisedBy === employee.id);
   }, [allIssues, employee]);
 
   const openIssues = myIssues.filter(i => i.status === 'OPEN' || i.status === 'IN_PROGRESS');

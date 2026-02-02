@@ -55,6 +55,8 @@ export default function MyTasksScreen() {
       setSimSold('');
       setFtthSold('');
       utils.events.getMyAssignedTasks.invalidate();
+      utils.events.getMyEvents.invalidate();
+      utils.events.getAll.invalidate();
     },
     onError: (error: any) => {
       Alert.alert('Error', error.message || 'Failed to submit progress');
@@ -65,6 +67,7 @@ export default function MyTasksScreen() {
     onSuccess: () => {
       utils.events.getMyAssignedTasks.invalidate();
       utils.events.getMyEvents.invalidate();
+      utils.events.getAll.invalidate();
     },
     onError: (error: any) => {
       Alert.alert('Error', error.message || 'Failed to update maintenance progress');
@@ -75,6 +78,8 @@ export default function MyTasksScreen() {
     onSuccess: () => {
       Alert.alert('Success', 'Task submitted for review!');
       utils.events.getMyAssignedTasks.invalidate();
+      utils.events.getMyEvents.invalidate();
+      utils.events.getAll.invalidate();
     },
     onError: (error: any) => {
       Alert.alert('Error', error.message || 'Failed to submit task');
