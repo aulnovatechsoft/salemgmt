@@ -6,7 +6,9 @@
     "start": "bunx rork start -p y6ykov0q0ipfsjg5sevge --tunnel",
     "start-web": "bunx rork start -p y6ykov0q0ipfsjg5sevge --web --tunnel",
     "start-web-dev": "DEBUG=expo* bunx rork start -p y6ykov0q0ipfsjg5sevge --web --tunnel",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -59,7 +61,7 @@
     "@babel/core": "^7.25.2",
     "@expo/ngrok": "^4.1.0",
     "@types/react": "~19.1.10",
-    "drizzle-kit": "^0.31.8",
+    "drizzle-kit": "^0.18.1",
     "eslint": "^9.31.0",
     "eslint-config-expo": "~10.0.0",
     "typescript": "~5.9.2"

@@ -47,13 +47,14 @@
     "production": {
       "autoIncrement": true,
       "android": {
-        "buildType": "app-bundle"
+        "buildType": "apk"
       },
       "ios": {
         "resourceClass": "m-medium"
       },
       "env": {
-        "ENVIRONMENT": "production"
+        "ENVIRONMENT": "production",
+        "EXPO_PUBLIC_API_URL": "http://117.251.72.195"
       }
     }
   },
