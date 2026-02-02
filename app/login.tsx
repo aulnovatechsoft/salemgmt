@@ -1,10 +1,33 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Image } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Image, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { User, Eye, EyeOff, Phone, MessageSquare } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
+
+const API_URL = 'http://117.251.72.195';
+
+const testConnection = async () => {
+  const url = `${API_URL}/api/trpc/employees.login`;
+  Alert.alert('Debug', `Testing URL: ${url}\nPlatform: ${Platform.OS}`);
+  
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        json: { username: 'test', password: 'test' }
+      }),
+    });
+    const text = await response.text();
+    Alert.alert('Response', `Status: ${response.status}\n\n${text.substring(0, 200)}`);
+  } catch (error: any) {
+    Alert.alert('Fetch Error', `${error.name}: ${error.message}`);
+  }
+};
 
 type LoginMethod = 'password' | 'otp';
 
@@ -74,7 +97,10 @@ export default function LoginScreen() {
         },
         onError: (error: any) => {
           setIsLoading(false);
-          console.log('Login error:', error?.message);
+          console.log('Login error details:', JSON.stringify(error, null, 2));
+          console.log('Error name:', error?.name);
+          console.log('Error message:', error?.message);
+          console.log('Error cause:', error?.cause);
           
           let message = 'Login failed. Please try again.';
           
@@ -82,8 +108,8 @@ export default function LoginScreen() {
             message = error.message;
           }
           
-          if (message.includes('JSON') || message.includes('fetch') || message.includes('network')) {
-            Alert.alert('Connection Error', 'Unable to connect to server. Please check your internet connection.');
+          if (message.includes('JSON') || message.includes('fetch') || message.includes('network') || message.includes('Network')) {
+            Alert.alert('Network Error', `Unable to connect to server.\n\nDetails: ${error?.message || 'Unknown error'}\n\nPlease check your internet connection and try again.`);
             return;
           }
           
@@ -334,6 +360,10 @@ export default function LoginScreen() {
           </Text>
         </TouchableOpacity>
       </View>
+
+      <TouchableOpacity onPress={testConnection} style={{ marginTop: 16, padding: 8 }}>
+        <Text style={{ color: '#fff', textAlign: 'center', fontSize: 12 }}>Test Server Connection</Text>
+      </TouchableOpacity>
 
       <Text style={styles.footer}>BSNL - Connecting India</Text>
     </View>
