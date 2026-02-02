@@ -7,6 +7,7 @@ import { View, Image, Text, StyleSheet, ActivityIndicator } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { AuthProvider } from "@/contexts/auth";
 import { AppProvider } from "@/contexts/app";
+import { PushNotificationProvider } from "@/components/PushNotificationProvider";
 import { trpc, trpcClient } from "@/lib/trpc";
 import Colors from "@/constants/colors";
 
@@ -41,6 +42,7 @@ function RootLayoutNav() {
       <Stack.Screen name="event-sales" options={{ headerShown: true }} />
       <Stack.Screen name="sales-approval" options={{ headerShown: true }} />
       <Stack.Screen name="resource-management" options={{ headerShown: true }} />
+      <Stack.Screen name="notifications" options={{ headerShown: true, title: "Notifications" }} />
     </Stack>
   );
 }
@@ -55,9 +57,11 @@ export default function RootLayout() {
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
           <AppProvider>
-            <GestureHandlerRootView>
-              <RootLayoutNav />
-            </GestureHandlerRootView>
+            <PushNotificationProvider>
+              <GestureHandlerRootView>
+                <RootLayoutNav />
+              </GestureHandlerRootView>
+            </PushNotificationProvider>
           </AppProvider>
         </AuthProvider>
       </QueryClientProvider>

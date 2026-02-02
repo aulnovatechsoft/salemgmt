@@ -181,17 +181,11 @@ export default function NotificationsScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color="#1f2937" />
+      {unreadCount > 0 && (
+        <TouchableOpacity onPress={handleMarkAllAsRead} style={styles.markAllHeader}>
+          <Text style={styles.markAllText}>Mark all as read</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Notifications</Text>
-        {unreadCount > 0 && (
-          <TouchableOpacity onPress={handleMarkAllAsRead} style={styles.markAllButton}>
-            <Text style={styles.markAllText}>Mark all read</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+      )}
 
       {unreadCount > 0 && (
         <View style={styles.unreadBanner}>
@@ -236,28 +230,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#6b7280',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  markAllHeader: {
     backgroundColor: '#fff',
     paddingHorizontal: 16,
-    paddingTop: 50,
-    paddingBottom: 16,
+    paddingVertical: 12,
+    alignItems: 'flex-end',
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
-  },
-  backButton: {
-    padding: 8,
-    marginRight: 8,
-  },
-  headerTitle: {
-    flex: 1,
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#1f2937',
-  },
-  markAllButton: {
-    padding: 8,
   },
   markAllText: {
     fontSize: 14,

@@ -3,6 +3,7 @@ import { LayoutDashboard, Calendar, Users, FileText, AlertCircle, ClipboardList 
 import React from "react";
 import { useAuth } from "@/contexts/auth";
 import { Redirect } from "expo-router";
+import NotificationBell from "@/components/NotificationBell";
 
 import Colors from "@/constants/colors";
 
@@ -21,7 +22,15 @@ export default function TabLayout() {
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: Colors.light.tint,
-        headerShown: false,
+        headerShown: true,
+        headerStyle: {
+          backgroundColor: Colors.light.primary,
+        },
+        headerTintColor: '#ffffff',
+        headerTitleStyle: {
+          fontWeight: 'bold',
+        },
+        headerRight: () => <NotificationBell />,
         tabBarStyle: {
           backgroundColor: Colors.light.background,
           borderTopColor: Colors.light.border,

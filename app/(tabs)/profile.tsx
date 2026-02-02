@@ -419,6 +419,13 @@ export default function ProfileScreen() {
             <Text style={styles.actionButtonText}>View Audit Logs</Text>
           </TouchableOpacity>
 
+          {['GM', 'CGM', 'DGM', 'AGM'].includes(employee.role) && (
+            <TouchableOpacity style={styles.actionButton} onPress={() => router.push('/team-management')}>
+              <Users size={20} color={Colors.light.primary} />
+              <Text style={[styles.actionButtonText, { color: Colors.light.primary }]}>Team Management</Text>
+            </TouchableOpacity>
+          )}
+
           {(employee.role === 'GM' || employee.role === 'CGM') && (
             <TouchableOpacity style={styles.actionButton} onPress={() => router.push('/admin-settings')}>
               <Settings size={20} color={Colors.light.text} />
