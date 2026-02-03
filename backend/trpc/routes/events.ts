@@ -466,6 +466,12 @@ export const eventsRouter = createTRPCRouter({
       zone: z.string().min(1),
       startDate: z.string(),
       endDate: z.string(),
+      taskCategory: z.enum(['S&M', 'O&M', 'Finance']).optional(),
+      targetFinLc: z.number().min(0).optional(),
+      targetFinLlFtth: z.number().min(0).optional(),
+      targetFinTower: z.number().min(0).optional(),
+      targetFinGsmPostpaid: z.number().min(0).optional(),
+      targetFinRentBuilding: z.number().min(0).optional(),
       category: z.string().min(1),
       targetSim: z.number().min(0),
       targetFtth: z.number().min(0),
@@ -540,6 +546,7 @@ export const eventsRouter = createTRPCRouter({
         zone: input.zone,
         startDate: new Date(input.startDate),
         endDate: new Date(input.endDate),
+        taskCategory: input.taskCategory || 'S&M',
         category: input.category,
         targetSim: input.targetSim,
         targetFtth: input.targetFtth,
@@ -549,6 +556,11 @@ export const eventsRouter = createTRPCRouter({
         targetFtthDown: input.targetFtthDown || 0,
         targetRouteFail: input.targetRouteFail || 0,
         targetOfcFail: input.targetOfcFail || 0,
+        targetFinLc: input.targetFinLc || 0,
+        targetFinLlFtth: input.targetFinLlFtth || 0,
+        targetFinTower: input.targetFinTower || 0,
+        targetFinGsmPostpaid: input.targetFinGsmPostpaid || 0,
+        targetFinRentBuilding: input.targetFinRentBuilding || 0,
         ebEstHours: input.ebEstHours || 0,
         leaseEstHours: input.leaseEstHours || 0,
         btsDownEstHours: input.btsDownEstHours || 0,
@@ -1182,7 +1194,15 @@ export const eventsRouter = createTRPCRouter({
       const totalSimSold = assignments.reduce((sum, a) => sum + a.simSold, 0);
       const totalFtthSold = assignments.reduce((sum, a) => sum + a.ftthSold, 0);
       
+      // Use targetSim/targetFtth as the max distributable (falls back to allocated if target is 0)
+      const maxSim = event[0].targetSim || event[0].allocatedSim;
+      const maxFtth = event[0].targetFtth || event[0].allocatedFtth;
+      
       return {
+        target: {
+          sim: event[0].targetSim,
+          ftth: event[0].targetFtth,
+        },
         allocated: {
           sim: event[0].allocatedSim,
           ftth: event[0].allocatedFtth,
@@ -1196,8 +1216,8 @@ export const eventsRouter = createTRPCRouter({
           ftth: totalFtthSold,
         },
         remaining: {
-          simToDistribute: event[0].allocatedSim - totalSimDistributed,
-          ftthToDistribute: event[0].allocatedFtth - totalFtthDistributed,
+          simToDistribute: maxSim - totalSimDistributed,
+          ftthToDistribute: maxFtth - totalFtthDistributed,
           simUnsold: totalSimDistributed - totalSimSold,
           ftthUnsold: totalFtthDistributed - totalFtthSold,
         },
@@ -2086,22 +2106,26 @@ export const eventsRouter = createTRPCRouter({
       
       // If no assignment exists, create one (upsert behavior)
       if (!currentAssignment) {
-        // Validate targets against event allocation
+        // Validate targets against event target (not allocated - target is the max to distribute)
         const otherAssignments = allAssignments;
         const currentSimDistributed = otherAssignments.reduce((sum, a) => sum + a.simTarget, 0);
         const currentFtthDistributed = otherAssignments.reduce((sum, a) => sum + a.ftthTarget, 0);
         
-        const newTotalSim = currentSimDistributed + input.simTarget;
-        const newTotalFtth = currentFtthDistributed + input.ftthTarget;
+        const newTotalSim = currentSimDistributed + Math.floor(input.simTarget);
+        const newTotalFtth = currentFtthDistributed + Math.floor(input.ftthTarget);
         
-        if (newTotalSim > event[0].allocatedSim) {
-          const available = event[0].allocatedSim - currentSimDistributed;
-          throw new Error(`Cannot assign ${input.simTarget} SIMs. Only ${available} SIMs available for distribution.`);
+        // Use targetSim/targetFtth for distribution validation
+        const maxSim = event[0].targetSim || event[0].allocatedSim;
+        const maxFtth = event[0].targetFtth || event[0].allocatedFtth;
+        
+        if (maxSim > 0 && newTotalSim > maxSim) {
+          const available = maxSim - currentSimDistributed;
+          throw new Error(`Cannot assign ${input.simTarget} SIMs. Only ${available} SIMs available for distribution (Total target: ${maxSim}).`);
         }
         
-        if (newTotalFtth > event[0].allocatedFtth) {
-          const available = event[0].allocatedFtth - currentFtthDistributed;
-          throw new Error(`Cannot assign ${input.ftthTarget} FTTH. Only ${available} FTTH available for distribution.`);
+        if (maxFtth > 0 && newTotalFtth > maxFtth) {
+          const available = maxFtth - currentFtthDistributed;
+          throw new Error(`Cannot assign ${input.ftthTarget} FTTH. Only ${available} FTTH available for distribution (Total target: ${maxFtth}).`);
         }
         
         // Create new assignment
@@ -2135,17 +2159,21 @@ export const eventsRouter = createTRPCRouter({
       const currentSimDistributed = otherAssignments.reduce((sum, a) => sum + a.simTarget, 0);
       const currentFtthDistributed = otherAssignments.reduce((sum, a) => sum + a.ftthTarget, 0);
       
-      const newTotalSim = currentSimDistributed + input.simTarget;
-      const newTotalFtth = currentFtthDistributed + input.ftthTarget;
+      const newTotalSim = currentSimDistributed + Math.floor(input.simTarget);
+      const newTotalFtth = currentFtthDistributed + Math.floor(input.ftthTarget);
       
-      if (newTotalSim > event[0].allocatedSim) {
-        const available = event[0].allocatedSim - currentSimDistributed;
-        throw new Error(`Cannot assign ${input.simTarget} SIMs. Only ${available} SIMs available for distribution.`);
+      // Use targetSim/targetFtth for distribution validation
+      const maxSim = event[0].targetSim || event[0].allocatedSim;
+      const maxFtth = event[0].targetFtth || event[0].allocatedFtth;
+      
+      if (maxSim > 0 && newTotalSim > maxSim) {
+        const available = maxSim - currentSimDistributed;
+        throw new Error(`Cannot assign ${input.simTarget} SIMs. Only ${available} SIMs available for distribution (Total target: ${maxSim}).`);
       }
       
-      if (newTotalFtth > event[0].allocatedFtth) {
-        const available = event[0].allocatedFtth - currentFtthDistributed;
-        throw new Error(`Cannot assign ${input.ftthTarget} FTTH. Only ${available} FTTH available for distribution.`);
+      if (maxFtth > 0 && newTotalFtth > maxFtth) {
+        const available = maxFtth - currentFtthDistributed;
+        throw new Error(`Cannot assign ${input.ftthTarget} FTTH. Only ${available} FTTH available for distribution (Total target: ${maxFtth}).`);
       }
       
       const result = await db.update(eventAssignments)
