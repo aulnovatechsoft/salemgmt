@@ -8,7 +8,7 @@ import { Event, Circle } from '@/types';
 import { CIRCLES_FALLBACK } from '@/constants/app';
 import { trpc } from '@/lib/trpc';
 import { mapCircleNameToEnum } from '@/lib/circleUtils';
-import { Calendar, ChevronLeft, ChevronRight, Check, Phone, CheckCircle, User, X, BadgeCheck, Users, Trash2 } from 'lucide-react-native';
+import { Calendar, ChevronLeft, ChevronRight, Check, Phone, CheckCircle, User, X, BadgeCheck, Users, Trash2, IndianRupee } from 'lucide-react-native';
 import TeamHierarchyPicker from '@/components/TeamHierarchyPicker';
 
 interface TaskAssignment {
@@ -19,16 +19,35 @@ interface TaskAssignment {
   taskIds: string[];
 }
 
-const TASK_TYPES = [
+const TASK_CATEGORIES = [
+  { id: 'S&M', label: 'S&M', description: 'Sales & Marketing' },
+  { id: 'O&M', label: 'O&M', description: 'Operations & Maintenance' },
+  { id: 'Finance', label: 'Finance', description: 'Outstanding & Collection' },
+];
+
+const SM_TASKS = [
   { id: 'SIM', label: 'SIM', description: 'SIM card sales' },
   { id: 'FTTH', label: 'FTTH', description: 'Fiber to the Home' },
   { id: 'LEASE_CIRCUIT', label: 'Lease Circuit', description: 'Leased line connections' },
-  { id: 'EB', label: 'EB', description: 'Exchange based task' },
+  { id: 'EB', label: 'EB', description: 'Enterprise Business' },
+];
+
+const OM_TASKS = [
   { id: 'BTS_DOWN', label: 'BTS-Down', description: 'Base station maintenance' },
   { id: 'FTTH_DOWN', label: 'FTTH-Down', description: 'FTTH maintenance' },
   { id: 'ROUTE_FAIL', label: 'Route-Fail', description: 'Route failure resolution' },
   { id: 'OFC_FAIL', label: 'OFC-Fail', description: 'Optical fiber cable failure' },
 ];
+
+const FINANCE_TASKS = [
+  { id: 'FIN_LC', label: 'LC Outstanding', description: 'Lease Circuit collection' },
+  { id: 'FIN_LL_FTTH', label: 'LL/FTTH Outstanding', description: 'Landline/FTTH collection' },
+  { id: 'FIN_TOWER', label: 'Tower Outstanding', description: 'Tower rental collection' },
+  { id: 'FIN_GSM_POSTPAID', label: 'GSM PostPaid', description: 'GSM postpaid collection' },
+  { id: 'FIN_RENT_BUILDING', label: 'Rent Of Building', description: 'Building rent collection' },
+];
+
+const TASK_TYPES = [...SM_TASKS, ...OM_TASKS, ...FINANCE_TASKS];
 
 const formatDateString = (date: Date): string => {
   const year = date.getFullYear();
@@ -56,7 +75,7 @@ export default function CreateEventScreen() {
   const todayStr = formatDateString(today);
   
   // Task name is derived from selected task types
-  const getTaskName = () => selectedCategories.map(c => TASK_TYPES.find(t => t.id === c)?.label).filter(Boolean).join(', ');
+  const getTaskName = () => selectedTaskTypes.map(c => TASK_TYPES.find(t => t.id === c)?.label).filter(Boolean).join(', ');
   const [pinCode, setPinCode] = useState('');
   const [location, setLocation] = useState('');
   const [city, setCity] = useState('');
@@ -64,13 +83,41 @@ export default function CreateEventScreen() {
   const [zone, setZone] = useState('');
   const [startDate, setStartDate] = useState(todayStr);
   const [endDate, setEndDate] = useState('');
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [taskCategory, setTaskCategory] = useState<'S&M' | 'O&M' | 'Finance' | ''>('');
+  const [selectedTaskTypes, setSelectedTaskTypes] = useState<string[]>([]);
+  
+  const availableTaskTypes = useMemo(() => {
+    if (taskCategory === 'S&M') return SM_TASKS;
+    if (taskCategory === 'O&M') return OM_TASKS;
+    if (taskCategory === 'Finance') return FINANCE_TASKS;
+    return [];
+  }, [taskCategory]);
+  
+  const handleTaskCategoryChange = (category: 'S&M' | 'O&M' | 'Finance') => {
+    if (taskCategory === category) return;
+    setTaskCategory(category);
+    setSelectedTaskTypes([]);
+  };
+  
+  // Legacy: keep selectedCategories for backward compatibility
+  const selectedCategories = selectedTaskTypes;
   const [targetSim, setTargetSim] = useState('');
   const [targetFtth, setTargetFtth] = useState('');
   const [targetLeaseCircuit, setTargetLeaseCircuit] = useState('');
   const [leaseEstHours, setLeaseEstHours] = useState('');
   const [targetEb, setTargetEb] = useState('');
   const [ebEstHours, setEbEstHours] = useState('');
+  const [financeTargets, setFinanceTargets] = useState<Record<string, string>>({
+    FIN_LC: '',
+    FIN_LL_FTTH: '',
+    FIN_TOWER: '',
+    FIN_GSM_POSTPAID: '',
+    FIN_RENT_BUILDING: '',
+  });
+  const updateFinanceTarget = (taskId: string, value: string) => {
+    const cleanValue = value.replace(/[^0-9]/g, '');
+    setFinanceTargets(prev => ({ ...prev, [taskId]: cleanValue }));
+  };
   const [maintenanceDetails, setMaintenanceDetails] = useState<Record<string, { priority: 'low' | 'medium' | 'high' | 'critical'; sites: string; hours: string }>>({
     BTS_DOWN: { priority: 'medium', sites: '', hours: '' },
     FTTH_DOWN: { priority: 'medium', sites: '', hours: '' },
@@ -104,6 +151,9 @@ export default function CreateEventScreen() {
 
   const selectedMaintenanceTasks = selectedCategories.filter(c => 
     ['BTS_DOWN', 'FTTH_DOWN', 'ROUTE_FAIL', 'OFC_FAIL'].includes(c)
+  );
+  const selectedFinanceTasks = selectedCategories.filter(c => 
+    ['FIN_LC', 'FIN_LL_FTTH', 'FIN_TOWER', 'FIN_GSM_POSTPAID', 'FIN_RENT_BUILDING'].includes(c)
   );
   const [mobileNumber, setMobileNumber] = useState('');
   const [assignedToStaffId, setAssignedToStaffId] = useState('');
@@ -333,7 +383,7 @@ export default function CreateEventScreen() {
   };
 
   const toggleCategory = (categoryId: string) => {
-    setSelectedCategories(prev => {
+    setSelectedTaskTypes(prev => {
       if (prev.includes(categoryId)) {
         return prev.filter(c => c !== categoryId);
       } else {
@@ -425,6 +475,10 @@ export default function CreateEventScreen() {
   });
 
   const handleSubmit = async () => {
+    if (!taskCategory) {
+      Alert.alert('Error', 'Please select a task category (S&M or O&M)');
+      return;
+    }
     if (selectedCategories.length === 0) {
       Alert.alert('Error', 'Please select at least one task type');
       return;
@@ -460,6 +514,7 @@ export default function CreateEventScreen() {
         zone: zone.trim() || 'Default',
         startDate: startDate,
         endDate: endDate,
+        taskCategory: taskCategory as 'S&M' | 'O&M' | 'Finance',
         category: categoryString as any,
         targetSim: showSimTarget ? (parseInt(targetSim) || 0) : 0,
         targetFtth: showFtthTarget ? (parseInt(targetFtth) || 0) : 0,
@@ -469,6 +524,11 @@ export default function CreateEventScreen() {
         targetFtthDown: selectedCategories.includes('FTTH_DOWN') ? (parseInt(maintenanceDetails.FTTH_DOWN?.sites) || 0) : 0,
         targetRouteFail: selectedCategories.includes('ROUTE_FAIL') ? (parseInt(maintenanceDetails.ROUTE_FAIL?.sites) || 0) : 0,
         targetOfcFail: selectedCategories.includes('OFC_FAIL') ? (parseInt(maintenanceDetails.OFC_FAIL?.sites) || 0) : 0,
+        targetFinLc: selectedCategories.includes('FIN_LC') ? (parseInt(financeTargets.FIN_LC) || 0) : 0,
+        targetFinLlFtth: selectedCategories.includes('FIN_LL_FTTH') ? (parseInt(financeTargets.FIN_LL_FTTH) || 0) : 0,
+        targetFinTower: selectedCategories.includes('FIN_TOWER') ? (parseInt(financeTargets.FIN_TOWER) || 0) : 0,
+        targetFinGsmPostpaid: selectedCategories.includes('FIN_GSM_POSTPAID') ? (parseInt(financeTargets.FIN_GSM_POSTPAID) || 0) : 0,
+        targetFinRentBuilding: selectedCategories.includes('FIN_RENT_BUILDING') ? (parseInt(financeTargets.FIN_RENT_BUILDING) || 0) : 0,
         ebEstHours: showEbTarget ? (parseFloat(ebEstHours) || 0) : undefined,
         leaseEstHours: showLeaseCircuitTarget ? (parseFloat(leaseEstHours) || 0) : undefined,
         btsDownEstHours: selectedCategories.includes('BTS_DOWN') ? (parseFloat(maintenanceDetails.BTS_DOWN?.hours) || 0) : undefined,
@@ -508,29 +568,65 @@ export default function CreateEventScreen() {
       <ScrollView style={styles.container}>
         <View style={styles.form}>
           <View style={styles.categorySection}>
-            <Text style={styles.categorySectionTitle}>Task Name * (Select one or more)</Text>
+            <Text style={styles.categorySectionTitle}>Task Category *</Text>
             <View style={styles.categoryGrid}>
-              {TASK_TYPES.map((taskType) => {
-                const isSelected = selectedCategories.includes(taskType.id);
+              {TASK_CATEGORIES.map((cat) => {
+                const isSelected = taskCategory === cat.id;
                 return (
                   <TouchableOpacity
-                    key={taskType.id}
+                    key={cat.id}
                     style={[
                       styles.categoryChip,
-                      isSelected && styles.categoryChipSelected
+                      isSelected && styles.categoryChipSelected,
+                      { flex: 1, justifyContent: 'center' }
                     ]}
-                    onPress={() => toggleCategory(taskType.id)}
+                    onPress={() => handleTaskCategoryChange(cat.id as 'S&M' | 'O&M')}
                   >
                     {isSelected && <Check size={16} color="#FFFFFF" />}
-                    <Text style={[
-                      styles.categoryChipText,
-                      isSelected && styles.categoryChipTextSelected
-                    ]}>{taskType.label}</Text>
+                    <View style={{ alignItems: 'center' }}>
+                      <Text style={[
+                        styles.categoryChipText,
+                        isSelected && styles.categoryChipTextSelected,
+                        { fontWeight: '600' }
+                      ]}>{cat.label}</Text>
+                      <Text style={[
+                        styles.categoryChipText,
+                        isSelected && styles.categoryChipTextSelected,
+                        { fontSize: 10, opacity: 0.8 }
+                      ]}>{cat.description}</Text>
+                    </View>
                   </TouchableOpacity>
                 );
               })}
             </View>
           </View>
+
+          {taskCategory !== '' && (
+            <View style={styles.categorySection}>
+              <Text style={styles.categorySectionTitle}>Task Name * (Select one or more)</Text>
+              <View style={styles.categoryGrid}>
+                {availableTaskTypes.map((taskType) => {
+                  const isSelected = selectedTaskTypes.includes(taskType.id);
+                  return (
+                    <TouchableOpacity
+                      key={taskType.id}
+                      style={[
+                        styles.categoryChip,
+                        isSelected && styles.categoryChipSelected
+                      ]}
+                      onPress={() => toggleCategory(taskType.id)}
+                    >
+                      {isSelected && <Check size={16} color="#FFFFFF" />}
+                      <Text style={[
+                        styles.categoryChipText,
+                        isSelected && styles.categoryChipTextSelected
+                      ]}>{taskType.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          )}
 
           <View style={styles.assignSection}>
             <Text style={styles.assignSectionTitle}>Assign Task</Text>
@@ -1144,6 +1240,39 @@ export default function CreateEventScreen() {
             </View>
           )}
 
+          {selectedFinanceTasks.length > 0 && (
+            <View style={styles.targetSection}>
+              <View style={styles.targetHeader}>
+                <IndianRupee size={20} color={Colors.light.primary} />
+                <Text style={styles.targetTitle}>Target in Rupees</Text>
+              </View>
+              <Text style={styles.targetSubtitle}>Enter collection target amount for each selected task</Text>
+              
+              <View style={styles.targetInputsContainer}>
+                {selectedFinanceTasks.map((taskId) => {
+                  const taskInfo = FINANCE_TASKS.find(t => t.id === taskId);
+                  if (!taskInfo) return null;
+                  return (
+                    <View key={taskId} style={styles.financeTargetRow}>
+                      <Text style={styles.financeTargetLabel}>{taskInfo.label}</Text>
+                      <View style={styles.financeInputWrapper}>
+                        <Text style={styles.rupeeSymbol}>₹</Text>
+                        <TextInput
+                          style={styles.financeInput}
+                          placeholder="0"
+                          placeholderTextColor="#9CA3AF"
+                          value={financeTargets[taskId] || ''}
+                          onChangeText={(value) => updateFinanceTarget(taskId, value)}
+                          keyboardType="number-pad"
+                        />
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Notes</Text>
             <TextInput
@@ -1359,6 +1488,67 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.light.warning,
     textAlign: 'center',
+  },
+  targetHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+    marginBottom: 4,
+  },
+  targetTitle: {
+    fontSize: 16,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+  },
+  targetSubtitle: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+    marginBottom: 16,
+  },
+  targetInputsContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingHorizontal: 16,
+  },
+  financeTargetRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  financeTargetLabel: {
+    fontSize: 14,
+    fontWeight: '500' as const,
+    color: Colors.light.text,
+    flex: 1,
+  },
+  financeInputWrapper: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    minWidth: 140,
+  },
+  rupeeSymbol: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: Colors.light.primary,
+    marginRight: 4,
+  },
+  financeInput: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '500' as const,
+    color: Colors.light.text,
+    paddingVertical: 10,
+    textAlign: 'right' as const,
   },
   maintenanceSection: {
     backgroundColor: Colors.light.background,

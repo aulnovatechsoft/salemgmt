@@ -343,97 +343,134 @@ export default function DashboardScreen() {
         {isManagementRole && kamEbGoldSummary && (kamEbGoldSummary.totalPersonnel > 0 || kamEbGoldSummary.totalLeads > 0) && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>KAM EB Gold Performance</Text>
-            <TouchableOpacity
-              style={styles.kamEbCard}
-              onPress={() => router.push('/kam-eb-gold-report')}
-              activeOpacity={0.7}
-            >
-              <View style={styles.kamEbHeader}>
-                <View style={[styles.kamEbIcon, { backgroundColor: '#FFF8E1' }]}>
-                  <Award size={24} color="#F9A825" />
-                </View>
-                <View style={styles.kamEbHeaderInfo}>
-                  <Text style={styles.kamEbTitle}>Enterprise Business Leads</Text>
-                  <Text style={styles.kamEbSubtitle}>{kamEbGoldSummary.totalPersonnel} Personnel • {kamEbGoldSummary.ebExclusiveCount} EB Exclusive</Text>
-                </View>
-                <ChevronRight size={20} color={Colors.light.textSecondary} />
-              </View>
-              <View style={styles.kamEbMetricsRow}>
-                <View style={styles.kamEbMetric}>
-                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#E3F2FD' }]}>
-                    <Target size={16} color="#1565C0" />
+            <View style={styles.outstandingCardsRow}>
+              <TouchableOpacity 
+                style={styles.outstandingCard}
+                onPress={() => router.push('/kam-eb-gold-report')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.outstandingCardHeader}>
+                  <View style={[styles.outstandingIconContainer, { backgroundColor: '#E3F2FD' }]}>
+                    <Target size={20} color="#1565C0" />
                   </View>
-                  <Text style={styles.kamEbMetricValue}>{kamEbGoldSummary.totalLeads.toLocaleString()}</Text>
-                  <Text style={styles.kamEbMetricLabel}>Leads</Text>
+                  <Award size={16} color="#F9A825" />
                 </View>
-                <View style={styles.kamEbMetric}>
-                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#E8F5E9' }]}>
-                    <DollarSign size={16} color="#2E7D32" />
+                <Text style={styles.outstandingCardTitle}>Total Leads</Text>
+                <Text style={[styles.outstandingCardAmount, { color: '#1565C0' }]} numberOfLines={1} adjustsFontSizeToFit>{kamEbGoldSummary.totalLeads.toLocaleString()}</Text>
+                <Text style={styles.outstandingCardCount}>{kamEbGoldSummary.totalPersonnel} personnel</Text>
+                <View style={styles.outstandingCardAction}>
+                  <Text style={[styles.outstandingCardActionText, { color: '#1565C0' }]}>View Details</Text>
+                  <ChevronRight size={14} color="#1565C0" />
+                </View>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.outstandingCard}
+                onPress={() => router.push('/kam-eb-gold-report')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.outstandingCardHeader}>
+                  <View style={[styles.outstandingIconContainer, { backgroundColor: '#E8F5E9' }]}>
+                    <DollarSign size={20} color="#2E7D32" />
                   </View>
-                  <Text style={styles.kamEbMetricValue}>{kamEbGoldSummary.totalLeadValueCrore >= 100 ? `${kamEbGoldSummary.totalLeadValueCrore.toFixed(0)}` : kamEbGoldSummary.totalLeadValueCrore.toFixed(1)} Cr</Text>
-                  <Text style={styles.kamEbMetricLabel}>Value</Text>
+                  <Award size={16} color="#F9A825" />
                 </View>
-                <View style={styles.kamEbMetric}>
-                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#F3E5F5' }]}>
-                    <TrendingUp size={16} color="#7B1FA2" />
+                <Text style={styles.outstandingCardTitle}>Lead Value</Text>
+                <Text style={[styles.outstandingCardAmount, { color: '#2E7D32' }]} numberOfLines={1} adjustsFontSizeToFit>{kamEbGoldSummary.totalLeadValueCrore >= 100 ? `${kamEbGoldSummary.totalLeadValueCrore.toFixed(0)}` : kamEbGoldSummary.totalLeadValueCrore.toFixed(1)} Cr</Text>
+                <Text style={styles.outstandingCardCount}>{kamEbGoldSummary.ebExclusiveCount} EB exclusive</Text>
+                <View style={styles.outstandingCardAction}>
+                  <Text style={[styles.outstandingCardActionText, { color: '#2E7D32' }]}>View Details</Text>
+                  <ChevronRight size={14} color="#2E7D32" />
+                </View>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.outstandingCard}
+                onPress={() => router.push('/kam-eb-gold-report')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.outstandingCardHeader}>
+                  <View style={[styles.outstandingIconContainer, { backgroundColor: '#F3E5F5' }]}>
+                    <TrendingUp size={20} color="#7B1FA2" />
                   </View>
-                  <Text style={styles.kamEbMetricValue}>{kamEbGoldSummary.leadToBillCrore >= 100 ? `${kamEbGoldSummary.leadToBillCrore.toFixed(0)}` : kamEbGoldSummary.leadToBillCrore.toFixed(1)} Cr</Text>
-                  <Text style={styles.kamEbMetricLabel}>To Bill</Text>
+                  <Award size={16} color="#F9A825" />
                 </View>
-                <View style={styles.kamEbMetric}>
-                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#FFF3E0' }]}>
-                    <Users size={16} color="#EF6C00" />
-                  </View>
-                  <Text style={styles.kamEbMetricValue}>{kamEbGoldSummary.totalSalesVisits.toLocaleString()}</Text>
-                  <Text style={styles.kamEbMetricLabel}>Visits</Text>
+                <Text style={styles.outstandingCardTitle}>To Bill</Text>
+                <Text style={[styles.outstandingCardAmount, { color: '#7B1FA2' }]} numberOfLines={1} adjustsFontSizeToFit>{kamEbGoldSummary.leadToBillCrore >= 100 ? `${kamEbGoldSummary.leadToBillCrore.toFixed(0)}` : kamEbGoldSummary.leadToBillCrore.toFixed(1)} Cr</Text>
+                <Text style={styles.outstandingCardCount}>{kamEbGoldSummary.totalSalesVisits.toLocaleString()} visits</Text>
+                <View style={styles.outstandingCardAction}>
+                  <Text style={[styles.outstandingCardActionText, { color: '#7B1FA2' }]}>View Details</Text>
+                  <ChevronRight size={14} color="#7B1FA2" />
                 </View>
-              </View>
-            </TouchableOpacity>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
         {isManagementRole && oltSummary && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>BBM Wise OLT Report</Text>
-            <TouchableOpacity
-              style={styles.kamEbCard}
-              onPress={() => router.push('/olt-report')}
-              activeOpacity={0.7}
-            >
-              <View style={styles.kamEbHeader}>
-                <View style={[styles.kamEbIcon, { backgroundColor: '#E8F5E9' }]}>
-                  <Server size={24} color="#2E7D32" />
-                </View>
-                <View style={styles.kamEbHeaderInfo}>
-                  <Text style={styles.kamEbTitle}>OLT IP Assignments</Text>
-                  <Text style={styles.kamEbSubtitle}>Network infrastructure tracking</Text>
-                </View>
-                <ChevronRight size={20} color={Colors.light.textSecondary} />
-              </View>
-              <View style={styles.kamEbMetricsRow}>
-                <View style={styles.kamEbMetric}>
-                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#E3F2FD' }]}>
-                    <Users size={16} color="#1565C0" />
+            <View style={styles.outstandingCardsRow}>
+              <TouchableOpacity 
+                style={styles.outstandingCard}
+                onPress={() => router.push('/olt-report')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.outstandingCardHeader}>
+                  <View style={[styles.outstandingIconContainer, { backgroundColor: '#E3F2FD' }]}>
+                    <Users size={20} color="#1565C0" />
                   </View>
-                  <Text style={styles.kamEbMetricValue}>{oltSummary.uniquePersonnel}</Text>
-                  <Text style={styles.kamEbMetricLabel}>Personnel</Text>
+                  <Server size={16} color="#2E7D32" />
                 </View>
-                <View style={styles.kamEbMetric}>
-                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#E8F5E9' }]}>
-                    <Wifi size={16} color="#2E7D32" />
+                <Text style={styles.outstandingCardTitle}>Personnel</Text>
+                <Text style={[styles.outstandingCardAmount, { color: '#1565C0' }]} numberOfLines={1} adjustsFontSizeToFit>{oltSummary.uniquePersonnel.toLocaleString()}</Text>
+                <Text style={styles.outstandingCardCount}>BBM assignments</Text>
+                <View style={styles.outstandingCardAction}>
+                  <Text style={[styles.outstandingCardActionText, { color: '#1565C0' }]}>View Details</Text>
+                  <ChevronRight size={14} color="#1565C0" />
+                </View>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.outstandingCard}
+                onPress={() => router.push('/olt-report')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.outstandingCardHeader}>
+                  <View style={[styles.outstandingIconContainer, { backgroundColor: '#E8F5E9' }]}>
+                    <Wifi size={20} color="#2E7D32" />
                   </View>
-                  <Text style={styles.kamEbMetricValue}>{oltSummary.uniqueOltIps}</Text>
-                  <Text style={styles.kamEbMetricLabel}>OLT IPs</Text>
+                  <Server size={16} color="#2E7D32" />
                 </View>
-                <View style={styles.kamEbMetric}>
-                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#FFF3E0' }]}>
-                    <Target size={16} color="#EF6C00" />
+                <Text style={styles.outstandingCardTitle}>OLT IPs</Text>
+                <Text style={[styles.outstandingCardAmount, { color: '#2E7D32' }]} numberOfLines={1} adjustsFontSizeToFit>{oltSummary.uniqueOltIps.toLocaleString()}</Text>
+                <Text style={styles.outstandingCardCount}>Network nodes</Text>
+                <View style={styles.outstandingCardAction}>
+                  <Text style={[styles.outstandingCardActionText, { color: '#2E7D32' }]}>View Details</Text>
+                  <ChevronRight size={14} color="#2E7D32" />
+                </View>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.outstandingCard}
+                onPress={() => router.push('/olt-report')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.outstandingCardHeader}>
+                  <View style={[styles.outstandingIconContainer, { backgroundColor: '#FFF3E0' }]}>
+                    <Target size={20} color="#EF6C00" />
                   </View>
-                  <Text style={styles.kamEbMetricValue}>{oltSummary.totalRecords}</Text>
-                  <Text style={styles.kamEbMetricLabel}>Records</Text>
+                  <Server size={16} color="#2E7D32" />
                 </View>
-              </View>
-            </TouchableOpacity>
+                <Text style={styles.outstandingCardTitle}>Total Records</Text>
+                <Text style={[styles.outstandingCardAmount, { color: '#EF6C00' }]} numberOfLines={1} adjustsFontSizeToFit>{oltSummary.totalRecords.toLocaleString()}</Text>
+                <Text style={styles.outstandingCardCount}>Infrastructure tracking</Text>
+                <View style={styles.outstandingCardAction}>
+                  <Text style={[styles.outstandingCardActionText, { color: '#EF6C00' }]}>View Details</Text>
+                  <ChevronRight size={14} color="#EF6C00" />
+                </View>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 

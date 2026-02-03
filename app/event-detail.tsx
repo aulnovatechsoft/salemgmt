@@ -325,6 +325,73 @@ export default function EventDetailScreen() {
   
   const trpcUtils = trpc.useUtils();
   
+  // Helper: Force integer-only input
+  const handleIntegerInput = (value: string, setter: (v: string) => void) => {
+    const intValue = value.replace(/[^0-9]/g, '');
+    setter(intValue);
+  };
+  
+  // Calculate validation status for target distribution
+  const getDistributionValidation = () => {
+    if (!eventData || !resourceStatus) return { simValid: true, ftthValid: true, simRemaining: 0, ftthRemaining: 0 };
+    
+    const newSimTarget = parseInt(editMemberSimTarget) || 0;
+    const newFtthTarget = parseInt(editMemberFtthTarget) || 0;
+    
+    // Calculate what's available for this member (current remaining + their current target)
+    const currentMemberSimTarget = editingMember 
+      ? (eventData.teamWithAllocations?.find((m: any) => m.employeeId === editingMember.employeeId)?.simTarget || 0)
+      : 0;
+    const currentMemberFtthTarget = editingMember 
+      ? (eventData.teamWithAllocations?.find((m: any) => m.employeeId === editingMember.employeeId)?.ftthTarget || 0)
+      : 0;
+    
+    const simAvailable = resourceStatus.remaining.simToDistribute + currentMemberSimTarget;
+    const ftthAvailable = resourceStatus.remaining.ftthToDistribute + currentMemberFtthTarget;
+    
+    return {
+      simValid: newSimTarget <= simAvailable,
+      ftthValid: newFtthTarget <= ftthAvailable,
+      simRemaining: simAvailable - newSimTarget,
+      ftthRemaining: ftthAvailable - newFtthTarget,
+      simAvailable,
+      ftthAvailable,
+    };
+  };
+  
+  // Smart distribute evenly function
+  const distributeEvenly = (type: 'sim' | 'ftth') => {
+    if (!eventData || !resourceStatus) return;
+    
+    const teamMembers = eventData.teamWithAllocations?.filter((m: any) => m.employeeId !== eventData.assignedTo) || [];
+    if (teamMembers.length === 0) return;
+    
+    const totalTarget = type === 'sim' 
+      ? (resourceStatus.target?.sim || eventData.targetSim || 0)
+      : (resourceStatus.target?.ftth || eventData.targetFtth || 0);
+    
+    if (totalTarget === 0) return;
+    
+    const baseAmount = Math.floor(totalTarget / teamMembers.length);
+    const remainder = totalTarget % teamMembers.length;
+    
+    // Find current member's index to determine if they get extra
+    const memberIndex = teamMembers.findIndex((m: any) => m.employeeId === editingMember?.employeeId);
+    // Guard against memberIndex -1 (member not in list) - give base amount
+    const memberTarget = memberIndex >= 0 && memberIndex < remainder ? baseAmount + 1 : baseAmount;
+    
+    if (type === 'sim') {
+      setEditMemberSimTarget(memberTarget.toString());
+    } else {
+      setEditMemberFtthTarget(memberTarget.toString());
+    }
+    
+    Alert.alert(
+      'Distribution Info',
+      `Total ${type.toUpperCase()}: ${totalTarget}\nTeam Members: ${teamMembers.length}\nEach gets: ${baseAmount}${remainder > 0 ? ` (first ${remainder} members get +1)` : ''}\nThis member: ${memberTarget}`
+    );
+  };
+  
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(getISTDate());
@@ -809,11 +876,26 @@ export default function EventDetailScreen() {
 
   const handleUpdateMemberTargets = () => {
     if (!employee?.id || !editingMember) return;
+    
+    const simTarget = Math.floor(parseInt(editMemberSimTarget) || 0);
+    const ftthTarget = Math.floor(parseInt(editMemberFtthTarget) || 0);
+    
+    // Validate before submitting
+    const validation = getDistributionValidation();
+    if (!validation.simValid) {
+      Alert.alert('Over Allocation', `Cannot assign ${simTarget} SIMs. Only ${validation.simAvailable} available for distribution.`);
+      return;
+    }
+    if (!validation.ftthValid) {
+      Alert.alert('Over Allocation', `Cannot assign ${ftthTarget} FTTH. Only ${validation.ftthAvailable} available for distribution.`);
+      return;
+    }
+    
     updateTargetsMutation.mutate({
       eventId: id || '',
       employeeId: editingMember.employeeId,
-      simTarget: parseInt(editMemberSimTarget) || 0,
-      ftthTarget: parseInt(editMemberFtthTarget) || 0,
+      simTarget,
+      ftthTarget,
       updatedBy: employee.id,
     });
   };
@@ -2599,19 +2681,58 @@ export default function EventDetailScreen() {
             </View>
             
             <View style={styles.modalBody}>
-              {resourceStatus && (
-                <View style={styles.resourceHint}>
-                  <Text style={styles.resourceHintText}>
-                    Available: SIM {resourceStatus.remaining.simToDistribute + parseInt(editMemberSimTarget || '0')} | FTTH {resourceStatus.remaining.ftthToDistribute + parseInt(editMemberFtthTarget || '0')}
-                  </Text>
-                </View>
-              )}
-              
-              <Text style={styles.inputLabel}>SIM Target</Text>
-              <TextInput style={styles.input} value={editMemberSimTarget} onChangeText={setEditMemberSimTarget} keyboardType="number-pad" />
-              
-              <Text style={styles.inputLabel}>FTTH Target</Text>
-              <TextInput style={styles.input} value={editMemberFtthTarget} onChangeText={setEditMemberFtthTarget} keyboardType="number-pad" />
+              {(() => {
+                const validation = getDistributionValidation();
+                const totalSim = resourceStatus?.target?.sim || eventData?.targetSim || 0;
+                const totalFtth = resourceStatus?.target?.ftth || eventData?.targetFtth || 0;
+                return (
+                  <>
+                    <View style={[styles.resourceHint, { backgroundColor: (!validation.simValid || !validation.ftthValid) ? '#FEE2E2' : '#ECFDF5' }]}>
+                      <Text style={[styles.resourceHintText, { color: (!validation.simValid || !validation.ftthValid) ? '#DC2626' : '#059669' }]}>
+                        {validation.simValid && validation.ftthValid 
+                          ? `Remaining: SIM ${validation.simRemaining} | FTTH ${validation.ftthRemaining}`
+                          : `Over allocation! SIM: ${validation.simRemaining < 0 ? validation.simRemaining : 'OK'} | FTTH: ${validation.ftthRemaining < 0 ? validation.ftthRemaining : 'OK'}`
+                        }
+                      </Text>
+                      <Text style={[styles.resourceHintText, { fontSize: 11, marginTop: 2 }]}>
+                        Total Target: SIM {totalSim} | FTTH {totalFtth}
+                      </Text>
+                    </View>
+                    
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Text style={styles.inputLabel}>SIM Target</Text>
+                      {totalSim > 0 && (
+                        <TouchableOpacity onPress={() => distributeEvenly('sim')} style={{ padding: 4 }}>
+                          <Text style={{ color: Colors.light.primary, fontSize: 12 }}>Auto-distribute</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    <TextInput 
+                      style={[styles.input, !validation.simValid && { borderColor: '#DC2626', borderWidth: 2 }]} 
+                      value={editMemberSimTarget} 
+                      onChangeText={(v) => handleIntegerInput(v, setEditMemberSimTarget)} 
+                      keyboardType="number-pad" 
+                      placeholder="Enter whole number only"
+                    />
+                    
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Text style={styles.inputLabel}>FTTH Target</Text>
+                      {totalFtth > 0 && (
+                        <TouchableOpacity onPress={() => distributeEvenly('ftth')} style={{ padding: 4 }}>
+                          <Text style={{ color: Colors.light.primary, fontSize: 12 }}>Auto-distribute</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    <TextInput 
+                      style={[styles.input, !validation.ftthValid && { borderColor: '#DC2626', borderWidth: 2 }]} 
+                      value={editMemberFtthTarget} 
+                      onChangeText={(v) => handleIntegerInput(v, setEditMemberFtthTarget)} 
+                      keyboardType="number-pad" 
+                      placeholder="Enter whole number only"
+                    />
+                  </>
+                );
+              })()}
             </View>
             
             <View style={styles.modalFooter}>
