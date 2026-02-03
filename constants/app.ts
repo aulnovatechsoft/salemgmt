@@ -83,7 +83,7 @@ export const isAdminRole = (role: UserRole): boolean => {
 };
 
 export const canAccessAdminPanel = (role: UserRole): boolean => {
-  return ['ADMIN', 'GM', 'CGM'].includes(role);
+  return ['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(role);
 };
 
 export const canUploadCSV = (role: UserRole): boolean => {
