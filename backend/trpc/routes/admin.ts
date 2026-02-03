@@ -1750,7 +1750,7 @@ export const adminRouter = createTRPCRouter({
           pers_no,
           name,
           designation,
-          mobile,
+          phone,
           email,
           circle,
           role
@@ -1797,7 +1797,7 @@ export const adminRouter = createTRPCRouter({
           persNo: input.persNo,
           name: masterData?.name || employeeData?.name || 'Unknown',
           designation: masterData?.designation || employeeData?.designation || null,
-          mobile: masterData?.mobile || employeeData?.mobile || null,
+          mobile: masterData?.mobile || employeeData?.phone || null,
           email: masterData?.email || employeeData?.email || null,
           circle: masterData?.circle || employeeData?.circle || null,
           ssa: masterData?.ssa || null,
