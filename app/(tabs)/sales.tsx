@@ -5,13 +5,13 @@ import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
 import { useMemo } from 'react';
-import { SalesReport, SalesReportStatus } from '@/types';
+import { SalesReport, SalesReportStatus, Event } from '@/types';
 import { trpc } from '@/lib/trpc';
 
 export default function SalesScreen() {
   const router = useRouter();
   const { employee } = useAuth();
-  const { events } = useApp();
+  const { events, salesReports: legacySalesReports } = useApp();
   
   const salesQuery = trpc.sales.getAll.useQuery({});
   const salesReports = salesQuery.data || [];
@@ -37,14 +37,19 @@ export default function SalesScreen() {
     }, {} as Record<string, number>);
   }, [mySalesReports]);
 
+  const eventsWithSales = useMemo(() => {
+    return events.filter(e => (e.simsSold || 0) > 0 || (e.ftthSold || 0) > 0);
+  }, [events]);
+
   const totalStats = useMemo(() => {
-    return mySalesReports.reduce((acc, report) => ({
-      simsSold: acc.simsSold + report.simsSold,
-      simsActivated: acc.simsActivated + report.simsActivated,
-      ftthLeads: acc.ftthLeads + report.ftthLeads,
-      ftthInstalled: acc.ftthInstalled + report.ftthInstalled,
+    const fromEvents = events.reduce((acc, e) => ({
+      simsSold: acc.simsSold + (e.simsSold || 0),
+      simsActivated: acc.simsActivated + legacySalesReports.reduce((a, r) => a + r.simsActivated, 0),
+      ftthLeads: acc.ftthLeads + (e.ftthSold || 0),
+      ftthInstalled: acc.ftthInstalled + legacySalesReports.reduce((a, r) => a + r.ftthInstalled, 0),
     }), { simsSold: 0, simsActivated: 0, ftthLeads: 0, ftthInstalled: 0 });
-  }, [mySalesReports]);
+    return fromEvents;
+  }, [events, legacySalesReports]);
 
   return (
     <>
@@ -113,8 +118,12 @@ export default function SalesScreen() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Recent Sales Reports</Text>
-          {mySalesReports.length > 0 ? (
+          <Text style={styles.sectionTitle}>Sales by Task</Text>
+          {eventsWithSales.length > 0 ? (
+            eventsWithSales.map(event => (
+              <EventSalesCard key={event.id} event={event} />
+            ))
+          ) : mySalesReports.length > 0 ? (
             mySalesReports.map(report => {
               const event = events.find(e => e.id === report.eventId);
               return <SalesReportCard key={report.id} report={{...report, photos: report.photos || [], remarks: report.remarks || '', createdAt: report.createdAt instanceof Date ? report.createdAt.toISOString() : report.createdAt, synced: report.synced ?? false, status: (report.status || 'pending') as SalesReportStatus, reviewedBy: report.reviewedBy ?? undefined, reviewedAt: report.reviewedAt ? (report.reviewedAt instanceof Date ? report.reviewedAt.toISOString() : report.reviewedAt) : undefined, reviewRemarks: report.reviewRemarks ?? undefined, salesStaffName: report.salesStaffName ?? undefined, eventName: report.eventName ?? undefined}} event={event} />;
@@ -122,11 +131,9 @@ export default function SalesScreen() {
           ) : (
             <View style={styles.emptyState}>
               <TrendingUp size={64} color={Colors.light.textSecondary} />
-              <Text style={styles.emptyTitle}>No Sales Reports</Text>
+              <Text style={styles.emptyTitle}>No Sales Yet</Text>
               <Text style={styles.emptySubtitle}>
-                {employee?.role === 'SALES_STAFF'
-                  ? 'Tap the + button to submit your first sales report'
-                  : 'Sales reports will appear here once submitted'}
+                Submit sales progress from your assigned tasks
               </Text>
             </View>
           )}
@@ -198,6 +205,53 @@ function SalesReportCard({ report, event }: { report: SalesReport; event?: any }
           <Text style={styles.remarksText}>{report.remarks}</Text>
         </View>
       )}
+    </View>
+  );
+}
+
+function EventSalesCard({ event }: { event: Event }) {
+  const simSold = event.simsSold || 0;
+  const ftthSold = event.ftthSold || 0;
+  const targetSim = event.targetSim || 0;
+  const targetFtth = event.targetFtth || 0;
+  
+  return (
+    <View style={styles.reportCard}>
+      <View style={styles.reportHeader}>
+        <View style={styles.reportHeaderLeft}>
+          <Calendar size={16} color={Colors.light.textSecondary} />
+          <Text style={styles.reportDate}>
+            {new Date(event.dateRange.startDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} - {new Date(event.dateRange.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+          </Text>
+        </View>
+        <View style={[styles.statusBadge, { backgroundColor: event.status === 'completed' ? '#E8F5E9' : '#E3F2FD' }]}>
+          <Text style={[styles.statusText, { color: event.status === 'completed' ? Colors.light.success : Colors.light.info }]}>
+            {event.status === 'completed' ? 'Completed' : 'Active'}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.eventInfo}>
+        <MapPin size={14} color={Colors.light.textSecondary} />
+        <Text style={styles.eventName}>{event.name} - {event.location}</Text>
+      </View>
+
+      <View style={styles.reportStats}>
+        <View style={styles.reportStatItem}>
+          <Text style={styles.reportStatLabel}>SIMs Sold</Text>
+          <Text style={styles.reportStatValue}>{simSold}</Text>
+          <Text style={styles.reportStatSubtitle}>Target: {targetSim}</Text>
+        </View>
+        <View style={styles.reportStatItem}>
+          <Text style={styles.reportStatLabel}>FTTH Sold</Text>
+          <Text style={styles.reportStatValue}>{ftthSold}</Text>
+          <Text style={styles.reportStatSubtitle}>Target: {targetFtth}</Text>
+        </View>
+        <View style={styles.reportStatItem}>
+          <Text style={styles.reportStatLabel}>Category</Text>
+          <Text style={[styles.reportStatValue, { fontSize: 12 }]}>{event.category}</Text>
+        </View>
+      </View>
     </View>
   );
 }
