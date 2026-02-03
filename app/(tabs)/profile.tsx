@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, RefreshControl, Modal, TextInput } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { User, Mail, Phone, Briefcase, MapPin, LogOut, FileText, Settings, ChevronRight, Users, Building2, Edit2, X, Lock, AlertTriangle, IndianRupee, Server } from 'lucide-react-native';
+import { User, Mail, Phone, Briefcase, MapPin, LogOut, FileText, Settings, ChevronRight, Users, Building2, Edit2, X, Lock, AlertTriangle, IndianRupee } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
@@ -426,12 +426,6 @@ export default function ProfileScreen() {
             </TouchableOpacity>
           )}
 
-          {(employee.role === 'GM' || employee.role === 'CGM' || employee.role === 'DGM' || employee.role === 'AGM') && (
-            <TouchableOpacity style={styles.actionButton} onPress={() => router.push('/olt-report')}>
-              <Server size={20} color={Colors.light.primary} />
-              <Text style={[styles.actionButtonText, { color: Colors.light.primary }]}>BBM Wise OLT Report</Text>
-            </TouchableOpacity>
-          )}
 
           {(employee.role === 'GM' || employee.role === 'CGM') && (
             <TouchableOpacity style={styles.actionButton} onPress={() => router.push('/admin-settings')}>

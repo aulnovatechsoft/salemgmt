@@ -1943,7 +1943,7 @@ export const adminRouter = createTRPCRouter({
       const countResult = await db.execute(sql`
         SELECT COUNT(*) as total
         FROM kam_eb_gold k
-        LEFT JOIN employee_master e ON e.pers_no = k.pers_no
+        LEFT JOIN employees e ON e.pers_no = k.pers_no
         WHERE ${whereClause}
       `);
       const total = parseInt((countResult as any)[0]?.total || '0');
@@ -1973,11 +1973,14 @@ export const adminRouter = createTRPCRouter({
           k.lead_in_stage_iv_crore,
           k.lead_to_bill_crore,
           k.total_sales_visit,
+          e.id as employee_id,
           e.name as employee_name,
           e.designation,
-          e.circle
+          e.circle,
+          e.mobile,
+          e.email
         FROM kam_eb_gold k
-        LEFT JOIN employee_master e ON e.pers_no = k.pers_no
+        LEFT JOIN employees e ON e.pers_no = k.pers_no
         WHERE ${whereClause}
         ORDER BY ${orderByClause}
         LIMIT ${input.limit} OFFSET ${input.offset}
@@ -1993,6 +1996,7 @@ export const adminRouter = createTRPCRouter({
           leadInStageIvCrore: parseFloat(r.lead_in_stage_iv_crore || '0'),
           leadToBillCrore: parseFloat(r.lead_to_bill_crore || '0'),
           totalSalesVisit: parseInt(r.total_sales_visit || '0'),
+          hasRegisteredEmployee: !!r.employee_id,
           employeeName: r.employee_name,
           designation: r.designation,
           circle: r.circle,
