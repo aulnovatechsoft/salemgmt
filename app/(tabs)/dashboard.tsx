@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, Modal, FlatList, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, Clock, CalendarCheck, AlertTriangle, IndianRupee, X, Hourglass, CircleCheck, CircleDot, Send, RotateCcw, Award, DollarSign } from 'lucide-react-native';
+import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, Clock, CalendarCheck, AlertTriangle, IndianRupee, X, Hourglass, CircleCheck, CircleDot, Send, RotateCcw, Award, DollarSign, Server, Wifi } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
@@ -102,6 +102,11 @@ export default function DashboardScreen() {
   );
 
   const { data: kamEbGoldSummary } = trpc.admin.getKamEbGoldSummary.useQuery(
+    { userId: employee?.id || '' },
+    { enabled: !!employee?.id && isManagementRole }
+  );
+
+  const { data: oltSummary } = trpc.admin.getOltSummary.useQuery(
     { userId: employee?.id || '' },
     { enabled: !!employee?.id && isManagementRole }
   );
@@ -381,6 +386,51 @@ export default function DashboardScreen() {
                   </View>
                   <Text style={styles.kamEbMetricValue}>{kamEbGoldSummary.totalSalesVisits.toLocaleString()}</Text>
                   <Text style={styles.kamEbMetricLabel}>Visits</Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {isManagementRole && oltSummary && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>BBM Wise OLT Report</Text>
+            <TouchableOpacity
+              style={styles.kamEbCard}
+              onPress={() => router.push('/olt-report')}
+              activeOpacity={0.7}
+            >
+              <View style={styles.kamEbHeader}>
+                <View style={[styles.kamEbIcon, { backgroundColor: '#E8F5E9' }]}>
+                  <Server size={24} color="#2E7D32" />
+                </View>
+                <View style={styles.kamEbHeaderInfo}>
+                  <Text style={styles.kamEbTitle}>OLT IP Assignments</Text>
+                  <Text style={styles.kamEbSubtitle}>Network infrastructure tracking</Text>
+                </View>
+                <ChevronRight size={20} color={Colors.light.textSecondary} />
+              </View>
+              <View style={styles.kamEbMetricsRow}>
+                <View style={styles.kamEbMetric}>
+                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#E3F2FD' }]}>
+                    <Users size={16} color="#1565C0" />
+                  </View>
+                  <Text style={styles.kamEbMetricValue}>{oltSummary.uniquePersonnel}</Text>
+                  <Text style={styles.kamEbMetricLabel}>Personnel</Text>
+                </View>
+                <View style={styles.kamEbMetric}>
+                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#E8F5E9' }]}>
+                    <Wifi size={16} color="#2E7D32" />
+                  </View>
+                  <Text style={styles.kamEbMetricValue}>{oltSummary.uniqueOltIps}</Text>
+                  <Text style={styles.kamEbMetricLabel}>OLT IPs</Text>
+                </View>
+                <View style={styles.kamEbMetric}>
+                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#FFF3E0' }]}>
+                    <Target size={16} color="#EF6C00" />
+                  </View>
+                  <Text style={styles.kamEbMetricValue}>{oltSummary.totalRecords}</Text>
+                  <Text style={styles.kamEbMetricLabel}>Records</Text>
                 </View>
               </View>
             </TouchableOpacity>

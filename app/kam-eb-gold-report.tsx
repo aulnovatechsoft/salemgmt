@@ -255,58 +255,70 @@ export default function KamEbGoldReportScreen() {
               Showing {reportData.records.length} of {reportData.total} records
             </Text>
             
-            {reportData.records.map((record) => (
-              <TouchableOpacity
-                key={record.id}
-                style={styles.recordCard}
-                onPress={() => navigateToProfile(record.persNo)}
-              >
-                <View style={styles.recordHeader}>
-                  <View style={styles.recordInfo}>
-                    <View style={styles.nameRow}>
-                      <Text style={styles.persNo}>{record.persNo}</Text>
-                      {record.ebExclusive === 'Yes' && (
-                        <View style={styles.ebBadge}>
-                          <Text style={styles.ebBadgeText}>EB</Text>
-                        </View>
+            {reportData.records.map((record) => {
+              const CardWrapper = record.hasRegisteredEmployee ? TouchableOpacity : View;
+              const cardProps = record.hasRegisteredEmployee 
+                ? { onPress: () => navigateToProfile(record.persNo) }
+                : {};
+              
+              return (
+                <CardWrapper
+                  key={record.id}
+                  style={[styles.recordCard, !record.hasRegisteredEmployee && styles.recordCardDisabled]}
+                  {...cardProps}
+                >
+                  <View style={styles.recordHeader}>
+                    <View style={styles.recordInfo}>
+                      <View style={styles.nameRow}>
+                        <Text style={styles.persNo}>{record.persNo}</Text>
+                        {record.ebExclusive === 'Yes' && (
+                          <View style={styles.ebBadge}>
+                            <Text style={styles.ebBadgeText}>EB</Text>
+                          </View>
+                        )}
+                      </View>
+                      {record.employeeName && (
+                        <Text style={styles.employeeName}>{record.employeeName}</Text>
+                      )}
+                      {record.designation && (
+                        <Text style={styles.designation}>{record.designation}</Text>
+                      )}
+                      {!record.hasRegisteredEmployee && (
+                        <Text style={styles.notRegistered}>Not registered</Text>
                       )}
                     </View>
-                    {record.employeeName && (
-                      <Text style={styles.employeeName}>{record.employeeName}</Text>
-                    )}
-                    {record.designation && (
-                      <Text style={styles.designation}>{record.designation}</Text>
+                    {record.hasRegisteredEmployee && (
+                      <ChevronRight size={20} color={Colors.textLight} />
                     )}
                   </View>
-                  <ChevronRight size={20} color={Colors.textLight} />
-                </View>
-                
-                <View style={styles.metricsRow}>
-                  <View style={styles.metric}>
-                    <Text style={styles.metricValue}>{record.totalLeads}</Text>
-                    <Text style={styles.metricLabel}>Leads</Text>
+                  
+                  <View style={styles.metricsRow}>
+                    <View style={styles.metric}>
+                      <Text style={styles.metricValue}>{record.totalLeads}</Text>
+                      <Text style={styles.metricLabel}>Leads</Text>
+                    </View>
+                    <View style={styles.metric}>
+                      <Text style={[styles.metricValue, { color: '#2E7D32' }]}>
+                        {formatCrore(record.totalLeadValueCrore)}
+                      </Text>
+                      <Text style={styles.metricLabel}>Value</Text>
+                    </View>
+                    <View style={styles.metric}>
+                      <Text style={[styles.metricValue, { color: '#1565C0' }]}>
+                        {formatCrore(record.leadInStageIvCrore)}
+                      </Text>
+                      <Text style={styles.metricLabel}>Stage IV</Text>
+                    </View>
+                    <View style={styles.metric}>
+                      <Text style={[styles.metricValue, { color: '#7B1FA2' }]}>
+                        {formatCrore(record.leadToBillCrore)}
+                      </Text>
+                      <Text style={styles.metricLabel}>To Bill</Text>
+                    </View>
                   </View>
-                  <View style={styles.metric}>
-                    <Text style={[styles.metricValue, { color: '#2E7D32' }]}>
-                      {formatCrore(record.totalLeadValueCrore)}
-                    </Text>
-                    <Text style={styles.metricLabel}>Value</Text>
-                  </View>
-                  <View style={styles.metric}>
-                    <Text style={[styles.metricValue, { color: '#1565C0' }]}>
-                      {formatCrore(record.leadInStageIvCrore)}
-                    </Text>
-                    <Text style={styles.metricLabel}>Stage IV</Text>
-                  </View>
-                  <View style={styles.metric}>
-                    <Text style={[styles.metricValue, { color: '#7B1FA2' }]}>
-                      {formatCrore(record.leadToBillCrore)}
-                    </Text>
-                    <Text style={styles.metricLabel}>To Bill</Text>
-                  </View>
-                </View>
-              </TouchableOpacity>
-            ))}
+                </CardWrapper>
+              );
+            })}
 
             {(reportData?.hasMore || page > 0) && (
               <View style={styles.paginationRow}>
@@ -528,6 +540,16 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 3,
     elevation: 2,
+  },
+  recordCardDisabled: {
+    opacity: 0.7,
+    backgroundColor: '#f8f8f8',
+  },
+  notRegistered: {
+    fontSize: 11,
+    color: '#999',
+    fontStyle: 'italic',
+    marginTop: 4,
   },
   recordHeader: {
     flexDirection: 'row',
