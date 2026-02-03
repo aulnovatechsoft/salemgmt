@@ -14,6 +14,7 @@ export default function EventSalesScreen() {
   const router = useRouter();
   const { eventId } = useLocalSearchParams<{ eventId: string }>();
   const { employee } = useAuth();
+  const utils = trpc.useUtils();
   
   const [simsSold, setSimsSold] = useState('');
   const [simsActivated, setSimsActivated] = useState('');
@@ -33,6 +34,10 @@ export default function EventSalesScreen() {
 
   const submitSalesMutation = trpc.events.submitEventSales.useMutation({
     onSuccess: () => {
+      utils.events.getEventWithDetails.invalidate();
+      utils.events.getMyEvents.invalidate();
+      utils.events.getAll.invalidate();
+      utils.events.getMyAssignedTasks.invalidate();
       Alert.alert('Success', 'Sales entry submitted successfully', [
         { text: 'OK', onPress: () => router.back() },
       ]);

@@ -12,6 +12,7 @@ import { CUSTOMER_TYPES } from '@/constants/app';
 export default function SubmitSalesScreen() {
   const router = useRouter();
   const { employee } = useAuth();
+  const utils = trpc.useUtils();
   const { data: eventsData } = trpc.events.getMyEvents.useQuery(
     { employeeId: employee?.id || '' },
     { enabled: !!employee?.id }
@@ -20,6 +21,10 @@ export default function SubmitSalesScreen() {
   
   const submitSalesMutation = trpc.events.submitEventSales.useMutation({
     onSuccess: () => {
+      utils.events.getEventWithDetails.invalidate();
+      utils.events.getMyEvents.invalidate();
+      utils.events.getAll.invalidate();
+      utils.events.getMyAssignedTasks.invalidate();
       Alert.alert('Success', 'Sales submitted successfully! Your targets have been updated.', [
         { text: 'OK', onPress: () => router.back() },
       ]);
