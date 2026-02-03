@@ -1977,7 +1977,7 @@ export const adminRouter = createTRPCRouter({
           e.name as employee_name,
           e.designation,
           e.circle,
-          e.mobile,
+          e.phone,
           e.email
         FROM kam_eb_gold k
         LEFT JOIN employees e ON e.pers_no = k.pers_no
