@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, Modal, FlatList, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, Clock, CalendarCheck, AlertTriangle, IndianRupee, X, Hourglass, CircleCheck, CircleDot, Send, RotateCcw } from 'lucide-react-native';
+import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, Clock, CalendarCheck, AlertTriangle, IndianRupee, X, Hourglass, CircleCheck, CircleDot, Send, RotateCcw, Award, DollarSign } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
@@ -99,6 +99,11 @@ export default function DashboardScreen() {
   const { data: ftthPendingSummary } = trpc.ftthPending.getSummary.useQuery(
     undefined,
     { enabled: isManagementRole }
+  );
+
+  const { data: kamEbGoldSummary } = trpc.admin.getKamEbGoldSummary.useQuery(
+    { userId: employee?.id || '' },
+    { enabled: !!employee?.id && isManagementRole }
   );
 
   const { data: ftthPendingEmployeesData, isLoading: loadingFtthPendingEmployees, error: ftthPendingError } = trpc.ftthPending.getEmployeesWithPending.useQuery(
@@ -327,6 +332,58 @@ export default function DashboardScreen() {
                 </TouchableOpacity>
               )}
             </View>
+          </View>
+        )}
+
+        {isManagementRole && kamEbGoldSummary && (kamEbGoldSummary.totalPersonnel > 0 || kamEbGoldSummary.totalLeads > 0) && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>KAM EB Gold Performance</Text>
+            <TouchableOpacity
+              style={styles.kamEbCard}
+              onPress={() => router.push('/kam-eb-gold-report')}
+              activeOpacity={0.7}
+            >
+              <View style={styles.kamEbHeader}>
+                <View style={[styles.kamEbIcon, { backgroundColor: '#FFF8E1' }]}>
+                  <Award size={24} color="#F9A825" />
+                </View>
+                <View style={styles.kamEbHeaderInfo}>
+                  <Text style={styles.kamEbTitle}>Enterprise Business Leads</Text>
+                  <Text style={styles.kamEbSubtitle}>{kamEbGoldSummary.totalPersonnel} Personnel • {kamEbGoldSummary.ebExclusiveCount} EB Exclusive</Text>
+                </View>
+                <ChevronRight size={20} color={Colors.light.textSecondary} />
+              </View>
+              <View style={styles.kamEbMetricsRow}>
+                <View style={styles.kamEbMetric}>
+                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#E3F2FD' }]}>
+                    <Target size={16} color="#1565C0" />
+                  </View>
+                  <Text style={styles.kamEbMetricValue}>{kamEbGoldSummary.totalLeads.toLocaleString()}</Text>
+                  <Text style={styles.kamEbMetricLabel}>Leads</Text>
+                </View>
+                <View style={styles.kamEbMetric}>
+                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#E8F5E9' }]}>
+                    <DollarSign size={16} color="#2E7D32" />
+                  </View>
+                  <Text style={styles.kamEbMetricValue}>{kamEbGoldSummary.totalLeadValueCrore >= 100 ? `${kamEbGoldSummary.totalLeadValueCrore.toFixed(0)}` : kamEbGoldSummary.totalLeadValueCrore.toFixed(1)} Cr</Text>
+                  <Text style={styles.kamEbMetricLabel}>Value</Text>
+                </View>
+                <View style={styles.kamEbMetric}>
+                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#F3E5F5' }]}>
+                    <TrendingUp size={16} color="#7B1FA2" />
+                  </View>
+                  <Text style={styles.kamEbMetricValue}>{kamEbGoldSummary.leadToBillCrore >= 100 ? `${kamEbGoldSummary.leadToBillCrore.toFixed(0)}` : kamEbGoldSummary.leadToBillCrore.toFixed(1)} Cr</Text>
+                  <Text style={styles.kamEbMetricLabel}>To Bill</Text>
+                </View>
+                <View style={styles.kamEbMetric}>
+                  <View style={[styles.kamEbMetricIcon, { backgroundColor: '#FFF3E0' }]}>
+                    <Users size={16} color="#EF6C00" />
+                  </View>
+                  <Text style={styles.kamEbMetricValue}>{kamEbGoldSummary.totalSalesVisits.toLocaleString()}</Text>
+                  <Text style={styles.kamEbMetricLabel}>Visits</Text>
+                </View>
+              </View>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -1577,5 +1634,72 @@ const styles = StyleSheet.create({
   modalEmptyText: {
     fontSize: 14,
     color: Colors.light.textSecondary,
+  },
+  kamEbCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#FFE082',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  kamEbHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  kamEbIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  kamEbHeaderInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  kamEbTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  kamEbSubtitle: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginTop: 2,
+  },
+  kamEbMetricsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFDE7',
+    borderRadius: 12,
+    padding: 12,
+  },
+  kamEbMetric: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  kamEbMetricIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  kamEbMetricValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  kamEbMetricLabel: {
+    fontSize: 10,
+    color: Colors.light.textSecondary,
+    marginTop: 2,
   },
 });

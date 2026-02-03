@@ -382,3 +382,11 @@ export const pushNotificationQueue = pgTable('push_notification_queue', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
+
+export const bbmWiseOlte = pgTable('bbm_wise_olte', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  persNo: varchar('pers_no', { length: 50 }).notNull(),
+  oltIp: varchar('olt_ip', { length: 50 }).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});

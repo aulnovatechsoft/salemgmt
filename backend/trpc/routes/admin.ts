@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { eq, sql, desc, and, isNull, inArray } from "drizzle-orm";
+import { eq, sql, desc, and, isNull, inArray, like, or } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
-import { db, employees, employeeMaster, auditLogs, events } from "@/backend/db";
+import { db, employees, employeeMaster, auditLogs, events, bbmWiseOlte } from "@/backend/db";
 import bcrypt from "bcryptjs";
 
 const SALT_ROUNDS = 10;
@@ -1590,6 +1590,460 @@ export const adminRouter = createTRPCRouter({
         }>,
         total,
         hasMore: input.offset + input.limit < total,
+      };
+    }),
+
+  getOltSummary: publicProcedure
+    .input(z.object({
+      userId: z.string().uuid(),
+    }))
+    .query(async ({ input }) => {
+      const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
+      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+        throw new Error('Only management users can access OLT reports. Access denied.');
+      }
+      
+      const result = await db.execute(sql`
+        SELECT 
+          COUNT(*) as total_records,
+          COUNT(DISTINCT pers_no) as unique_personnel,
+          COUNT(DISTINCT olt_ip) as unique_olt_ips
+        FROM bbm_wise_olte
+      `);
+      
+      const data = (result as any)[0] || { total_records: '0', unique_personnel: '0', unique_olt_ips: '0' };
+      
+      return {
+        totalRecords: parseInt(data.total_records || '0'),
+        uniquePersonnel: parseInt(data.unique_personnel || '0'),
+        uniqueOltIps: parseInt(data.unique_olt_ips || '0'),
+      };
+    }),
+
+  getOltReport: publicProcedure
+    .input(z.object({
+      userId: z.string().uuid(),
+      search: z.string().optional(),
+      limit: z.number().optional().default(100),
+      offset: z.number().optional().default(0),
+    }))
+    .query(async ({ input }) => {
+      const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
+      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+        throw new Error('Only management users can access OLT reports. Access denied.');
+      }
+      
+      let whereClause = sql`1=1`;
+      
+      if (input.search && input.search.trim()) {
+        const searchTerm = `%${input.search.trim()}%`;
+        whereClause = sql`(pers_no ILIKE ${searchTerm} OR olt_ip ILIKE ${searchTerm})`;
+      }
+      
+      const result = await db.execute(sql`
+        SELECT 
+          o.id,
+          o.pers_no,
+          o.olt_ip,
+          o.created_at,
+          e.name as employee_name,
+          e.designation,
+          e.circle
+        FROM bbm_wise_olte o
+        LEFT JOIN employees e ON e.pers_no = o.pers_no
+        WHERE ${whereClause}
+        ORDER BY o.pers_no, o.olt_ip
+        LIMIT ${input.limit}
+        OFFSET ${input.offset}
+      `);
+      
+      const countResult = await db.execute(sql`
+        SELECT COUNT(*) as total FROM bbm_wise_olte WHERE ${whereClause}
+      `);
+      
+      const total = parseInt((countResult as any)[0]?.total || '0');
+      
+      return {
+        records: result as unknown as Array<{
+          id: string;
+          pers_no: string;
+          olt_ip: string;
+          created_at: string;
+          employee_name: string | null;
+          designation: string | null;
+          circle: string | null;
+        }>,
+        total,
+        hasMore: input.offset + input.limit < total,
+      };
+    }),
+
+  getOltByPersNo: publicProcedure
+    .input(z.object({
+      userId: z.string().uuid(),
+      persNo: z.string().min(1),
+    }))
+    .query(async ({ input }) => {
+      const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
+      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+        throw new Error('Only management users can access OLT reports. Access denied.');
+      }
+      
+      const result = await db.execute(sql`
+        SELECT 
+          o.id,
+          o.pers_no,
+          o.olt_ip,
+          o.created_at,
+          e.name as employee_name,
+          e.designation,
+          e.circle
+        FROM bbm_wise_olte o
+        LEFT JOIN employees e ON e.pers_no = o.pers_no
+        WHERE o.pers_no = ${input.persNo}
+        ORDER BY o.olt_ip
+      `);
+      
+      return {
+        records: result as unknown as Array<{
+          id: string;
+          pers_no: string;
+          olt_ip: string;
+          created_at: string;
+          employee_name: string | null;
+          designation: string | null;
+          circle: string | null;
+        }>,
+      };
+    }),
+
+  getEmployeeProfileWithOlt: publicProcedure
+    .input(z.object({
+      userId: z.string().uuid(),
+      persNo: z.string().min(1),
+    }))
+    .query(async ({ input }) => {
+      const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
+      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+        throw new Error('Only management users can access employee profiles. Access denied.');
+      }
+      
+      // Get employee details from employee_master first, then employees table
+      const employeeMasterResult = await db.execute(sql`
+        SELECT 
+          pers_no,
+          name,
+          designation,
+          mobile,
+          email,
+          circle,
+          ssa,
+          reporting_officer_pers_no
+        FROM employee_master
+        WHERE pers_no = ${input.persNo}
+        LIMIT 1
+      `);
+      
+      const employeeResult = await db.execute(sql`
+        SELECT 
+          id,
+          pers_no,
+          name,
+          designation,
+          mobile,
+          email,
+          circle,
+          role
+        FROM employees
+        WHERE pers_no = ${input.persNo}
+        LIMIT 1
+      `);
+      
+      // Get OLT IPs for this employee
+      const oltResult = await db.execute(sql`
+        SELECT id, pers_no, olt_ip, created_at
+        FROM bbm_wise_olte
+        WHERE pers_no = ${input.persNo}
+        ORDER BY olt_ip
+      `);
+      
+      // Get reporting manager if available
+      const masterData = (employeeMasterResult as any)[0];
+      let reportingManager = null;
+      if (masterData?.reporting_officer_pers_no) {
+        const managerResult = await db.execute(sql`
+          SELECT pers_no, name, designation, mobile, circle
+          FROM employee_master
+          WHERE pers_no = ${masterData.reporting_officer_pers_no}
+          LIMIT 1
+        `);
+        reportingManager = (managerResult as any)[0] || null;
+      }
+      
+      // Get subordinates
+      const subordinatesResult = await db.execute(sql`
+        SELECT pers_no, name, designation, mobile, circle
+        FROM employee_master
+        WHERE reporting_officer_pers_no = ${input.persNo}
+        ORDER BY name
+        LIMIT 50
+      `);
+      
+      const employeeData = (employeeResult as any)[0];
+      
+      return {
+        employee: {
+          id: employeeData?.id || null,
+          persNo: input.persNo,
+          name: masterData?.name || employeeData?.name || 'Unknown',
+          designation: masterData?.designation || employeeData?.designation || null,
+          mobile: masterData?.mobile || employeeData?.mobile || null,
+          email: masterData?.email || employeeData?.email || null,
+          circle: masterData?.circle || employeeData?.circle || null,
+          ssa: masterData?.ssa || null,
+          role: employeeData?.role || null,
+          reportingOfficerPersNo: masterData?.reporting_officer_pers_no || null,
+        },
+        oltIps: (oltResult as any[]).map((r: any) => ({
+          id: r.id,
+          oltIp: r.olt_ip,
+          createdAt: r.created_at,
+        })),
+        reportingManager: reportingManager ? {
+          persNo: reportingManager.pers_no,
+          name: reportingManager.name,
+          designation: reportingManager.designation,
+          mobile: reportingManager.mobile,
+          circle: reportingManager.circle,
+        } : null,
+        subordinates: (subordinatesResult as any[]).map((s: any) => ({
+          persNo: s.pers_no,
+          name: s.name,
+          designation: s.designation,
+          mobile: s.mobile,
+          circle: s.circle,
+        })),
+      };
+    }),
+
+  bulkImportOlt: publicProcedure
+    .input(z.object({
+      data: z.array(z.object({
+        persNo: z.string().min(1),
+        oltIp: z.string().min(1),
+      })),
+      uploadedBy: z.string().uuid(),
+    }))
+    .mutation(async ({ input }) => {
+      const uploader = await db.select().from(employees).where(eq(employees.id, input.uploadedBy)).limit(1);
+      if (!uploader[0] || !['ADMIN', 'GM', 'CGM', 'DGM'].includes(uploader[0].role)) {
+        throw new Error('Only management users can import OLT data. Access denied.');
+      }
+      
+      let imported = 0;
+      let skipped = 0;
+      const errors: string[] = [];
+      
+      for (const record of input.data) {
+        try {
+          const existing = await db.execute(sql`
+            SELECT id FROM bbm_wise_olte 
+            WHERE pers_no = ${record.persNo} AND olt_ip = ${record.oltIp}
+            LIMIT 1
+          `);
+          
+          if ((existing as any)[0]) {
+            skipped++;
+            continue;
+          }
+          
+          await db.insert(bbmWiseOlte).values({
+            persNo: record.persNo,
+            oltIp: record.oltIp,
+          });
+          imported++;
+        } catch (error: any) {
+          errors.push(`Row ${record.persNo}/${record.oltIp}: ${error.message}`);
+        }
+      }
+      
+      return {
+        imported,
+        skipped,
+        errors: errors.slice(0, 10),
+        total: input.data.length,
+      };
+    }),
+
+  // KAM EB Gold Report Routes
+  getKamEbGoldSummary: publicProcedure
+    .input(z.object({
+      userId: z.string().uuid(),
+    }))
+    .query(async ({ input }) => {
+      const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
+      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+        throw new Error('Only management users can access KAM EB Gold reports. Access denied.');
+      }
+      
+      const result = await db.execute(sql`
+        SELECT 
+          COUNT(*) as total_personnel,
+          COUNT(CASE WHEN eb_exclusive = 'Yes' THEN 1 END) as eb_exclusive_count,
+          SUM(total_leads) as total_leads,
+          SUM(total_lead_value_crore) as total_lead_value_crore,
+          SUM(lead_in_stage_iv_crore) as lead_in_stage_iv_crore,
+          SUM(lead_to_bill_crore) as lead_to_bill_crore,
+          SUM(total_sales_visit) as total_sales_visits
+        FROM kam_eb_gold
+      `);
+      
+      const data = (result as any)[0] || {};
+      return {
+        totalPersonnel: parseInt(data.total_personnel || '0'),
+        ebExclusiveCount: parseInt(data.eb_exclusive_count || '0'),
+        totalLeads: parseInt(data.total_leads || '0'),
+        totalLeadValueCrore: parseFloat(data.total_lead_value_crore || '0'),
+        leadInStageIvCrore: parseFloat(data.lead_in_stage_iv_crore || '0'),
+        leadToBillCrore: parseFloat(data.lead_to_bill_crore || '0'),
+        totalSalesVisits: parseInt(data.total_sales_visits || '0'),
+      };
+    }),
+
+  getKamEbGoldReport: publicProcedure
+    .input(z.object({
+      userId: z.string().uuid(),
+      search: z.string().optional(),
+      ebExclusive: z.enum(['all', 'Yes', 'No']).optional().default('all'),
+      sortBy: z.enum(['total_lead_value_crore', 'total_leads', 'lead_to_bill_crore', 'total_sales_visit']).optional().default('total_lead_value_crore'),
+      sortOrder: z.enum(['asc', 'desc']).optional().default('desc'),
+      limit: z.number().optional().default(50),
+      offset: z.number().optional().default(0),
+    }))
+    .query(async ({ input }) => {
+      const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
+      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+        throw new Error('Only management users can access KAM EB Gold reports. Access denied.');
+      }
+      
+      let whereClause = sql`1=1`;
+      
+      if (input.search && input.search.trim()) {
+        const searchTerm = `%${input.search.trim()}%`;
+        whereClause = sql`(k.pers_no ILIKE ${searchTerm} OR e.name ILIKE ${searchTerm})`;
+      }
+      
+      if (input.ebExclusive && input.ebExclusive !== 'all') {
+        whereClause = sql`${whereClause} AND k.eb_exclusive = ${input.ebExclusive}`;
+      }
+      
+      const sortBy = input.sortBy || 'total_lead_value_crore';
+      const sortDir = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+      
+      const countResult = await db.execute(sql`
+        SELECT COUNT(*) as total
+        FROM kam_eb_gold k
+        LEFT JOIN employee_master e ON e.pers_no = k.pers_no
+        WHERE ${whereClause}
+      `);
+      const total = parseInt((countResult as any)[0]?.total || '0');
+      
+      let orderByClause;
+      switch (sortBy) {
+        case 'total_leads':
+          orderByClause = sortDir === 'ASC' ? sql`k.total_leads ASC NULLS LAST` : sql`k.total_leads DESC NULLS LAST`;
+          break;
+        case 'lead_to_bill_crore':
+          orderByClause = sortDir === 'ASC' ? sql`k.lead_to_bill_crore ASC NULLS LAST` : sql`k.lead_to_bill_crore DESC NULLS LAST`;
+          break;
+        case 'total_sales_visit':
+          orderByClause = sortDir === 'ASC' ? sql`k.total_sales_visit ASC NULLS LAST` : sql`k.total_sales_visit DESC NULLS LAST`;
+          break;
+        default:
+          orderByClause = sortDir === 'ASC' ? sql`k.total_lead_value_crore ASC NULLS LAST` : sql`k.total_lead_value_crore DESC NULLS LAST`;
+      }
+      
+      const result = await db.execute(sql`
+        SELECT 
+          k.id,
+          k.pers_no,
+          k.eb_exclusive,
+          k.total_leads,
+          k.total_lead_value_crore,
+          k.lead_in_stage_iv_crore,
+          k.lead_to_bill_crore,
+          k.total_sales_visit,
+          e.name as employee_name,
+          e.designation,
+          e.circle
+        FROM kam_eb_gold k
+        LEFT JOIN employee_master e ON e.pers_no = k.pers_no
+        WHERE ${whereClause}
+        ORDER BY ${orderByClause}
+        LIMIT ${input.limit} OFFSET ${input.offset}
+      `);
+      
+      return {
+        records: (result as any[]).map((r: any) => ({
+          id: r.id,
+          persNo: r.pers_no,
+          ebExclusive: r.eb_exclusive,
+          totalLeads: parseInt(r.total_leads || '0'),
+          totalLeadValueCrore: parseFloat(r.total_lead_value_crore || '0'),
+          leadInStageIvCrore: parseFloat(r.lead_in_stage_iv_crore || '0'),
+          leadToBillCrore: parseFloat(r.lead_to_bill_crore || '0'),
+          totalSalesVisit: parseInt(r.total_sales_visit || '0'),
+          employeeName: r.employee_name,
+          designation: r.designation,
+          circle: r.circle,
+        })),
+        total,
+        hasMore: input.offset + input.limit < total,
+      };
+    }),
+
+  getKamEbGoldByPersNo: publicProcedure
+    .input(z.object({
+      userId: z.string().uuid(),
+      persNo: z.string().min(1),
+    }))
+    .query(async ({ input }) => {
+      const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
+      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+        throw new Error('Only management users can access KAM EB Gold reports. Access denied.');
+      }
+      
+      const result = await db.execute(sql`
+        SELECT 
+          k.id,
+          k.pers_no,
+          k.eb_exclusive,
+          k.total_leads,
+          k.total_lead_value_crore,
+          k.lead_in_stage_iv_crore,
+          k.lead_to_bill_crore,
+          k.total_sales_visit,
+          k.created_at
+        FROM kam_eb_gold k
+        WHERE k.pers_no = ${input.persNo}
+        LIMIT 1
+      `);
+      
+      const data = (result as any)[0];
+      if (!data) {
+        return null;
+      }
+      
+      return {
+        id: data.id,
+        persNo: data.pers_no,
+        ebExclusive: data.eb_exclusive,
+        totalLeads: parseInt(data.total_leads || '0'),
+        totalLeadValueCrore: parseFloat(data.total_lead_value_crore || '0'),
+        leadInStageIvCrore: parseFloat(data.lead_in_stage_iv_crore || '0'),
+        leadToBillCrore: parseFloat(data.lead_to_bill_crore || '0'),
+        totalSalesVisit: parseInt(data.total_sales_visit || '0'),
+        createdAt: data.created_at,
       };
     }),
 });
