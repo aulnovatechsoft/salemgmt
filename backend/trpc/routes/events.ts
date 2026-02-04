@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { eq, and, desc, gte, lte, sql, or, inArray } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
-import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations } from "@/backend/db";
+import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations, financeCollectionEntries } from "@/backend/db";
 import { 
   notifyEventAssignment, 
   notifyTaskSubmitted, 
@@ -995,6 +995,10 @@ export const eventsRouter = createTRPCRouter({
         .where(eq(eventSalesEntries.eventId, input.id))
         .orderBy(desc(eventSalesEntries.createdAt));
       
+      const financeEntries = await db.select().from(financeCollectionEntries)
+        .where(eq(financeCollectionEntries.eventId, input.id))
+        .orderBy(desc(financeCollectionEntries.createdAt));
+      
       const subtasks = await db.select().from(eventSubtasks)
         .where(eq(eventSubtasks.eventId, input.id))
         .orderBy(desc(eventSubtasks.createdAt));
@@ -1194,12 +1198,14 @@ export const eventsRouter = createTRPCRouter({
           assignedToEmployee,
           teamWithAllocations,
           salesEntries,
+          financeEntries,
           subtasks: subtasksWithAssignees,
           slaStatus,
           summary: {
             totalSimsSold,
             totalFtthSold,
             totalEntries: salesEntries.length,
+            totalFinanceEntries: financeEntries.length,
             teamCount: assignments.length,
             subtaskStats,
           },
@@ -1518,6 +1524,139 @@ export const eventsRouter = createTRPCRouter({
       const entries = await db.select().from(eventSalesEntries)
         .where(eq(eventSalesEntries.eventId, input.eventId))
         .orderBy(desc(eventSalesEntries.createdAt));
+      return entries;
+    }),
+
+  submitFinanceCollection: publicProcedure
+    .input(z.object({
+      eventId: z.string().uuid(),
+      employeeId: z.string().uuid(),
+      financeType: z.string(),
+      amountCollected: z.number().min(1),
+      paymentMode: z.string(),
+      transactionReference: z.string().optional(),
+      customerName: z.string().optional(),
+      customerContact: z.string().optional(),
+      remarks: z.string().optional(),
+      photos: z.array(z.object({
+        uri: z.string(),
+        latitude: z.string().optional(),
+        longitude: z.string().optional(),
+        timestamp: z.string(),
+      })).optional(),
+      gpsLatitude: z.string().optional(),
+      gpsLongitude: z.string().optional(),
+    }))
+    .mutation(async ({ input }) => {
+      console.log("Submitting finance collection:", input);
+      
+      const VALID_FINANCE_TYPES = ['FIN_LC', 'FIN_LL_FTTH', 'FIN_TOWER', 'FIN_GSM_POSTPAID', 'FIN_RENT_BUILDING'];
+      const VALID_PAYMENT_MODES = ['CASH', 'CHEQUE', 'NEFT', 'UPI', 'CARD', 'DD', 'OTHER'];
+      
+      if (!VALID_FINANCE_TYPES.includes(input.financeType)) {
+        throw new Error(`Invalid finance type: ${input.financeType}`);
+      }
+      
+      if (!VALID_PAYMENT_MODES.includes(input.paymentMode)) {
+        throw new Error(`Invalid payment mode: ${input.paymentMode}`);
+      }
+      
+      if (input.paymentMode !== 'CASH' && !input.transactionReference) {
+        throw new Error(`Transaction reference is required for ${input.paymentMode} payments`);
+      }
+      
+      const event = await db.select().from(events).where(eq(events.id, input.eventId));
+      if (!event[0]) throw new Error("Event not found");
+      
+      if (event[0].status === 'completed' || event[0].status === 'cancelled') {
+        throw new Error(`Cannot submit collection for ${event[0].status} event`);
+      }
+      
+      if (!event[0].category?.includes(input.financeType)) {
+        throw new Error(`This event does not support ${input.financeType} collection type`);
+      }
+      
+      const assignment = await db.select().from(eventAssignments)
+        .where(and(
+          eq(eventAssignments.eventId, input.eventId),
+          eq(eventAssignments.employeeId, input.employeeId)
+        ));
+      
+      const isEventManager = event[0].assignedTo === input.employeeId;
+      
+      if (!assignment[0] && !isEventManager) {
+        throw new Error("You are not assigned to this event. Please contact the event manager.");
+      }
+      
+      const targetField = input.financeType === 'FIN_LC' ? 'targetFinLc' :
+                         input.financeType === 'FIN_LL_FTTH' ? 'targetFinLlFtth' :
+                         input.financeType === 'FIN_TOWER' ? 'targetFinTower' :
+                         input.financeType === 'FIN_GSM_POSTPAID' ? 'targetFinGsmPostpaid' :
+                         'targetFinRentBuilding';
+      const collectedField = input.financeType === 'FIN_LC' ? 'finLcCollected' :
+                            input.financeType === 'FIN_LL_FTTH' ? 'finLlFtthCollected' :
+                            input.financeType === 'FIN_TOWER' ? 'finTowerCollected' :
+                            input.financeType === 'FIN_GSM_POSTPAID' ? 'finGsmPostpaidCollected' :
+                            'finRentBuildingCollected';
+      
+      const currentTarget = (event[0] as any)[targetField] || 0;
+      const currentCollected = (event[0] as any)[collectedField] || 0;
+      const newTotal = currentCollected + input.amountCollected;
+      
+      if (newTotal > currentTarget && currentTarget > 0) {
+        console.log(`[FINANCE] Over-collection warning: ${input.financeType} target=${currentTarget}, collected=${currentCollected}, new entry=${input.amountCollected}, total=${newTotal}`);
+      }
+      
+      const result = await db.insert(financeCollectionEntries).values({
+        eventId: input.eventId,
+        employeeId: input.employeeId,
+        financeType: input.financeType,
+        amountCollected: input.amountCollected,
+        paymentMode: input.paymentMode,
+        transactionReference: input.transactionReference,
+        customerName: input.customerName,
+        customerContact: input.customerContact,
+        photos: input.photos || [],
+        gpsLatitude: input.gpsLatitude,
+        gpsLongitude: input.gpsLongitude,
+        remarks: input.remarks,
+      }).returning();
+      
+      const updateFields: Record<string, any> = { updatedAt: new Date() };
+      if (input.financeType === 'FIN_LC') {
+        updateFields.finLcCollected = (event[0].finLcCollected || 0) + input.amountCollected;
+      } else if (input.financeType === 'FIN_LL_FTTH') {
+        updateFields.finLlFtthCollected = (event[0].finLlFtthCollected || 0) + input.amountCollected;
+      } else if (input.financeType === 'FIN_TOWER') {
+        updateFields.finTowerCollected = (event[0].finTowerCollected || 0) + input.amountCollected;
+      } else if (input.financeType === 'FIN_GSM_POSTPAID') {
+        updateFields.finGsmPostpaidCollected = (event[0].finGsmPostpaidCollected || 0) + input.amountCollected;
+      } else if (input.financeType === 'FIN_RENT_BUILDING') {
+        updateFields.finRentBuildingCollected = (event[0].finRentBuildingCollected || 0) + input.amountCollected;
+      }
+      
+      await db.update(events)
+        .set(updateFields)
+        .where(eq(events.id, input.eventId));
+      
+      await db.insert(auditLogs).values({
+        action: 'SUBMIT_FINANCE_COLLECTION',
+        entityType: 'FINANCE',
+        entityId: result[0].id,
+        performedBy: input.employeeId,
+        details: { eventId: input.eventId, financeType: input.financeType, amountCollected: input.amountCollected, paymentMode: input.paymentMode },
+      });
+      
+      return result[0];
+    }),
+
+  getFinanceCollectionEntries: publicProcedure
+    .input(z.object({ eventId: z.string().uuid() }))
+    .query(async ({ input }) => {
+      console.log("Fetching finance collection entries:", input.eventId);
+      const entries = await db.select().from(financeCollectionEntries)
+        .where(eq(financeCollectionEntries.eventId, input.eventId))
+        .orderBy(desc(financeCollectionEntries.createdAt));
       return entries;
     }),
 

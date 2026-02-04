@@ -39,7 +39,7 @@ const STATUS_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
 };
 
 // Category configuration with icons and colors
-const CATEGORY_CONFIG: Record<string, { label: string; color: string; bg: string; icon: string; type: 'sales' | 'maintenance' }> = {
+const CATEGORY_CONFIG: Record<string, { label: string; color: string; bg: string; icon: string; type: 'sales' | 'maintenance' | 'finance' }> = {
   SIM: { label: 'SIM Sales', color: '#1565C0', bg: '#E3F2FD', icon: 'sim', type: 'sales' },
   FTTH: { label: 'FTTH Sales', color: '#2E7D32', bg: '#E8F5E9', icon: 'wifi', type: 'sales' },
   LEASE_CIRCUIT: { label: 'Lease Circuit', color: '#EF6C00', bg: '#FFF3E0', icon: 'cable', type: 'maintenance' },
@@ -48,6 +48,11 @@ const CATEGORY_CONFIG: Record<string, { label: string; color: string; bg: string
   ROUTE_FAIL: { label: 'Route Fail', color: '#00796B', bg: '#E0F2F1', icon: 'route', type: 'maintenance' },
   OFC_FAIL: { label: 'OFC Fail', color: '#546E7A', bg: '#ECEFF1', icon: 'fiber', type: 'maintenance' },
   EB: { label: 'EB Connections', color: '#FF5722', bg: '#FBE9E7', icon: 'zap', type: 'maintenance' },
+  FIN_LC: { label: 'LC Collection', color: '#00838F', bg: '#E0F7FA', icon: 'rupee', type: 'finance' },
+  FIN_LL_FTTH: { label: 'LL/FTTH Collection', color: '#00695C', bg: '#E0F2F1', icon: 'rupee', type: 'finance' },
+  FIN_TOWER: { label: 'Tower Collection', color: '#4527A0', bg: '#EDE7F6', icon: 'rupee', type: 'finance' },
+  FIN_GSM_POSTPAID: { label: 'GSM PostPaid Collection', color: '#AD1457', bg: '#FCE4EC', icon: 'rupee', type: 'finance' },
+  FIN_RENT_BUILDING: { label: 'Building Rent Collection', color: '#6D4C41', bg: '#EFEBE9', icon: 'rupee', type: 'finance' },
 };
 
 type UrgencyLevel = 'on_track' | 'moderate' | 'warning' | 'critical' | 'overdue' | 'completed';
@@ -1949,6 +1954,138 @@ export default function EventDetailScreen() {
               </View>
             );
           })()}
+          
+          {/* ===== FINANCE CATEGORY CARDS ===== */}
+          
+          {/* LC Collection Finance Card */}
+          {eventData.category?.includes('FIN_LC') && eventData.targetFinLc > 0 && (
+            <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.FIN_LC.color }]}>
+              <View style={styles.categoryCardHeader}>
+                <View style={styles.categoryTitleRow}>
+                  <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.FIN_LC.bg }]}>
+                    <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.FIN_LC.color }]}>₹</Text>
+                  </View>
+                  <View style={styles.categoryTitleInfo}>
+                    <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.FIN_LC.label}</Text>
+                    <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                  </View>
+                </View>
+                <View style={styles.categoryTargetBadge}>
+                  <Text style={styles.categoryTargetText}>₹{((eventData.finLcCollected || 0) / 100000).toFixed(2)}L / ₹{(eventData.targetFinLc / 100000).toFixed(2)}L</Text>
+                </View>
+              </View>
+              <View style={styles.categoryProgressBar}>
+                <View style={[styles.categoryProgressFill, { width: `${Math.min(((eventData.finLcCollected || 0) / Math.max(eventData.targetFinLc, 1)) * 100, 100)}%`, backgroundColor: CATEGORY_CONFIG.FIN_LC.color }]} />
+              </View>
+              <View style={styles.categoryAssignees}>
+                <Text style={styles.assigneesLabel}>Target: ₹{eventData.targetFinLc.toLocaleString('en-IN')} | Collected: ₹{(eventData.finLcCollected || 0).toLocaleString('en-IN')}</Text>
+              </View>
+            </View>
+          )}
+          
+          {/* LL/FTTH Collection Finance Card */}
+          {eventData.category?.includes('FIN_LL_FTTH') && eventData.targetFinLlFtth > 0 && (
+            <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.FIN_LL_FTTH.color }]}>
+              <View style={styles.categoryCardHeader}>
+                <View style={styles.categoryTitleRow}>
+                  <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.FIN_LL_FTTH.bg }]}>
+                    <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.FIN_LL_FTTH.color }]}>₹</Text>
+                  </View>
+                  <View style={styles.categoryTitleInfo}>
+                    <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.FIN_LL_FTTH.label}</Text>
+                    <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                  </View>
+                </View>
+                <View style={styles.categoryTargetBadge}>
+                  <Text style={styles.categoryTargetText}>₹{((eventData.finLlFtthCollected || 0) / 100000).toFixed(2)}L / ₹{(eventData.targetFinLlFtth / 100000).toFixed(2)}L</Text>
+                </View>
+              </View>
+              <View style={styles.categoryProgressBar}>
+                <View style={[styles.categoryProgressFill, { width: `${Math.min(((eventData.finLlFtthCollected || 0) / Math.max(eventData.targetFinLlFtth, 1)) * 100, 100)}%`, backgroundColor: CATEGORY_CONFIG.FIN_LL_FTTH.color }]} />
+              </View>
+              <View style={styles.categoryAssignees}>
+                <Text style={styles.assigneesLabel}>Target: ₹{eventData.targetFinLlFtth.toLocaleString('en-IN')} | Collected: ₹{(eventData.finLlFtthCollected || 0).toLocaleString('en-IN')}</Text>
+              </View>
+            </View>
+          )}
+          
+          {/* Tower Collection Finance Card */}
+          {eventData.category?.includes('FIN_TOWER') && eventData.targetFinTower > 0 && (
+            <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.FIN_TOWER.color }]}>
+              <View style={styles.categoryCardHeader}>
+                <View style={styles.categoryTitleRow}>
+                  <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.FIN_TOWER.bg }]}>
+                    <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.FIN_TOWER.color }]}>₹</Text>
+                  </View>
+                  <View style={styles.categoryTitleInfo}>
+                    <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.FIN_TOWER.label}</Text>
+                    <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                  </View>
+                </View>
+                <View style={styles.categoryTargetBadge}>
+                  <Text style={styles.categoryTargetText}>₹{((eventData.finTowerCollected || 0) / 100000).toFixed(2)}L / ₹{(eventData.targetFinTower / 100000).toFixed(2)}L</Text>
+                </View>
+              </View>
+              <View style={styles.categoryProgressBar}>
+                <View style={[styles.categoryProgressFill, { width: `${Math.min(((eventData.finTowerCollected || 0) / Math.max(eventData.targetFinTower, 1)) * 100, 100)}%`, backgroundColor: CATEGORY_CONFIG.FIN_TOWER.color }]} />
+              </View>
+              <View style={styles.categoryAssignees}>
+                <Text style={styles.assigneesLabel}>Target: ₹{eventData.targetFinTower.toLocaleString('en-IN')} | Collected: ₹{(eventData.finTowerCollected || 0).toLocaleString('en-IN')}</Text>
+              </View>
+            </View>
+          )}
+          
+          {/* GSM PostPaid Collection Finance Card */}
+          {eventData.category?.includes('FIN_GSM_POSTPAID') && eventData.targetFinGsmPostpaid > 0 && (
+            <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.FIN_GSM_POSTPAID.color }]}>
+              <View style={styles.categoryCardHeader}>
+                <View style={styles.categoryTitleRow}>
+                  <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.FIN_GSM_POSTPAID.bg }]}>
+                    <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.FIN_GSM_POSTPAID.color }]}>₹</Text>
+                  </View>
+                  <View style={styles.categoryTitleInfo}>
+                    <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.FIN_GSM_POSTPAID.label}</Text>
+                    <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                  </View>
+                </View>
+                <View style={styles.categoryTargetBadge}>
+                  <Text style={styles.categoryTargetText}>₹{((eventData.finGsmPostpaidCollected || 0) / 100000).toFixed(2)}L / ₹{(eventData.targetFinGsmPostpaid / 100000).toFixed(2)}L</Text>
+                </View>
+              </View>
+              <View style={styles.categoryProgressBar}>
+                <View style={[styles.categoryProgressFill, { width: `${Math.min(((eventData.finGsmPostpaidCollected || 0) / Math.max(eventData.targetFinGsmPostpaid, 1)) * 100, 100)}%`, backgroundColor: CATEGORY_CONFIG.FIN_GSM_POSTPAID.color }]} />
+              </View>
+              <View style={styles.categoryAssignees}>
+                <Text style={styles.assigneesLabel}>Target: ₹{eventData.targetFinGsmPostpaid.toLocaleString('en-IN')} | Collected: ₹{(eventData.finGsmPostpaidCollected || 0).toLocaleString('en-IN')}</Text>
+              </View>
+            </View>
+          )}
+          
+          {/* Building Rent Collection Finance Card */}
+          {eventData.category?.includes('FIN_RENT_BUILDING') && eventData.targetFinRentBuilding > 0 && (
+            <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.FIN_RENT_BUILDING.color }]}>
+              <View style={styles.categoryCardHeader}>
+                <View style={styles.categoryTitleRow}>
+                  <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.FIN_RENT_BUILDING.bg }]}>
+                    <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.FIN_RENT_BUILDING.color }]}>₹</Text>
+                  </View>
+                  <View style={styles.categoryTitleInfo}>
+                    <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.FIN_RENT_BUILDING.label}</Text>
+                    <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                  </View>
+                </View>
+                <View style={styles.categoryTargetBadge}>
+                  <Text style={styles.categoryTargetText}>₹{((eventData.finRentBuildingCollected || 0) / 100000).toFixed(2)}L / ₹{(eventData.targetFinRentBuilding / 100000).toFixed(2)}L</Text>
+                </View>
+              </View>
+              <View style={styles.categoryProgressBar}>
+                <View style={[styles.categoryProgressFill, { width: `${Math.min(((eventData.finRentBuildingCollected || 0) / Math.max(eventData.targetFinRentBuilding, 1)) * 100, 100)}%`, backgroundColor: CATEGORY_CONFIG.FIN_RENT_BUILDING.color }]} />
+              </View>
+              <View style={styles.categoryAssignees}>
+                <Text style={styles.assigneesLabel}>Target: ₹{eventData.targetFinRentBuilding.toLocaleString('en-IN')} | Collected: ₹{(eventData.finRentBuildingCollected || 0).toLocaleString('en-IN')}</Text>
+              </View>
+            </View>
+          )}
         </View>
         {/* ===== END CATEGORY-BASED TASK CARDS ===== */}
 
@@ -2221,6 +2358,19 @@ export default function EventDetailScreen() {
 
         {/* Old Sales Team section removed - now integrated into Category Cards above */}
 
+        {/* Finance Collection Entry Button */}
+        {(isTeamMember || canManageTeam) && dbStatus === 'active' && 
+          (eventData.category?.includes('FIN_LC') || eventData.category?.includes('FIN_LL_FTTH') || 
+           eventData.category?.includes('FIN_TOWER') || eventData.category?.includes('FIN_GSM_POSTPAID') || 
+           eventData.category?.includes('FIN_RENT_BUILDING')) && (
+          <TouchableOpacity 
+            style={[styles.submitSalesButton, { backgroundColor: '#00838F' }]}
+            onPress={() => router.push(`/submit-finance?eventId=${id}`)}
+          >
+            <Text style={styles.submitSalesText}>Submit Collection Entry</Text>
+          </TouchableOpacity>
+        )}
+
         {(isTeamMember || canManageTeam) && dbStatus === 'active' && (eventData.category?.includes('SIM') || (eventData.category?.includes('FTTH') && !eventData.category?.includes('FTTH_DOWN'))) && (() => {
           // Find current user's allocation
           const myAllocation = eventData.teamWithAllocations?.find((t: any) => t.employeeId === employee?.id);
@@ -2303,6 +2453,70 @@ export default function EventDetailScreen() {
                       </View>
                     )}
                   </View>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        {/* Finance Collection Entries Section */}
+        {eventData.financeEntries?.length > 0 && (
+          eventData.category?.includes('FIN_LC') || eventData.category?.includes('FIN_LL_FTTH') ||
+          eventData.category?.includes('FIN_TOWER') || eventData.category?.includes('FIN_GSM_POSTPAID') ||
+          eventData.category?.includes('FIN_RENT_BUILDING')
+        ) && (
+          <View style={styles.salesSection}>
+            <Text style={styles.sectionTitle}>Recent Collection Entries</Text>
+            {eventData.financeEntries.slice(0, 5).map((entry: any) => {
+              const entryMember = eventData.teamWithAllocations?.find((t: any) => t.employeeId === entry.employeeId);
+              const finTypeLabel = CATEGORY_CONFIG[entry.financeType as keyof typeof CATEGORY_CONFIG]?.label || entry.financeType;
+              const finTypeColor = CATEGORY_CONFIG[entry.financeType as keyof typeof CATEGORY_CONFIG]?.color || '#00838F';
+              return (
+                <View key={entry.id} style={[styles.salesEntry, { borderLeftWidth: 3, borderLeftColor: finTypeColor }]}>
+                  <View style={styles.salesEntryHeader}>
+                    <Text style={styles.salesEntryName}>{entryMember?.employee?.name || 'Unknown'}</Text>
+                    <Text style={styles.salesEntryDate}>
+                      {(() => {
+                        const date = new Date(entry.createdAt);
+                        const day = date.getUTCDate();
+                        const month = new Date(date.getUTCFullYear(), date.getUTCMonth(), 1).toLocaleString('en-IN', { month: 'short' });
+                        let hours = date.getUTCHours();
+                        const minutes = date.getUTCMinutes().toString().padStart(2, '0');
+                        const ampm = hours >= 12 ? 'pm' : 'am';
+                        hours = hours % 12;
+                        hours = hours ? hours : 12;
+                        return `${day} ${month}, ${hours.toString().padStart(2, '0')}:${minutes} ${ampm}`;
+                      })()}
+                    </Text>
+                  </View>
+                  <View style={styles.salesEntryStats}>
+                    <View style={[styles.salesStat, { flex: 1 }]}>
+                      <Text style={[styles.salesStatLabel, { color: finTypeColor }]}>{finTypeLabel}</Text>
+                      <Text style={[styles.salesStatValue, { color: '#2E7D32', fontWeight: '700' }]}>
+                        Rs {entry.amountCollected?.toLocaleString('en-IN')}
+                      </Text>
+                    </View>
+                    <View style={[styles.salesStat, { backgroundColor: '#F3F4F6', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 }]}>
+                      <Text style={[styles.salesStatLabel, { marginBottom: 0 }]}>{entry.paymentMode}</Text>
+                    </View>
+                    {entry.gpsLatitude && (
+                      <View style={styles.gpsIndicator}>
+                        <MapPin size={12} color={Colors.light.success} />
+                        <Text style={styles.gpsText}>GPS</Text>
+                      </View>
+                    )}
+                    {entry.photos && entry.photos.length > 0 && (
+                      <View style={styles.photoIndicator}>
+                        <Camera size={12} color={Colors.light.info} />
+                        <Text style={styles.photoText}>{entry.photos.length}</Text>
+                      </View>
+                    )}
+                  </View>
+                  {entry.customerName && (
+                    <Text style={{ fontSize: 12, color: Colors.light.textSecondary, marginTop: 4 }}>
+                      Customer: {entry.customerName}
+                    </Text>
+                  )}
                 </View>
               );
             })}
