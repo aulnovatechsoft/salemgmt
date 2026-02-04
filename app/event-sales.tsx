@@ -162,7 +162,7 @@ export default function EventSalesScreen() {
 
   const handleSubmit = () => {
     if (!simsSold && !ftthSold) {
-      Alert.alert('Error', 'Please enter at least SIMs sold or FTTH sold');
+      Alert.alert('Error', 'Please enter at least one sales entry (SIM or FTTH)');
       return;
     }
 

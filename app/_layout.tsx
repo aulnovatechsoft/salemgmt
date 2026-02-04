@@ -45,6 +45,8 @@ function RootLayoutNav() {
       <Stack.Screen name="notifications" options={{ headerShown: true, title: "Notifications" }} />
       <Stack.Screen name="submit-sales" options={{ headerShown: true, title: "Submit Sales" }} />
       <Stack.Screen name="submit-finance" options={{ headerShown: true, title: "Submit Collection" }} />
+      <Stack.Screen name="olt-report" options={{ headerShown: true, title: "BBM Wise OLT Report" }} />
+      <Stack.Screen name="employee-olt-profile" options={{ headerShown: true, title: "Employee Profile" }} />
     </Stack>
   );
 }
