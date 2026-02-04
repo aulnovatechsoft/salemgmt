@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { ArrowLeft, Phone, User, MapPin, Calendar, TrendingUp, CheckCircle, Building, AlertTriangle, RefreshCw } from 'lucide-react-native';
+import { ArrowLeft, Phone, User, MapPin, Calendar, TrendingUp, CheckCircle, Building, AlertTriangle, RefreshCw, Target } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
@@ -24,7 +24,8 @@ export default function SimSalesDetailScreen() {
   const totals = useMemo(() => {
     return {
       sold: salesData.reduce((sum, r) => sum + (r.simsSold || 0), 0),
-      activated: salesData.reduce((sum, r) => sum + (r.simsActivated || 0), 0)
+      activated: salesData.reduce((sum, r) => sum + (r.simsActivated || 0), 0),
+      target: salesData.reduce((sum, r) => sum + (r.simTarget || 0), 0)
     };
   }, [salesData]);
 
@@ -85,12 +86,24 @@ export default function SimSalesDetailScreen() {
             <View style={styles.summaryDivider} />
             <View style={styles.summaryItem}>
               <View style={[styles.summaryIcon, { backgroundColor: '#E8F5E9' }]}>
-                <CheckCircle size={24} color="#2E7D32" />
+                <Target size={24} color="#2E7D32" />
               </View>
-              <Text style={styles.summaryValue}>{totals.activated}</Text>
-              <Text style={styles.summaryLabel}>Activated</Text>
+              <Text style={styles.summaryValue}>{totals.target}</Text>
+              <Text style={styles.summaryLabel}>Target</Text>
             </View>
           </View>
+          {totals.target > 0 && (
+            <View style={styles.targetRow}>
+              <View style={styles.overallProgressContainer}>
+                <View style={styles.overallProgressBar}>
+                  <View style={[styles.overallProgressFill, { width: `${Math.min(Math.round((totals.sold / totals.target) * 100), 100)}%` }]} />
+                </View>
+                <Text style={styles.overallProgressText}>
+                  {Math.round((totals.sold / totals.target) * 100)}% achieved
+                </Text>
+              </View>
+            </View>
+          )}
         </View>
 
         {salesQuery.isLoading && (
@@ -129,18 +142,21 @@ export default function SimSalesDetailScreen() {
             <Text style={styles.sectionTitle}>Sales Entries ({salesData.length})</Text>
             {salesData.map((sale) => {
               const statusColor = getStatusColor(sale.status);
+              const progress = (sale.simTarget || 0) > 0 ? Math.round(((sale.simsSold || 0) / (sale.simTarget || 1)) * 100) : 0;
               return (
                 <View key={sale.id} style={styles.saleCard}>
                   <View style={styles.saleHeader}>
                     <View style={styles.saleHeaderLeft}>
                       <View style={styles.quantityBadge}>
                         <Text style={styles.quantityText}>{sale.simsSold}</Text>
-                        <Text style={styles.quantityLabel}>SIMs</Text>
+                        <Text style={styles.quantityLabel}>SIMs Sold</Text>
                       </View>
-                      <View style={styles.activatedBadge}>
-                        <CheckCircle size={14} color="#2E7D32" />
-                        <Text style={styles.activatedText}>{sale.simsActivated} activated</Text>
-                      </View>
+                      {(sale.simTarget || 0) > 0 && (
+                        <View style={styles.targetBadge}>
+                          <Target size={14} color="#1565C0" />
+                          <Text style={styles.targetBadgeText}>{sale.simTarget} target</Text>
+                        </View>
+                      )}
                     </View>
                     <View style={[styles.statusBadge, { backgroundColor: statusColor.bg }]}>
                       <Text style={[styles.statusText, { color: statusColor.text }]}>
@@ -148,6 +164,15 @@ export default function SimSalesDetailScreen() {
                       </Text>
                     </View>
                   </View>
+
+                  {(sale.simTarget || 0) > 0 && (
+                    <View style={styles.progressContainer}>
+                      <View style={styles.progressBar}>
+                        <View style={[styles.progressFill, { width: `${Math.min(progress, 100)}%` }]} />
+                      </View>
+                      <Text style={styles.progressText}>{progress}%</Text>
+                    </View>
+                  )}
 
                   <View style={styles.saleDetails}>
                     <View style={styles.detailRow}>
@@ -174,12 +199,16 @@ export default function SimSalesDetailScreen() {
                     
                     <View style={styles.detailRow}>
                       <Calendar size={16} color={Colors.light.textSecondary} />
-                      <Text style={styles.detailText}>{formatDate(sale.createdAt)}</Text>
+                      <Text style={styles.detailText}>
+                        {sale.eventStartDate && sale.eventEndDate 
+                          ? `${formatDate(sale.eventStartDate)} - ${formatDate(sale.eventEndDate)}`
+                          : formatDate(sale.createdAt)}
+                      </Text>
                     </View>
 
-                    {sale.customerType && (
-                      <View style={styles.customerTypeBadge}>
-                        <Text style={styles.customerTypeText}>{sale.customerType}</Text>
+                    {sale.salesStaffCircle && (
+                      <View style={styles.circleBadge}>
+                        <Text style={styles.circleText}>{sale.salesStaffCircle.replace(/_/g, ' ')}</Text>
                       </View>
                     )}
                   </View>
@@ -273,6 +302,32 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.light.textSecondary,
     marginTop: 4,
+  },
+  targetRow: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+  },
+  overallProgressContainer: {
+    width: '100%',
+  },
+  overallProgressBar: {
+    height: 8,
+    backgroundColor: '#E0E0E0',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  overallProgressFill: {
+    height: '100%',
+    backgroundColor: '#1976D2',
+    borderRadius: 4,
+  },
+  overallProgressText: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+    textAlign: 'center',
   },
   loadingContainer: {
     padding: 40,
@@ -399,6 +454,44 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textTransform: 'capitalize',
   },
+  targetBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#E3F2FD',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  targetBadgeText: {
+    fontSize: 12,
+    color: '#1565C0',
+    fontWeight: '500',
+  },
+  progressContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  progressBar: {
+    flex: 1,
+    height: 8,
+    backgroundColor: '#E0E0E0',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#1976D2',
+    borderRadius: 4,
+  },
+  progressText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1976D2',
+    width: 40,
+  },
   saleDetails: {
     gap: 8,
   },
@@ -423,6 +516,19 @@ const styles = StyleSheet.create({
   customerTypeText: {
     fontSize: 12,
     color: '#7B1FA2',
+    fontWeight: '500',
+  },
+  circleBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#FFF3E0',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginTop: 4,
+  },
+  circleText: {
+    fontSize: 12,
+    color: '#E65100',
     fontWeight: '500',
   },
   mobileNumbersSection: {

@@ -89,8 +89,10 @@ const AVATAR_COLORS = [
 type SlaStatusType = 'no_sla' | 'not_started' | 'in_progress' | 'warning' | 'breached' | 'completed';
 
 interface SlaStatusData {
-  status: SlaStatusType;
+  status: SlaStatusType | string;
   message: string;
+  remainingMs?: number;
+  elapsedMs?: number;
 }
 
 const SLA_STATUS_CONFIG: Record<SlaStatusType, { bg: string; color: string; icon: string }> = {
@@ -105,7 +107,7 @@ const SLA_STATUS_CONFIG: Record<SlaStatusType, { bg: string; color: string; icon
 function renderSlaBadge(slaData: SlaStatusData | undefined, styles: any): React.ReactNode {
   if (!slaData || slaData.status === 'no_sla') return null;
   
-  const config = SLA_STATUS_CONFIG[slaData.status];
+  const config = SLA_STATUS_CONFIG[slaData.status as SlaStatusType] || SLA_STATUS_CONFIG.in_progress;
   return (
     <View style={[styles.slaBadge, { backgroundColor: config.bg }]}>
       <Text style={[styles.slaBadgeIcon, { color: config.color }]}>{config.icon}</Text>
@@ -2365,7 +2367,7 @@ export default function EventDetailScreen() {
            eventData.category?.includes('FIN_RENT_BUILDING')) && (
           <TouchableOpacity 
             style={[styles.submitSalesButton, { backgroundColor: '#00838F' }]}
-            onPress={() => router.push(`/submit-finance?eventId=${id}`)}
+            onPress={() => router.push(`/submit-finance?eventId=${id}` as any)}
           >
             <Text style={styles.submitSalesText}>Submit Collection Entry</Text>
           </TouchableOpacity>
@@ -3384,4 +3386,10 @@ const styles = StyleSheet.create({
   memberActionBtnText: { fontSize: 14, fontWeight: '700' as const },
   memberActionBtnPrimary: { borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4, minWidth: 36, alignItems: 'center' as const, justifyContent: 'center' as const },
   memberActionBtnPrimaryText: { fontSize: 14, fontWeight: '700' as const, color: '#fff' },
+  sectionCard: { backgroundColor: Colors.light.card, borderRadius: 12, padding: 16, marginHorizontal: 16, marginBottom: 12 },
+  statusModalHeader: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const, marginBottom: 16 },
+  primaryButton: { backgroundColor: Colors.light.primary, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8, alignItems: 'center' as const, justifyContent: 'center' as const },
+  primaryButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' as const },
+  secondaryButton: { backgroundColor: Colors.light.backgroundSecondary, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8, alignItems: 'center' as const, justifyContent: 'center' as const, borderWidth: 1, borderColor: '#E0E0E0' },
+  secondaryButtonText: { color: Colors.light.text, fontSize: 14, fontWeight: '600' as const },
 });
