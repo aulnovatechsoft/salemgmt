@@ -4,13 +4,13 @@ import { ChevronLeft, TrendingUp, Users, BarChart3, Award, Smartphone, Wifi, Ale
 import { useState, useCallback, useMemo } from 'react';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
-import { useAuthStore } from '@/stores/auth';
+import { useAuth } from '@/contexts/auth';
 
 type TabType = 'overview' | 'team' | 'trends';
 
 export default function SalesScreen() {
   const router = useRouter();
-  const { employee } = useAuthStore();
+  const { employee } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [refreshing, setRefreshing] = useState(false);
   const [dateRange, setDateRange] = useState<'7' | '30' | '90'>('30');
