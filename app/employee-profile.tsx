@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { User, Mail, Phone, Briefcase, MapPin, ArrowLeft, AlertTriangle, IndianRupee, Building2, Clock, FileText } from 'lucide-react-native';
+import { User, Mail, Phone, Briefcase, MapPin, ArrowLeft, AlertTriangle, IndianRupee, Building2, Clock, FileText, ChevronDown, ChevronUp, Globe, RefreshCw } from 'lucide-react-native';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
+import { useAuth } from '@/contexts/auth';
 import { safeNumber, formatINRAmount, formatINRCrore, hasOutstandingAmount, getTotalOutstanding } from '@/lib/currency';
 import React from "react";
 
@@ -36,7 +37,11 @@ const InfoItem = ({ icon, label, value }: { icon: React.ReactNode; label: string
 
 export default function EmployeeProfileScreen() {
   const router = useRouter();
+  const { employee: currentUser } = useAuth();
   const { id, persNo } = useLocalSearchParams<{ id?: string; persNo?: string }>();
+
+  // Check if current user has management role
+  const isManagementRole = ['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(currentUser?.role || '');
 
   // First try to fetch by ID (for registered employees)
   const { data: employee, isLoading: loadingById, error: errorById } = trpc.employees.getById.useQuery(
@@ -77,6 +82,22 @@ export default function EmployeeProfileScreen() {
     { persNo: employeePersNo },
     { enabled: !!employeePersNo }
   );
+
+  // Fetch circle-wise outstanding details for this employee (only for management users)
+  const { 
+    data: outstandingDetails, 
+    isLoading: outstandingLoading,
+    error: outstandingError,
+    refetch: refetchOutstanding 
+  } = trpc.admin.getEmployeeOutstandingDetails.useQuery(
+    { persNo: employeePersNo, requesterId: currentUser?.id || '' },
+    { 
+      enabled: !!employeePersNo && isManagementRole && !!currentUser?.id,
+      retry: 1,
+    }
+  );
+
+  const [showCircleBreakdown, setShowCircleBreakdown] = useState(false);
 
   const totalFtthPending = ftthPendingOrders?.reduce((sum, order) => sum + order.totalFtthOrdersPending, 0) || 0;
 
@@ -244,7 +265,7 @@ export default function EmployeeProfileScreen() {
           </View>
         </View>
 
-        {hasOutstandingAmount(emp.outstandingFtth, emp.outstandingLc) && (
+        {(hasOutstandingAmount(emp.outstandingFtth, emp.outstandingLc) || (outstandingDetails?.circleBreakdown && outstandingDetails.circleBreakdown.length > 0)) && (
           <View style={styles.section}>
             <View style={styles.outstandingHeader}>
               <AlertTriangle size={20} color="#D32F2F" />
@@ -252,51 +273,186 @@ export default function EmployeeProfileScreen() {
             </View>
             
             <View style={styles.outstandingCard}>
-              {safeNumber(emp.outstandingFtth) > 0 && (
-                <View style={styles.outstandingItem}>
-                  <View style={styles.outstandingLabelRow}>
-                    <IndianRupee size={18} color="#D32F2F" />
-                    <Text style={styles.outstandingLabel}>FTTH Outstanding</Text>
+              {outstandingLoading ? (
+                <View style={styles.outstandingLoading}>
+                  <ActivityIndicator size="small" color="#D32F2F" />
+                  <Text style={styles.outstandingLoadingText}>Loading outstanding details...</Text>
+                </View>
+              ) : outstandingError ? (
+                <View style={styles.outstandingError}>
+                  <AlertTriangle size={20} color="#D32F2F" />
+                  <Text style={styles.outstandingErrorText}>Unable to load outstanding details</Text>
+                  <TouchableOpacity 
+                    style={styles.outstandingRetryButton}
+                    onPress={() => refetchOutstanding()}
+                  >
+                    <RefreshCw size={14} color="#FFFFFF" />
+                    <Text style={styles.outstandingRetryText}>Retry</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : outstandingDetails?.circleBreakdown && outstandingDetails.circleBreakdown.length > 0 ? (
+                <>
+                  {safeNumber(outstandingDetails.summary.totalFtth) > 0 && (
+                    <View style={styles.outstandingItem}>
+                      <View style={styles.outstandingLabelRow}>
+                        <IndianRupee size={18} color="#D32F2F" />
+                        <Text style={styles.outstandingLabel}>FTTH Outstanding</Text>
+                      </View>
+                      <Text style={styles.outstandingAmount}>
+                        {formatINRCrore(outstandingDetails.summary.totalFtth)}
+                      </Text>
+                      <Text style={styles.outstandingAmountFull}>
+                        {formatINRAmount(outstandingDetails.summary.totalFtth)}
+                      </Text>
+                    </View>
+                  )}
+                  
+                  {safeNumber(outstandingDetails.summary.totalFtth) > 0 && safeNumber(outstandingDetails.summary.totalLc) > 0 && (
+                    <View style={styles.outstandingDivider} />
+                  )}
+                  
+                  {safeNumber(outstandingDetails.summary.totalLc) > 0 && (
+                    <View style={styles.outstandingItem}>
+                      <View style={styles.outstandingLabelRow}>
+                        <IndianRupee size={18} color="#D32F2F" />
+                        <Text style={styles.outstandingLabel}>LC Outstanding</Text>
+                      </View>
+                      <Text style={styles.outstandingAmount}>
+                        {formatINRCrore(outstandingDetails.summary.totalLc)}
+                      </Text>
+                      <Text style={styles.outstandingAmountFull}>
+                        {formatINRAmount(outstandingDetails.summary.totalLc)}
+                      </Text>
+                    </View>
+                  )}
+                  
+                  <View style={styles.outstandingTotalRow}>
+                    <View>
+                      <Text style={styles.outstandingTotalLabel}>Total Outstanding</Text>
+                      <Text style={styles.outstandingTotalAmountFull}>
+                        {formatINRAmount(outstandingDetails.summary.totalOutstanding)}
+                      </Text>
+                    </View>
+                    <Text style={styles.outstandingTotalAmount}>
+                      {formatINRCrore(outstandingDetails.summary.totalOutstanding)}
+                    </Text>
                   </View>
-                  <Text style={styles.outstandingAmount}>
-                    {formatINRCrore(emp.outstandingFtth)}
-                  </Text>
-                  <Text style={styles.outstandingAmountFull}>
-                    {formatINRAmount(emp.outstandingFtth)}
-                  </Text>
-                </View>
-              )}
-              
-              {safeNumber(emp.outstandingFtth) > 0 && safeNumber(emp.outstandingLc) > 0 && (
-                <View style={styles.outstandingDivider} />
-              )}
-              
-              {safeNumber(emp.outstandingLc) > 0 && (
-                <View style={styles.outstandingItem}>
-                  <View style={styles.outstandingLabelRow}>
-                    <IndianRupee size={18} color="#D32F2F" />
-                    <Text style={styles.outstandingLabel}>LC Outstanding</Text>
+
+                  {outstandingDetails.circleBreakdown.length > 0 && (
+                    <>
+                      <TouchableOpacity 
+                        style={styles.circleBreakdownToggle}
+                        onPress={() => setShowCircleBreakdown(!showCircleBreakdown)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={styles.circleBreakdownToggleLeft}>
+                          <Globe size={16} color="#D32F2F" />
+                          <Text style={styles.circleBreakdownToggleText}>
+                            Circle-wise Breakdown ({outstandingDetails.circleBreakdown.length} {outstandingDetails.circleBreakdown.length === 1 ? 'circle' : 'circles'})
+                          </Text>
+                        </View>
+                        {showCircleBreakdown ? (
+                          <ChevronUp size={20} color="#D32F2F" />
+                        ) : (
+                          <ChevronDown size={20} color="#D32F2F" />
+                        )}
+                      </TouchableOpacity>
+
+                      {showCircleBreakdown && (
+                        <View style={styles.circleBreakdownList}>
+                          {outstandingDetails.circleBreakdown.map((item, index) => (
+                            <View 
+                              key={item.id} 
+                              style={[
+                                styles.circleBreakdownItem,
+                                index === outstandingDetails.circleBreakdown.length - 1 && styles.circleBreakdownItemLast
+                              ]}
+                            >
+                              <View style={styles.circleBreakdownHeader}>
+                                <View style={styles.circleBreakdownBadge}>
+                                  <Text style={styles.circleBreakdownBadgeText}>{item.circle}</Text>
+                                </View>
+                              </View>
+                              <View style={styles.circleBreakdownAmounts}>
+                                {safeNumber(item.ftth_amount) > 0 && (
+                                  <View style={styles.circleBreakdownAmountRow}>
+                                    <Text style={styles.circleBreakdownAmountLabel}>FTTH:</Text>
+                                    <Text style={styles.circleBreakdownAmountValue}>
+                                      {formatINRCrore(item.ftth_amount)}
+                                    </Text>
+                                  </View>
+                                )}
+                                {safeNumber(item.lc_amount) > 0 && (
+                                  <View style={styles.circleBreakdownAmountRow}>
+                                    <Text style={styles.circleBreakdownAmountLabel}>LC:</Text>
+                                    <Text style={styles.circleBreakdownAmountValue}>
+                                      {formatINRCrore(item.lc_amount)}
+                                    </Text>
+                                  </View>
+                                )}
+                                <View style={styles.circleBreakdownAmountRow}>
+                                  <Text style={styles.circleBreakdownAmountLabelTotal}>Total:</Text>
+                                  <Text style={styles.circleBreakdownAmountValueTotal}>
+                                    {formatINRCrore(item.total_amount)}
+                                  </Text>
+                                </View>
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  {safeNumber(emp.outstandingFtth) > 0 && (
+                    <View style={styles.outstandingItem}>
+                      <View style={styles.outstandingLabelRow}>
+                        <IndianRupee size={18} color="#D32F2F" />
+                        <Text style={styles.outstandingLabel}>FTTH Outstanding</Text>
+                      </View>
+                      <Text style={styles.outstandingAmount}>
+                        {formatINRCrore(emp.outstandingFtth)}
+                      </Text>
+                      <Text style={styles.outstandingAmountFull}>
+                        {formatINRAmount(emp.outstandingFtth)}
+                      </Text>
+                    </View>
+                  )}
+                  
+                  {safeNumber(emp.outstandingFtth) > 0 && safeNumber(emp.outstandingLc) > 0 && (
+                    <View style={styles.outstandingDivider} />
+                  )}
+                  
+                  {safeNumber(emp.outstandingLc) > 0 && (
+                    <View style={styles.outstandingItem}>
+                      <View style={styles.outstandingLabelRow}>
+                        <IndianRupee size={18} color="#D32F2F" />
+                        <Text style={styles.outstandingLabel}>LC Outstanding</Text>
+                      </View>
+                      <Text style={styles.outstandingAmount}>
+                        {formatINRCrore(emp.outstandingLc)}
+                      </Text>
+                      <Text style={styles.outstandingAmountFull}>
+                        {formatINRAmount(emp.outstandingLc)}
+                      </Text>
+                    </View>
+                  )}
+                  
+                  <View style={styles.outstandingTotalRow}>
+                    <View>
+                      <Text style={styles.outstandingTotalLabel}>Total Outstanding</Text>
+                      <Text style={styles.outstandingTotalAmountFull}>
+                        {formatINRAmount(getTotalOutstanding(emp.outstandingFtth, emp.outstandingLc))}
+                      </Text>
+                    </View>
+                    <Text style={styles.outstandingTotalAmount}>
+                      {formatINRCrore(getTotalOutstanding(emp.outstandingFtth, emp.outstandingLc))}
+                    </Text>
                   </View>
-                  <Text style={styles.outstandingAmount}>
-                    {formatINRCrore(emp.outstandingLc)}
-                  </Text>
-                  <Text style={styles.outstandingAmountFull}>
-                    {formatINRAmount(emp.outstandingLc)}
-                  </Text>
-                </View>
+                </>
               )}
-              
-              <View style={styles.outstandingTotalRow}>
-                <View>
-                  <Text style={styles.outstandingTotalLabel}>Total Outstanding</Text>
-                  <Text style={styles.outstandingTotalAmountFull}>
-                    {formatINRAmount(getTotalOutstanding(emp.outstandingFtth, emp.outstandingLc))}
-                  </Text>
-                </View>
-                <Text style={styles.outstandingTotalAmount}>
-                  {formatINRCrore(getTotalOutstanding(emp.outstandingFtth, emp.outstandingLc))}
-                </Text>
-              </View>
             </View>
           </View>
         )}
@@ -740,5 +896,118 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#1565C0',
+  },
+  outstandingLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 20,
+  },
+  outstandingLoadingText: {
+    fontSize: 14,
+    color: '#D32F2F',
+  },
+  outstandingError: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 20,
+    gap: 12,
+  },
+  outstandingErrorText: {
+    fontSize: 14,
+    color: '#D32F2F',
+    textAlign: 'center',
+  },
+  outstandingRetryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#D32F2F',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  outstandingRetryText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  circleBreakdownToggle: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#FFEBEE',
+    borderRadius: 10,
+    padding: 14,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#FFCDD2',
+  },
+  circleBreakdownToggleLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  circleBreakdownToggleText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#D32F2F',
+  },
+  circleBreakdownList: {
+    marginTop: 12,
+  },
+  circleBreakdownItem: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#FFCDD2',
+  },
+  circleBreakdownItemLast: {
+    marginBottom: 0,
+  },
+  circleBreakdownHeader: {
+    marginBottom: 10,
+  },
+  circleBreakdownBadge: {
+    backgroundColor: '#D32F2F',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+  },
+  circleBreakdownBadgeText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  circleBreakdownAmounts: {
+    gap: 6,
+  },
+  circleBreakdownAmountRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  circleBreakdownAmountLabel: {
+    fontSize: 13,
+    color: '#666',
+  },
+  circleBreakdownAmountValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#D32F2F',
+  },
+  circleBreakdownAmountLabelTotal: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#B71C1C',
+  },
+  circleBreakdownAmountValueTotal: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#B71C1C',
   },
 });
