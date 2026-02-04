@@ -1658,6 +1658,80 @@ export const adminRouter = createTRPCRouter({
       };
     }),
 
+  getEmployeeOutstandingDetails: publicProcedure
+    .input(z.object({
+      persNo: z.string(),
+      requesterId: z.string().uuid(),
+    }))
+    .query(async ({ input }) => {
+      console.log("Fetching outstanding details for employee:", input.persNo);
+      
+      // Authorization: Always require and validate requesterId with management role
+      const requester = await db.select().from(employees).where(eq(employees.id, input.requesterId)).limit(1);
+      if (!requester[0]) {
+        throw new Error('Invalid requester ID. Access denied.');
+      }
+      if (!['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(requester[0].role)) {
+        throw new Error('Only management users can access outstanding details. Access denied.');
+      }
+      
+      // Amounts are stored in Lakhs - convert to rupees by multiplying by 100000
+      const LAKHS_TO_RUPEES = 100000;
+      
+      // Get all circle-wise outstanding entries for this employee
+      const result = await db.execute(sql`
+        SELECT 
+          o.id,
+          o.pers_no,
+          o.circle,
+          COALESCE(CAST(o.outstanding_ftth_amount AS NUMERIC), 0) * ${LAKHS_TO_RUPEES} as ftth_amount,
+          COALESCE(CAST(o.outstanding_lc_amount AS NUMERIC), 0) * ${LAKHS_TO_RUPEES} as lc_amount,
+          (COALESCE(CAST(o.outstanding_ftth_amount AS NUMERIC), 0) + COALESCE(CAST(o.outstanding_lc_amount AS NUMERIC), 0)) * ${LAKHS_TO_RUPEES} as total_amount,
+          o.outstanding_ftth_amount as ftth_amount_lakhs,
+          o.outstanding_lc_amount as lc_amount_lakhs,
+          o.created_at,
+          o.updated_at
+        FROM outstanding_ftth_lc_amount o
+        WHERE o.pers_no = ${input.persNo}
+        ORDER BY 
+          (COALESCE(CAST(o.outstanding_ftth_amount AS NUMERIC), 0) + COALESCE(CAST(o.outstanding_lc_amount AS NUMERIC), 0)) DESC
+      `);
+      
+      // Get employee info from employee_master
+      const employeeInfo = await db.select().from(employeeMaster)
+        .where(eq(employeeMaster.persNo, input.persNo))
+        .limit(1);
+      
+      // Calculate totals
+      const totals = (result as any[]).reduce((acc, row) => {
+        acc.ftthTotal += parseFloat(row.ftth_amount || '0');
+        acc.lcTotal += parseFloat(row.lc_amount || '0');
+        return acc;
+      }, { ftthTotal: 0, lcTotal: 0 });
+      
+      return {
+        employee: employeeInfo[0] || null,
+        circleBreakdown: result as unknown as Array<{
+          id: string;
+          pers_no: string;
+          circle: string;
+          ftth_amount: string;
+          lc_amount: string;
+          total_amount: string;
+          ftth_amount_lakhs: string | null;
+          lc_amount_lakhs: string | null;
+          created_at: string;
+          updated_at: string;
+        }>,
+        summary: {
+          totalFtth: totals.ftthTotal.toString(),
+          totalLc: totals.lcTotal.toString(),
+          totalOutstanding: (totals.ftthTotal + totals.lcTotal).toString(),
+          circleCount: (result as any[]).length,
+        },
+      };
+    }),
+
   getOltSummary: publicProcedure
     .input(z.object({
       userId: z.string().uuid(),

@@ -1,10 +1,10 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, Modal, FlatList, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, Clock, CalendarCheck, AlertTriangle, IndianRupee, X, Hourglass, CircleCheck, CircleDot, Send, RotateCcw, Award, DollarSign, Server, Wifi } from 'lucide-react-native';
+import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, ChevronDown, Clock, CalendarCheck, AlertTriangle, IndianRupee, X, Hourglass, CircleCheck, CircleDot, Send, RotateCcw, Award, DollarSign, Server, Wifi, MapPin, RefreshCw } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import React from "react";
 import { Event } from '@/types';
 import Svg, { Circle } from 'react-native-svg';
@@ -24,8 +24,14 @@ export default function DashboardScreen() {
   const [showAllCompleted, setShowAllCompleted] = useState(false);
   const [outstandingModal, setOutstandingModal] = useState<{ visible: boolean; type: 'ftth' | 'lc' }>({ visible: false, type: 'ftth' });
   const [ftthPendingModalVisible, setFtthPendingModalVisible] = useState(false);
+  const [expandedOutstandingEmployee, setExpandedOutstandingEmployee] = useState<string | null>(null);
 
   const isManagementRole = ['GM', 'CGM', 'DGM', 'AGM'].includes(employee?.role || '');
+
+  // Reset expanded employee when modal type changes or modal closes
+  useEffect(() => {
+    setExpandedOutstandingEmployee(null);
+  }, [outstandingModal.type, outstandingModal.visible]);
 
   const { data: myEventsData } = trpc.events.getMyEvents.useQuery(
     { employeeId: employee?.id || '' },
@@ -94,6 +100,20 @@ export default function DashboardScreen() {
   const { data: outstandingEmployees, isLoading: loadingEmployees } = trpc.admin.getOutstandingEmployees.useQuery(
     { type: outstandingModal.type, limit: 200 },
     { enabled: outstandingModal.visible && isManagementRole }
+  );
+
+  // Get the persNo for the expanded employee
+  const expandedEmployeePersNo = expandedOutstandingEmployee 
+    ? outstandingEmployees?.employees?.find((e: any) => e.id === expandedOutstandingEmployee)?.pers_no 
+    : null;
+
+  // Fetch circle-wise details when an employee is expanded
+  const { data: expandedEmployeeDetails, isLoading: loadingExpandedDetails, error: expandedDetailsError, refetch: refetchExpandedDetails } = trpc.admin.getEmployeeOutstandingDetails.useQuery(
+    { persNo: expandedEmployeePersNo || '', requesterId: employee?.id || '' },
+    { 
+      enabled: !!expandedEmployeePersNo && !!employee?.id && isManagementRole,
+      retry: 1,
+    }
   );
 
   const { data: ftthPendingSummary } = trpc.ftthPending.getSummary.useQuery(
@@ -533,7 +553,10 @@ export default function DashboardScreen() {
         visible={outstandingModal.visible}
         animationType="slide"
         presentationStyle="pageSheet"
-        onRequestClose={() => setOutstandingModal({ ...outstandingModal, visible: false })}
+        onRequestClose={() => {
+          setExpandedOutstandingEmployee(null);
+          setOutstandingModal({ ...outstandingModal, visible: false });
+        }}
       >
         <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
@@ -542,7 +565,10 @@ export default function DashboardScreen() {
             </Text>
             <TouchableOpacity 
               style={styles.modalCloseBtn}
-              onPress={() => setOutstandingModal({ ...outstandingModal, visible: false })}
+              onPress={() => {
+                setExpandedOutstandingEmployee(null);
+                setOutstandingModal({ ...outstandingModal, visible: false });
+              }}
             >
               <X size={24} color={Colors.light.text} />
             </TouchableOpacity>
@@ -576,34 +602,113 @@ export default function DashboardScreen() {
               data={outstandingEmployees?.employees || []}
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.modalListContent}
-              renderItem={({ item }) => (
-                <TouchableOpacity 
-                  style={styles.employeeRow}
-                  onPress={() => {
-                    setOutstandingModal({ ...outstandingModal, visible: false });
-                    router.push(`/employee-profile?id=${item.id}&persNo=${item.pers_no}`);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.employeeRowLeft}>
-                    <View style={styles.employeeAvatar}>
-                      <Text style={styles.employeeAvatarText}>
-                        {item.name?.substring(0, 2).toUpperCase() || '??'}
-                      </Text>
+              renderItem={({ item }) => {
+                const isExpanded = expandedOutstandingEmployee === item.id;
+                // Only use circle breakdown if data matches this employee (guard against stale data)
+                const isDataForThisEmployee = expandedEmployeePersNo === item.pers_no;
+                const circleBreakdown = isDataForThisEmployee && (outstandingModal.type === 'ftth' 
+                  ? expandedEmployeeDetails?.circleBreakdown?.filter((c: any) => safeNumber(c.ftthAmount) > 0)
+                  : expandedEmployeeDetails?.circleBreakdown?.filter((c: any) => safeNumber(c.lcAmount) > 0));
+                
+                return (
+                  <View style={styles.employeeRowContainer}>
+                    <View style={[styles.employeeRow, isExpanded && styles.employeeRowExpanded]}>
+                      <TouchableOpacity 
+                        style={styles.employeeRowLeft}
+                        onPress={() => {
+                          setExpandedOutstandingEmployee(null);
+                          setOutstandingModal({ ...outstandingModal, visible: false });
+                          router.push(`/employee-profile?id=${item.id}&persNo=${item.pers_no}`);
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <View style={styles.employeeAvatar}>
+                          <Text style={styles.employeeAvatarText}>
+                            {item.name?.substring(0, 2).toUpperCase() || '??'}
+                          </Text>
+                        </View>
+                        <View style={styles.employeeInfo}>
+                          <Text style={styles.employeeName} numberOfLines={1}>{item.name}</Text>
+                          <Text style={styles.employeePersNo}>Pers No: {item.pers_no}</Text>
+                          {item.circle && <Text style={styles.employeeCircle}>{item.circle}</Text>}
+                        </View>
+                      </TouchableOpacity>
+                      <View style={styles.employeeRowRight}>
+                        <Text style={styles.employeeAmount}>{formatINRCrore(item.outstanding_amount)}</Text>
+                        <TouchableOpacity 
+                          style={styles.expandBtn}
+                          onPress={() => {
+                            if (isExpanded) {
+                              setExpandedOutstandingEmployee(null);
+                            } else {
+                              setExpandedOutstandingEmployee(item.id);
+                            }
+                          }}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          {isExpanded ? (
+                            <ChevronDown size={20} color={Colors.light.primary} />
+                          ) : (
+                            <ChevronDown size={20} color={Colors.light.textSecondary} style={{ transform: [{ rotate: '-90deg' }] }} />
+                          )}
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                    <View style={styles.employeeInfo}>
-                      <Text style={styles.employeeName} numberOfLines={1}>{item.name}</Text>
-                      <Text style={styles.employeePersNo}>Pers No: {item.pers_no}</Text>
-                      {item.circle && <Text style={styles.employeeCircle}>{item.circle}</Text>}
-                    </View>
+                    
+                    {isExpanded && (
+                      <View style={styles.circleBreakdownContainer}>
+                        {(loadingExpandedDetails || !isDataForThisEmployee) ? (
+                          <View style={styles.circleBreakdownLoading}>
+                            <ActivityIndicator size="small" color={Colors.light.primary} />
+                            <Text style={styles.circleBreakdownLoadingText}>Loading circle details...</Text>
+                          </View>
+                        ) : expandedDetailsError ? (
+                          <View style={styles.circleBreakdownError}>
+                            <AlertTriangle size={16} color="#D32F2F" />
+                            <Text style={styles.circleBreakdownErrorText}>Failed to load details</Text>
+                            <TouchableOpacity 
+                              style={styles.circleBreakdownRetryBtn}
+                              onPress={() => refetchExpandedDetails()}
+                            >
+                              <RefreshCw size={12} color="#FFFFFF" />
+                              <Text style={styles.circleBreakdownRetryText}>Retry</Text>
+                            </TouchableOpacity>
+                          </View>
+                        ) : circleBreakdown && circleBreakdown.length > 0 ? (
+                          <>
+                            <View style={styles.circleBreakdownHeader}>
+                              <MapPin size={14} color={Colors.light.textSecondary} />
+                              <Text style={styles.circleBreakdownHeaderText}>Circle-wise Breakdown</Text>
+                            </View>
+                            {circleBreakdown.map((circle: any, index: number) => (
+                              <View key={index} style={styles.circleBreakdownRow}>
+                                <Text style={styles.circleBreakdownName} numberOfLines={1}>{circle.circle}</Text>
+                                <Text style={styles.circleBreakdownAmount}>
+                                  {formatINRCrore(outstandingModal.type === 'ftth' ? circle.ftthAmount : circle.lcAmount)}
+                                </Text>
+                              </View>
+                            ))}
+                            <TouchableOpacity 
+                              style={styles.viewProfileBtn}
+                              onPress={() => {
+                                setOutstandingModal({ ...outstandingModal, visible: false });
+                                router.push(`/employee-profile?id=${item.id}&persNo=${item.pers_no}`);
+                              }}
+                            >
+                              <Text style={styles.viewProfileBtnText}>View Full Profile</Text>
+                              <ChevronRight size={14} color={Colors.light.primary} />
+                            </TouchableOpacity>
+                          </>
+                        ) : (
+                          <View style={styles.circleBreakdownEmpty}>
+                            <Text style={styles.circleBreakdownEmptyText}>No circle-wise data available</Text>
+                          </View>
+                        )}
+                      </View>
+                    )}
                   </View>
-                  <View style={styles.employeeRowRight}>
-                    <Text style={styles.employeeAmount}>{formatINRCrore(item.outstanding_amount)}</Text>
-                    <Text style={styles.employeeAmountFull}>{formatINRAmount(item.outstanding_amount)}</Text>
-                    <ChevronRight size={16} color={Colors.light.textSecondary} />
-                  </View>
-                </TouchableOpacity>
-              )}
+                );
+              }}
               ListEmptyComponent={
                 <View style={styles.modalEmpty}>
                   <Text style={styles.modalEmptyText}>No employees with outstanding amounts</Text>
@@ -1481,8 +1586,8 @@ const styles = StyleSheet.create({
   },
   outstandingCardsRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
+    flexWrap: 'nowrap',
+    gap: 8,
     justifyContent: 'space-between',
   },
   reportsRow: {
@@ -1563,11 +1668,10 @@ const styles = StyleSheet.create({
     borderTopColor: '#F3F4F6',
   },
   outstandingCard: {
-    width: (width - 56) / 3,
-    minWidth: 105,
-    maxWidth: 130,
+    flex: 1,
+    minWidth: 0,
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
+    borderRadius: 12,
     padding: 10,
     borderWidth: 1,
     borderColor: '#E5E7EB',
@@ -1749,6 +1853,124 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: Colors.light.textSecondary,
     display: 'none',
+  },
+  employeeRowContainer: {
+    marginBottom: 0,
+  },
+  employeeRowExpanded: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    borderBottomWidth: 0,
+    backgroundColor: '#F5F9FF',
+  },
+  circleBreakdownContainer: {
+    backgroundColor: '#FAFAFA',
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: Colors.light.border,
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+  },
+  circleBreakdownLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    gap: 8,
+  },
+  circleBreakdownLoadingText: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+  },
+  circleBreakdownError: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    gap: 8,
+  },
+  circleBreakdownErrorText: {
+    fontSize: 13,
+    color: '#D32F2F',
+  },
+  circleBreakdownRetryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#D32F2F',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  circleBreakdownRetryText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  circleBreakdownHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 10,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  circleBreakdownHeaderText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.light.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  circleBreakdownRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  circleBreakdownName: {
+    fontSize: 13,
+    color: Colors.light.text,
+    flex: 1,
+    marginRight: 8,
+  },
+  circleBreakdownAmount: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#E65100',
+  },
+  circleBreakdownEmpty: {
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  circleBreakdownEmptyText: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+    fontStyle: 'italic',
+  },
+  viewProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    marginTop: 12,
+    paddingVertical: 8,
+    backgroundColor: '#E3F2FD',
+    borderRadius: 6,
+  },
+  viewProfileBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.light.primary,
+  },
+  expandBtn: {
+    padding: 4,
+    marginLeft: 4,
   },
   modalEmpty: {
     padding: 40,
