@@ -2264,7 +2264,17 @@ export default function EventDetailScreen() {
                   <View style={styles.salesEntryHeader}>
                     <Text style={styles.salesEntryName}>{entryMember?.employee?.name || 'Unknown'}</Text>
                     <Text style={styles.salesEntryDate}>
-                      {new Date(entry.createdAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })}
+                      {(() => {
+                        const date = new Date(entry.createdAt);
+                        const day = date.getUTCDate();
+                        const month = new Date(date.getUTCFullYear(), date.getUTCMonth(), 1).toLocaleString('en-IN', { month: 'short' });
+                        let hours = date.getUTCHours();
+                        const minutes = date.getUTCMinutes().toString().padStart(2, '0');
+                        const ampm = hours >= 12 ? 'pm' : 'am';
+                        hours = hours % 12;
+                        hours = hours ? hours : 12;
+                        return `${day} ${month}, ${hours.toString().padStart(2, '0')}:${minutes} ${ampm}`;
+                      })()}
                     </Text>
                   </View>
                   <View style={styles.salesEntryStats}>

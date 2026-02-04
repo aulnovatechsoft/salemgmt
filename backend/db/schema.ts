@@ -401,3 +401,13 @@ export const bbmWiseOlte = pgTable('bbm_wise_olte', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
+
+export const outstandingFtthLcAmount = pgTable('outstanding_ftth_lc_amount', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  persNo: varchar('pers_no', { length: 50 }).notNull(),
+  circle: varchar('circle', { length: 100 }),
+  outstandingFtthAmount: text('outstanding_ftth_amount'),
+  outstandingLcAmount: text('outstanding_lc_amount'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
