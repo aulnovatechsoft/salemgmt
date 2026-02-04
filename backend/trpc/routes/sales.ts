@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { eq, and, desc, sql, inArray } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
+import { eq, and, desc, sql, inArray, gte, lte, sum, count } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
-import { db, salesReports, auditLogs, events, employees, eventAssignments, employeeMaster, financeCollectionEntries } from "@/backend/db";
+import { db, salesReports, auditLogs, events, employees, eventAssignments, employeeMaster, financeCollectionEntries, eventSalesEntries } from "@/backend/db";
 
 // Helper function to get all subordinate IDs (copied from events.ts for consistency)
 async function getAllSubordinateIds(employeeId: string, maxDepth: number = 10): Promise<string[]> {
@@ -640,5 +641,315 @@ export const salesRouter = createTRPCRouter({
       }
       
       return { totalCollected, totalTarget, entries: totalEntries, byType };
+    }),
+
+  getSalesAnalytics: publicProcedure
+    .input(z.object({
+      employeeId: z.string().uuid(),
+      startDate: z.string().optional(),
+      endDate: z.string().optional(),
+      circle: z.string().optional(),
+    }))
+    .query(async ({ input }) => {
+      const employee = await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1);
+      if (!employee[0]) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Employee not found" });
+      }
+      
+      const userRole = employee[0].role;
+      const userCircle = employee[0].circle;
+      const isAdmin = userRole === 'ADMIN';
+      
+      const subordinateIds = await getAllSubordinateIds(input.employeeId);
+      const visibleIds = isAdmin ? [] : [input.employeeId, ...subordinateIds];
+      
+      const buildConditions = () => {
+        const conditions: any[] = [];
+        
+        if (input.startDate) {
+          conditions.push(gte(eventSalesEntries.createdAt, new Date(input.startDate)));
+        }
+        if (input.endDate) {
+          conditions.push(lte(eventSalesEntries.createdAt, new Date(input.endDate)));
+        }
+        if (input.circle) {
+          conditions.push(eq(employees.circle, input.circle));
+        }
+        if (!isAdmin && visibleIds.length > 0) {
+          conditions.push(inArray(eventSalesEntries.employeeId, visibleIds));
+        } else if (!isAdmin) {
+          conditions.push(sql`1=0`);
+        }
+        
+        return conditions;
+      };
+      
+      const conditions = buildConditions();
+      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+      
+      const totalsResult = await db.select({
+        totalSimsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)`,
+        totalSimsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)`,
+        totalFtthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)`,
+        totalFtthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)`,
+        totalEntries: sql<number>`COUNT(*)`,
+      })
+      .from(eventSalesEntries)
+      .leftJoin(employees, eq(eventSalesEntries.employeeId, employees.id))
+      .where(whereClause);
+      
+      const totals = totalsResult[0];
+      const simsSold = Number(totals?.totalSimsSold) || 0;
+      const simsActivated = Number(totals?.totalSimsActivated) || 0;
+      const ftthSold = Number(totals?.totalFtthSold) || 0;
+      const ftthActivated = Number(totals?.totalFtthActivated) || 0;
+      
+      const byEmployeeResult = await db.select({
+        id: eventSalesEntries.employeeId,
+        name: employees.name,
+        designation: employees.designation,
+        circle: employees.circle,
+        simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)`,
+        simsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)`,
+        ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)`,
+        ftthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)`,
+        entries: sql<number>`COUNT(*)`,
+      })
+      .from(eventSalesEntries)
+      .leftJoin(employees, eq(eventSalesEntries.employeeId, employees.id))
+      .where(whereClause)
+      .groupBy(eventSalesEntries.employeeId, employees.name, employees.designation, employees.circle)
+      .orderBy(sql`SUM(${eventSalesEntries.simsSold}) + SUM(${eventSalesEntries.ftthSold}) DESC`)
+      .limit(20);
+      
+      const byEventResult = await db.select({
+        id: eventSalesEntries.eventId,
+        name: events.name,
+        category: events.category,
+        simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)`,
+        simsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)`,
+        ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)`,
+        ftthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)`,
+        entries: sql<number>`COUNT(*)`,
+      })
+      .from(eventSalesEntries)
+      .leftJoin(events, eq(eventSalesEntries.eventId, events.id))
+      .leftJoin(employees, eq(eventSalesEntries.employeeId, employees.id))
+      .where(whereClause)
+      .groupBy(eventSalesEntries.eventId, events.name, events.category)
+      .orderBy(sql`SUM(${eventSalesEntries.simsSold}) + SUM(${eventSalesEntries.ftthSold}) DESC`)
+      .limit(20);
+      
+      const recentEntries = await db.select({
+        id: eventSalesEntries.id,
+        eventId: eventSalesEntries.eventId,
+        employeeId: eventSalesEntries.employeeId,
+        simsSold: eventSalesEntries.simsSold,
+        simsActivated: eventSalesEntries.simsActivated,
+        ftthSold: eventSalesEntries.ftthSold,
+        ftthActivated: eventSalesEntries.ftthActivated,
+        customerType: eventSalesEntries.customerType,
+        createdAt: eventSalesEntries.createdAt,
+        employeeName: employees.name,
+        eventName: events.name,
+      })
+      .from(eventSalesEntries)
+      .leftJoin(employees, eq(eventSalesEntries.employeeId, employees.id))
+      .leftJoin(events, eq(eventSalesEntries.eventId, events.id))
+      .where(whereClause)
+      .orderBy(desc(eventSalesEntries.createdAt))
+      .limit(30);
+      
+      const byEmployee = byEmployeeResult.map(e => ({
+        id: e.id || '',
+        name: e.name || 'Unknown',
+        designation: e.designation || '',
+        circle: e.circle || '',
+        simsSold: Number(e.simsSold) || 0,
+        simsActivated: Number(e.simsActivated) || 0,
+        ftthSold: Number(e.ftthSold) || 0,
+        ftthActivated: Number(e.ftthActivated) || 0,
+        entries: Number(e.entries) || 0,
+      }));
+      
+      const byEvent = byEventResult.map(e => ({
+        id: e.id || '',
+        name: e.name || 'Unknown',
+        category: e.category || '',
+        simsSold: Number(e.simsSold) || 0,
+        simsActivated: Number(e.simsActivated) || 0,
+        ftthSold: Number(e.ftthSold) || 0,
+        ftthActivated: Number(e.ftthActivated) || 0,
+        entries: Number(e.entries) || 0,
+      }));
+      
+      return {
+        totals: {
+          simsSold,
+          simsActivated,
+          ftthSold,
+          ftthActivated,
+          totalEntries: Number(totals?.totalEntries) || 0,
+          simActivationRate: simsSold > 0 ? Math.round((simsActivated / simsSold) * 100) : 0,
+          ftthActivationRate: ftthSold > 0 ? Math.round((ftthActivated / ftthSold) * 100) : 0,
+        },
+        byEmployee,
+        byEvent,
+        recentEntries,
+      };
+    }),
+
+  getTeamPerformance: publicProcedure
+    .input(z.object({
+      employeeId: z.string().uuid(),
+      circle: z.string().optional(),
+      days: z.number().min(7).max(365).optional().default(30),
+      limit: z.number().min(1).max(100).optional().default(20),
+    }))
+    .query(async ({ input }) => {
+      const employee = await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1);
+      if (!employee[0]) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Employee not found" });
+      }
+      
+      const userRole = employee[0].role;
+      const isAdmin = userRole === 'ADMIN';
+      
+      const subordinateIds = await getAllSubordinateIds(input.employeeId);
+      const visibleIds = isAdmin ? [] : [input.employeeId, ...subordinateIds];
+      
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - input.days);
+      
+      const conditions: any[] = [gte(eventSalesEntries.createdAt, startDate)];
+      
+      if (input.circle) {
+        conditions.push(eq(employees.circle, input.circle));
+      }
+      if (!isAdmin && visibleIds.length > 0) {
+        conditions.push(inArray(eventSalesEntries.employeeId, visibleIds));
+      } else if (!isAdmin) {
+        conditions.push(sql`1=0`);
+      }
+      
+      const whereClause = and(...conditions);
+      
+      const rankingsResult = await db.select({
+        id: eventSalesEntries.employeeId,
+        name: employees.name,
+        designation: employees.designation,
+        circle: employees.circle,
+        simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)`,
+        simsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)`,
+        ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)`,
+        ftthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)`,
+        totalSales: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}) + SUM(${eventSalesEntries.ftthSold}), 0)`,
+        entries: sql<number>`COUNT(*)`,
+      })
+      .from(eventSalesEntries)
+      .leftJoin(employees, eq(eventSalesEntries.employeeId, employees.id))
+      .where(whereClause)
+      .groupBy(eventSalesEntries.employeeId, employees.name, employees.designation, employees.circle)
+      .orderBy(sql`SUM(${eventSalesEntries.simsSold}) + SUM(${eventSalesEntries.ftthSold}) DESC`)
+      .limit(input.limit);
+      
+      const grandTotal = rankingsResult.reduce((sum, r) => sum + (Number(r.totalSales) || 0), 0);
+      
+      const rankings = rankingsResult.map((r, index) => {
+        const totalSales = Number(r.totalSales) || 0;
+        return {
+          id: r.id || '',
+          rank: index + 1,
+          name: r.name || 'Unknown',
+          designation: r.designation || '',
+          circle: r.circle || '',
+          simsSold: Number(r.simsSold) || 0,
+          simsActivated: Number(r.simsActivated) || 0,
+          ftthSold: Number(r.ftthSold) || 0,
+          ftthActivated: Number(r.ftthActivated) || 0,
+          totalSales,
+          entries: Number(r.entries) || 0,
+          contribution: grandTotal > 0 ? Math.round((totalSales / grandTotal) * 100) : 0,
+        };
+      });
+      
+      return { rankings, grandTotal };
+    }),
+
+  getSalesTrends: publicProcedure
+    .input(z.object({
+      employeeId: z.string().uuid(),
+      circle: z.string().optional(),
+      days: z.number().min(7).max(90).optional().default(30),
+    }))
+    .query(async ({ input }) => {
+      const employee = await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1);
+      if (!employee[0]) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Employee not found" });
+      }
+      
+      const userRole = employee[0].role;
+      const isAdmin = userRole === 'ADMIN';
+      
+      const subordinateIds = await getAllSubordinateIds(input.employeeId);
+      const visibleIds = isAdmin ? [] : [input.employeeId, ...subordinateIds];
+      
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - input.days);
+      
+      const conditions: any[] = [gte(eventSalesEntries.createdAt, startDate)];
+      
+      if (input.circle) {
+        conditions.push(eq(employees.circle, input.circle));
+      }
+      if (!isAdmin && visibleIds.length > 0) {
+        conditions.push(inArray(eventSalesEntries.employeeId, visibleIds));
+      } else if (!isAdmin) {
+        conditions.push(sql`1=0`);
+      }
+      
+      const whereClause = and(...conditions);
+      
+      const dailyResult = await db.select({
+        date: sql<string>`DATE(${eventSalesEntries.createdAt})`,
+        simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)`,
+        simsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)`,
+        ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)`,
+        ftthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)`,
+      })
+      .from(eventSalesEntries)
+      .leftJoin(employees, eq(eventSalesEntries.employeeId, employees.id))
+      .where(whereClause)
+      .groupBy(sql`DATE(${eventSalesEntries.createdAt})`)
+      .orderBy(sql`DATE(${eventSalesEntries.createdAt})`);
+      
+      const daily = dailyResult.map(d => ({
+        date: String(d.date),
+        simsSold: Number(d.simsSold) || 0,
+        simsActivated: Number(d.simsActivated) || 0,
+        ftthSold: Number(d.ftthSold) || 0,
+        ftthActivated: Number(d.ftthActivated) || 0,
+      }));
+      
+      let totalSims = 0;
+      let totalFtth = 0;
+      for (const day of daily) {
+        totalSims += day.simsSold;
+        totalFtth += day.ftthSold;
+      }
+      
+      const avgDailySims = daily.length > 0 ? Math.round(totalSims / daily.length) : 0;
+      const avgDailyFtth = daily.length > 0 ? Math.round(totalFtth / daily.length) : 0;
+      
+      return {
+        daily,
+        summary: {
+          totalDays: daily.length,
+          totalSims,
+          totalFtth,
+          avgDailySims,
+          avgDailyFtth,
+        },
+      };
     }),
 });

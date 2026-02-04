@@ -51,10 +51,13 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'SLA_WARNING',
   'SLA_BREACHED',
   'DEADLINE_WARNING',
-  'TASK_ENDING_TODAY'
+  'TASK_ENDING_TODAY',
+  'FINANCE_COLLECTION_SUBMITTED',
+  'FINANCE_COLLECTION_APPROVED',
+  'FINANCE_COLLECTION_REJECTED'
 ]);
 
-export const auditEntityTypeEnum = pgEnum('audit_entity_type', ['EVENT', 'SALES', 'RESOURCE', 'ISSUE', 'EMPLOYEE']);
+export const auditEntityTypeEnum = pgEnum('audit_entity_type', ['EVENT', 'SALES', 'RESOURCE', 'ISSUE', 'EMPLOYEE', 'FINANCE']);
 
 export const employees = pgTable('employees', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -262,6 +265,10 @@ export const financeCollectionEntries = pgTable('finance_collection_entries', {
   gpsLatitude: text('gps_latitude'),
   gpsLongitude: text('gps_longitude'),
   remarks: text('remarks'),
+  approvalStatus: salesReportStatusEnum('approval_status').default('pending').notNull(),
+  reviewedBy: uuid('reviewed_by').references(() => employees.id),
+  reviewedAt: timestamp('reviewed_at'),
+  reviewRemarks: text('review_remarks'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

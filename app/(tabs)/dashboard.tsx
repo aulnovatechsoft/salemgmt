@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, Modal, FlatList, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, ChevronDown, Clock, CalendarCheck, AlertTriangle, IndianRupee, X, Hourglass, CircleCheck, CircleDot, Send, RotateCcw, Award, DollarSign, Server, Wifi, MapPin, RefreshCw } from 'lucide-react-native';
+import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, ChevronDown, Clock, CalendarCheck, AlertTriangle, IndianRupee, X, Hourglass, CircleCheck, CircleDot, Send, RotateCcw, Award, DollarSign, Server, Wifi, MapPin, RefreshCw, ClipboardList } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
@@ -535,6 +535,13 @@ export default function DashboardScreen() {
                 label="Create Task" 
                 icon={<Calendar size={24} color={Colors.light.background} />} 
                 onPress={() => router.push('/create-event')}
+              />
+            )}
+            {['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(employee?.role || '') && (
+              <ActionButton 
+                label="Pending Reviews" 
+                icon={<ClipboardList size={24} color={Colors.light.background} />} 
+                onPress={() => router.push('/finance-review')}
               />
             )}
             {!isAdminRole(employee?.role || 'SALES_STAFF') && (

@@ -1867,22 +1867,7 @@ export const adminRouter = createTRPCRouter({
         throw new Error('Only management users can access employee profiles. Access denied.');
       }
       
-      // Get employee details from employee_master first, then employees table
-      const employeeMasterResult = await db.execute(sql`
-        SELECT 
-          pers_no,
-          name,
-          designation,
-          mobile,
-          email,
-          circle,
-          ssa,
-          reporting_officer_pers_no
-        FROM employee_master
-        WHERE pers_no = ${input.persNo}
-        LIMIT 1
-      `);
-      
+      // Get employee details from employees table (primary source)
       const employeeResult = await db.execute(sql`
         SELECT 
           id,
@@ -1892,7 +1877,12 @@ export const adminRouter = createTRPCRouter({
           phone,
           email,
           circle,
-          role
+          zone,
+          role,
+          reporting_pers_no,
+          is_active,
+          outstanding_ftth,
+          outstanding_lc
         FROM employees
         WHERE pers_no = ${input.persNo}
         LIMIT 1
@@ -1906,42 +1896,43 @@ export const adminRouter = createTRPCRouter({
         ORDER BY olt_ip
       `);
       
-      // Get reporting manager if available
-      const masterData = (employeeMasterResult as any)[0];
+      const employeeData = (employeeResult as any)[0];
+      
+      // Get reporting manager if available (from employees table)
       let reportingManager = null;
-      if (masterData?.reporting_officer_pers_no) {
+      if (employeeData?.reporting_pers_no) {
         const managerResult = await db.execute(sql`
-          SELECT pers_no, name, designation, mobile, circle
-          FROM employee_master
-          WHERE pers_no = ${masterData.reporting_officer_pers_no}
+          SELECT id, pers_no, name, designation, phone, circle, zone
+          FROM employees
+          WHERE id = ${employeeData.reporting_pers_no}
           LIMIT 1
         `);
         reportingManager = (managerResult as any)[0] || null;
       }
       
-      // Get subordinates
-      const subordinatesResult = await db.execute(sql`
-        SELECT pers_no, name, designation, mobile, circle
-        FROM employee_master
-        WHERE reporting_officer_pers_no = ${input.persNo}
+      // Get subordinates (from employees table)
+      const subordinatesResult = employeeData?.id ? await db.execute(sql`
+        SELECT id, pers_no, name, designation, phone, circle, zone
+        FROM employees
+        WHERE reporting_pers_no = ${employeeData.id}
         ORDER BY name
         LIMIT 50
-      `);
-      
-      const employeeData = (employeeResult as any)[0];
+      `) : [];
       
       return {
         employee: {
           id: employeeData?.id || null,
           persNo: input.persNo,
-          name: employeeData?.name || masterData?.name || 'Unknown',
-          designation: employeeData?.designation || masterData?.designation || null,
-          mobile: employeeData?.phone || masterData?.mobile || null,
-          email: employeeData?.email || masterData?.email || null,
-          circle: employeeData?.circle || masterData?.circle || null,
-          ssa: masterData?.ssa || null,
+          name: employeeData?.name || 'Unknown',
+          designation: employeeData?.designation || null,
+          mobile: employeeData?.phone || null,
+          email: employeeData?.email || null,
+          circle: employeeData?.circle || null,
+          zone: employeeData?.zone || null,
           role: employeeData?.role || null,
-          reportingOfficerPersNo: masterData?.reporting_officer_pers_no || null,
+          isActive: employeeData?.is_active || false,
+          outstandingFtth: employeeData?.outstanding_ftth || null,
+          outstandingLc: employeeData?.outstanding_lc || null,
         },
         oltIps: (oltResult as any[]).map((r: any) => ({
           id: r.id,
@@ -1952,15 +1943,17 @@ export const adminRouter = createTRPCRouter({
           persNo: reportingManager.pers_no,
           name: reportingManager.name,
           designation: reportingManager.designation,
-          mobile: reportingManager.mobile,
+          phone: reportingManager.phone,
           circle: reportingManager.circle,
+          zone: reportingManager.zone,
         } : null,
         subordinates: (subordinatesResult as any[]).map((s: any) => ({
           persNo: s.pers_no,
           name: s.name,
           designation: s.designation,
-          mobile: s.mobile,
+          phone: s.phone,
           circle: s.circle,
+          zone: s.zone,
         })),
       };
     }),

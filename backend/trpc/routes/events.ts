@@ -1620,32 +1620,38 @@ export const eventsRouter = createTRPCRouter({
         gpsLatitude: input.gpsLatitude,
         gpsLongitude: input.gpsLongitude,
         remarks: input.remarks,
+        approvalStatus: 'pending',
       }).returning();
-      
-      const updateFields: Record<string, any> = { updatedAt: new Date() };
-      if (input.financeType === 'FIN_LC') {
-        updateFields.finLcCollected = (event[0].finLcCollected || 0) + input.amountCollected;
-      } else if (input.financeType === 'FIN_LL_FTTH') {
-        updateFields.finLlFtthCollected = (event[0].finLlFtthCollected || 0) + input.amountCollected;
-      } else if (input.financeType === 'FIN_TOWER') {
-        updateFields.finTowerCollected = (event[0].finTowerCollected || 0) + input.amountCollected;
-      } else if (input.financeType === 'FIN_GSM_POSTPAID') {
-        updateFields.finGsmPostpaidCollected = (event[0].finGsmPostpaidCollected || 0) + input.amountCollected;
-      } else if (input.financeType === 'FIN_RENT_BUILDING') {
-        updateFields.finRentBuildingCollected = (event[0].finRentBuildingCollected || 0) + input.amountCollected;
-      }
-      
-      await db.update(events)
-        .set(updateFields)
-        .where(eq(events.id, input.eventId));
       
       await db.insert(auditLogs).values({
         action: 'SUBMIT_FINANCE_COLLECTION',
         entityType: 'FINANCE',
         entityId: result[0].id,
         performedBy: input.employeeId,
-        details: { eventId: input.eventId, financeType: input.financeType, amountCollected: input.amountCollected, paymentMode: input.paymentMode },
+        details: { eventId: input.eventId, financeType: input.financeType, amountCollected: input.amountCollected, paymentMode: input.paymentMode, status: 'pending' },
       });
+      
+      // Get submitter name for notification
+      const submitter = await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1);
+      const submitterName = submitter[0]?.name || 'Unknown';
+      
+      // Send notification to event creator for review
+      if (event[0].assignedTo && event[0].assignedTo !== input.employeeId) {
+        await db.insert(notifications).values({
+          userId: event[0].assignedTo,
+          type: 'FINANCE_COLLECTION_SUBMITTED',
+          title: 'Finance Collection Pending Review',
+          message: `${submitterName} submitted ₹${input.amountCollected.toLocaleString('en-IN')} collection (${input.financeType.replace('FIN_', '').replace(/_/g, ' ')}) for "${event[0].title}". Review required.`,
+          relatedEventId: input.eventId,
+          data: { 
+            entryId: result[0].id, 
+            financeType: input.financeType, 
+            amount: input.amountCollected,
+            submitterName,
+            paymentMode: input.paymentMode 
+          },
+        });
+      }
       
       return result[0];
     }),
@@ -1654,10 +1660,241 @@ export const eventsRouter = createTRPCRouter({
     .input(z.object({ eventId: z.string().uuid() }))
     .query(async ({ input }) => {
       console.log("Fetching finance collection entries:", input.eventId);
-      const entries = await db.select().from(financeCollectionEntries)
-        .where(eq(financeCollectionEntries.eventId, input.eventId))
-        .orderBy(desc(financeCollectionEntries.createdAt));
-      return entries;
+      const entries = await db.select({
+        entry: financeCollectionEntries,
+        submitterName: employees.name,
+        submitterDesignation: employees.designation,
+      })
+      .from(financeCollectionEntries)
+      .leftJoin(employees, eq(financeCollectionEntries.employeeId, employees.id))
+      .where(eq(financeCollectionEntries.eventId, input.eventId))
+      .orderBy(desc(financeCollectionEntries.createdAt));
+      
+      return entries.map(e => ({
+        ...e.entry,
+        submitterName: e.submitterName,
+        submitterDesignation: e.submitterDesignation,
+      }));
+    }),
+    
+  getPendingFinanceCollections: publicProcedure
+    .input(z.object({ 
+      reviewerId: z.string().uuid(),
+      financeType: z.string().optional(),
+    }))
+    .query(async ({ input }) => {
+      console.log("Fetching pending finance collections for reviewer:", input.reviewerId);
+      
+      // Check if user has management role
+      const reviewer = await db.select().from(employees).where(eq(employees.id, input.reviewerId)).limit(1);
+      if (!reviewer[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
+        throw new Error('Only management users can review finance collections');
+      }
+      
+      // For senior managers (ADMIN, GM, CGM), show all pending collections in their circle
+      // For DGM/AGM, show only their own events' collections
+      const isTopManagement = ['ADMIN', 'GM', 'CGM'].includes(reviewer[0].role);
+      
+      let userEvents: { id: string; title: string }[];
+      
+      if (isTopManagement) {
+        // Get all finance events in reviewer's circle (or all for ADMIN)
+        if (reviewer[0].role === 'ADMIN') {
+          userEvents = await db.select({ id: events.id, title: events.title })
+            .from(events)
+            .where(sql`${events.taskCategory} LIKE 'FIN_%'`);
+        } else {
+          userEvents = await db.select({ id: events.id, title: events.title })
+            .from(events)
+            .where(and(
+              sql`${events.taskCategory} LIKE 'FIN_%'`,
+              eq(events.circle, reviewer[0].circle || '')
+            ));
+        }
+      } else {
+        // DGM/AGM see only their own events
+        userEvents = await db.select({ id: events.id, title: events.title })
+          .from(events)
+          .where(eq(events.assignedTo, input.reviewerId));
+      }
+      
+      if (userEvents.length === 0) return [];
+      
+      const eventIds = userEvents.map(e => e.id);
+      const eventTitleMap = new Map(userEvents.map(e => [e.id, e.title]));
+      
+      // Build filter conditions
+      const conditions = [
+        sql`${financeCollectionEntries.eventId} IN ${eventIds}`,
+        eq(financeCollectionEntries.approvalStatus, 'pending')
+      ];
+      
+      if (input.financeType) {
+        conditions.push(eq(financeCollectionEntries.financeType, input.financeType));
+      }
+      
+      // Get pending finance entries for these events
+      const pendingEntries = await db.select({
+        entry: financeCollectionEntries,
+        submitterName: employees.name,
+        submitterDesignation: employees.designation,
+        submitterCircle: employees.circle,
+      })
+      .from(financeCollectionEntries)
+      .leftJoin(employees, eq(financeCollectionEntries.employeeId, employees.id))
+      .where(and(...conditions))
+      .orderBy(desc(financeCollectionEntries.createdAt))
+      .limit(100);
+      
+      return pendingEntries.map(e => ({
+        ...e.entry,
+        submitterName: e.submitterName,
+        submitterDesignation: e.submitterDesignation,
+        submitterCircle: e.submitterCircle,
+        eventTitle: eventTitleMap.get(e.entry.eventId) || 'Unknown Event',
+      }));
+    }),
+    
+  approveFinanceCollection: publicProcedure
+    .input(z.object({
+      entryId: z.string().uuid(),
+      reviewerId: z.string().uuid(),
+      remarks: z.string().optional(),
+    }))
+    .mutation(async ({ input }) => {
+      console.log("Approving finance collection:", input.entryId);
+      
+      // Check if user has management role
+      const reviewer = await db.select().from(employees).where(eq(employees.id, input.reviewerId)).limit(1);
+      if (!reviewer[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
+        throw new Error('Only management users can approve finance collections');
+      }
+      
+      // Get the entry
+      const entry = await db.select().from(financeCollectionEntries)
+        .where(eq(financeCollectionEntries.id, input.entryId)).limit(1);
+      
+      if (!entry[0]) throw new Error('Finance collection entry not found');
+      if (entry[0].approvalStatus !== 'pending') {
+        throw new Error(`Entry already ${entry[0].approvalStatus}`);
+      }
+      
+      // Verify reviewer owns the event
+      const event = await db.select().from(events).where(eq(events.id, entry[0].eventId)).limit(1);
+      if (!event[0]) throw new Error('Event not found');
+      if (event[0].assignedTo !== input.reviewerId && !['ADMIN', 'GM', 'CGM'].includes(reviewer[0].role)) {
+        throw new Error('You can only approve collections for events you manage');
+      }
+      
+      // Update entry status
+      await db.update(financeCollectionEntries)
+        .set({
+          approvalStatus: 'approved',
+          reviewedBy: input.reviewerId,
+          reviewedAt: new Date(),
+          reviewRemarks: input.remarks,
+        })
+        .where(eq(financeCollectionEntries.id, input.entryId));
+      
+      // Update event totals
+      const updateFields: Record<string, any> = { updatedAt: new Date() };
+      if (entry[0].financeType === 'FIN_LC') {
+        updateFields.finLcCollected = (event[0].finLcCollected || 0) + entry[0].amountCollected;
+      } else if (entry[0].financeType === 'FIN_LL_FTTH') {
+        updateFields.finLlFtthCollected = (event[0].finLlFtthCollected || 0) + entry[0].amountCollected;
+      } else if (entry[0].financeType === 'FIN_TOWER') {
+        updateFields.finTowerCollected = (event[0].finTowerCollected || 0) + entry[0].amountCollected;
+      } else if (entry[0].financeType === 'FIN_GSM_POSTPAID') {
+        updateFields.finGsmPostpaidCollected = (event[0].finGsmPostpaidCollected || 0) + entry[0].amountCollected;
+      } else if (entry[0].financeType === 'FIN_RENT_BUILDING') {
+        updateFields.finRentBuildingCollected = (event[0].finRentBuildingCollected || 0) + entry[0].amountCollected;
+      }
+      
+      await db.update(events).set(updateFields).where(eq(events.id, entry[0].eventId));
+      
+      // Create audit log
+      await db.insert(auditLogs).values({
+        action: 'APPROVE_FINANCE_COLLECTION',
+        entityType: 'FINANCE',
+        entityId: input.entryId,
+        performedBy: input.reviewerId,
+        details: { eventId: entry[0].eventId, amount: entry[0].amountCollected, financeType: entry[0].financeType },
+      });
+      
+      // Notify the submitter
+      await db.insert(notifications).values({
+        userId: entry[0].employeeId,
+        type: 'FINANCE_COLLECTION_APPROVED',
+        title: 'Collection Approved',
+        message: `Your ₹${entry[0].amountCollected.toLocaleString('en-IN')} collection for "${event[0].title}" has been approved.`,
+        relatedEventId: entry[0].eventId,
+        data: { entryId: input.entryId, amount: entry[0].amountCollected },
+      });
+      
+      return { success: true };
+    }),
+    
+  rejectFinanceCollection: publicProcedure
+    .input(z.object({
+      entryId: z.string().uuid(),
+      reviewerId: z.string().uuid(),
+      remarks: z.string().min(1, 'Rejection reason is required'),
+    }))
+    .mutation(async ({ input }) => {
+      console.log("Rejecting finance collection:", input.entryId);
+      
+      // Check if user has management role
+      const reviewer = await db.select().from(employees).where(eq(employees.id, input.reviewerId)).limit(1);
+      if (!reviewer[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
+        throw new Error('Only management users can reject finance collections');
+      }
+      
+      // Get the entry
+      const entry = await db.select().from(financeCollectionEntries)
+        .where(eq(financeCollectionEntries.id, input.entryId)).limit(1);
+      
+      if (!entry[0]) throw new Error('Finance collection entry not found');
+      if (entry[0].approvalStatus !== 'pending') {
+        throw new Error(`Entry already ${entry[0].approvalStatus}`);
+      }
+      
+      // Verify reviewer owns the event
+      const event = await db.select().from(events).where(eq(events.id, entry[0].eventId)).limit(1);
+      if (!event[0]) throw new Error('Event not found');
+      if (event[0].assignedTo !== input.reviewerId && !['ADMIN', 'GM', 'CGM'].includes(reviewer[0].role)) {
+        throw new Error('You can only reject collections for events you manage');
+      }
+      
+      // Update entry status
+      await db.update(financeCollectionEntries)
+        .set({
+          approvalStatus: 'rejected',
+          reviewedBy: input.reviewerId,
+          reviewedAt: new Date(),
+          reviewRemarks: input.remarks,
+        })
+        .where(eq(financeCollectionEntries.id, input.entryId));
+      
+      // Create audit log
+      await db.insert(auditLogs).values({
+        action: 'REJECT_FINANCE_COLLECTION',
+        entityType: 'FINANCE',
+        entityId: input.entryId,
+        performedBy: input.reviewerId,
+        details: { eventId: entry[0].eventId, amount: entry[0].amountCollected, reason: input.remarks },
+      });
+      
+      // Notify the submitter
+      await db.insert(notifications).values({
+        userId: entry[0].employeeId,
+        type: 'FINANCE_COLLECTION_REJECTED',
+        title: 'Collection Rejected',
+        message: `Your ₹${entry[0].amountCollected.toLocaleString('en-IN')} collection for "${event[0].title}" was rejected. Reason: ${input.remarks}`,
+        relatedEventId: entry[0].eventId,
+        data: { entryId: input.entryId, amount: entry[0].amountCollected, reason: input.remarks },
+      });
+      
+      return { success: true };
     }),
 
   getMyAssignedEvents: publicProcedure
