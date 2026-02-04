@@ -583,18 +583,11 @@ export default function CreateEventScreen() {
                     onPress={() => handleTaskCategoryChange(cat.id as 'S&M' | 'O&M')}
                   >
                     {isSelected && <Check size={16} color="#FFFFFF" />}
-                    <View style={{ alignItems: 'center' }}>
-                      <Text style={[
-                        styles.categoryChipText,
-                        isSelected && styles.categoryChipTextSelected,
-                        { fontWeight: '600' }
-                      ]}>{cat.label}</Text>
-                      <Text style={[
-                        styles.categoryChipText,
-                        isSelected && styles.categoryChipTextSelected,
-                        { fontSize: 10, opacity: 0.8 }
-                      ]}>{cat.description}</Text>
-                    </View>
+                    <Text style={[
+                      styles.categoryChipText,
+                      isSelected && styles.categoryChipTextSelected,
+                      { fontWeight: '600' }
+                    ]}>{cat.label}</Text>
                   </TouchableOpacity>
                 );
               })}
@@ -1515,32 +1508,34 @@ const styles = StyleSheet.create({
   financeTargetRow: {
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
-    justifyContent: 'space-between' as const,
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: Colors.light.border,
+    gap: 12,
   },
   financeTargetLabel: {
     fontSize: 14,
     fontWeight: '500' as const,
     color: Colors.light.text,
-    flex: 1,
+    width: 100,
+    flexShrink: 0,
   },
   financeInputWrapper: {
+    flex: 1,
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
-    backgroundColor: '#F9FAFB',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: Colors.light.border,
     borderRadius: 8,
     paddingHorizontal: 12,
-    minWidth: 140,
+    height: 48,
   },
   rupeeSymbol: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600' as const,
     color: Colors.light.primary,
-    marginRight: 4,
+    marginRight: 8,
   },
   financeInput: {
     flex: 1,
