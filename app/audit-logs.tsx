@@ -52,13 +52,20 @@ export default function AuditLogsScreen() {
                       <View style={styles.logMetaItem}>
                         <Calendar size={14} color={Colors.light.textSecondary} />
                         <Text style={styles.logMetaText}>
-                          {new Date(log.timestamp).toLocaleString('en-IN', {
-                            day: 'numeric',
-                            month: 'short',
-                            year: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
+                          {(() => {
+                            // Database stores timestamps in IST but JSON serialization treats them as UTC
+                            // Use UTC getters since the stored values are actually IST values marked as UTC
+                            const date = new Date(log.timestamp);
+                            const day = date.getUTCDate();
+                            const month = new Date(date.getUTCFullYear(), date.getUTCMonth(), 1).toLocaleString('en-IN', { month: 'short' });
+                            const year = date.getUTCFullYear();
+                            let hours = date.getUTCHours();
+                            const minutes = date.getUTCMinutes().toString().padStart(2, '0');
+                            const ampm = hours >= 12 ? 'pm' : 'am';
+                            hours = hours % 12;
+                            hours = hours ? hours : 12;
+                            return `${day} ${month} ${year}, ${hours.toString().padStart(2, '0')}:${minutes} ${ampm}`;
+                          })()}
                         </Text>
                       </View>
                     </View>
