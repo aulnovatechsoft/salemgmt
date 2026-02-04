@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { eq, sql, desc, and, isNull, inArray, like, or } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
-import { db, employees, employeeMaster, auditLogs, events, bbmWiseOlte } from "@/backend/db";
+import { db, employees, employeeMaster, auditLogs, events, bbmWiseOlte, outstandingFtthLcAmount } from "@/backend/db";
 import bcrypt from "bcryptjs";
 
 const SALT_ROUNDS = 10;
@@ -1488,34 +1488,36 @@ export const adminRouter = createTRPCRouter({
     }).optional())
     .query(async ({ input }) => {
       console.log("getOutstandingSummary called with input:", input);
-      let whereClause = sql`1=1`;
       
+      let circleFilter = sql`1=1`;
       if (input?.circle) {
-        whereClause = sql`circle = ${input.circle}`;
+        circleFilter = sql`circle = ${input.circle}`;
       }
       
-      // Note: Database values were imported with 100× inflation (10^9 instead of 10^7)
-      // Apply correction factor of 100 to get accurate amounts
-      const CORRECTION_FACTOR = 100;
+      // Using the new outstanding_ftth_lc_amount table for circle-wise aggregation
+      // Amounts are stored in Lakhs - convert to rupees by multiplying by 100000
+      const LAKHS_TO_RUPEES = 100000;
       
+      // FTTH Outstanding - aggregate from all circle entries per employee
       const ftthResult = await db.execute(sql`
         SELECT 
-          COUNT(*) as employee_count,
-          COALESCE(SUM(CAST(outstanding_ftth AS NUMERIC)), 0) / ${CORRECTION_FACTOR} as total_amount
-        FROM employees
-        WHERE outstanding_ftth IS NOT NULL 
-          AND CAST(outstanding_ftth AS NUMERIC) > 0
-          AND ${whereClause}
+          COUNT(DISTINCT pers_no) as employee_count,
+          COALESCE(SUM(CAST(outstanding_ftth_amount AS NUMERIC)), 0) * ${LAKHS_TO_RUPEES} as total_amount
+        FROM outstanding_ftth_lc_amount
+        WHERE outstanding_ftth_amount IS NOT NULL 
+          AND CAST(outstanding_ftth_amount AS NUMERIC) > 0
+          AND ${circleFilter}
       `);
       
+      // LC Outstanding - aggregate from all circle entries per employee  
       const lcResult = await db.execute(sql`
         SELECT 
-          COUNT(*) as employee_count,
-          COALESCE(SUM(CAST(outstanding_lc AS NUMERIC)), 0) / ${CORRECTION_FACTOR} as total_amount
-        FROM employees
-        WHERE outstanding_lc IS NOT NULL 
-          AND CAST(outstanding_lc AS NUMERIC) > 0
-          AND ${whereClause}
+          COUNT(DISTINCT pers_no) as employee_count,
+          COALESCE(SUM(CAST(outstanding_lc_amount AS NUMERIC)), 0) * ${LAKHS_TO_RUPEES} as total_amount
+        FROM outstanding_ftth_lc_amount
+        WHERE outstanding_lc_amount IS NOT NULL 
+          AND CAST(outstanding_lc_amount AS NUMERIC) > 0
+          AND ${circleFilter}
       `);
       
       const ftthData = (ftthResult as any)[0] || { employee_count: '0', total_amount: '0' };
@@ -1543,35 +1545,39 @@ export const adminRouter = createTRPCRouter({
       offset: z.number().optional().default(0),
     }))
     .query(async ({ input }) => {
-      const column = input.type === 'ftth' ? 'outstanding_ftth' : 'outstanding_lc';
-      // Note: Database values were imported with 100× inflation (10^9 instead of 10^7)
-      const CORRECTION_FACTOR = 100;
+      const column = input.type === 'ftth' ? 'outstanding_ftth_amount' : 'outstanding_lc_amount';
+      // Amounts are stored in Lakhs - convert to rupees by multiplying by 100000
+      const LAKHS_TO_RUPEES = 100000;
       
       let circleFilter = sql`1=1`;
       if (input.circle) {
-        circleFilter = sql`circle = ${input.circle}`;
+        circleFilter = sql`o.circle = ${input.circle}`;
       }
       
+      // Aggregate amounts per employee from all their circles, join with employee_master for details
       const result = await db.execute(sql`
         SELECT 
-          id,
-          name,
-          pers_no,
-          circle,
-          designation,
-          (CAST(${sql.raw(column)} AS NUMERIC) / ${CORRECTION_FACTOR})::text as outstanding_amount
-        FROM employees
-        WHERE ${sql.raw(column)} IS NOT NULL 
-          AND CAST(${sql.raw(column)} AS NUMERIC) > 0
+          COALESCE(em.id::text, o.pers_no) as id,
+          COALESCE(em.name, 'Unknown') as name,
+          o.pers_no,
+          em.circle,
+          em.designation,
+          (SUM(CAST(${sql.raw(column)} AS NUMERIC)) * ${LAKHS_TO_RUPEES})::text as outstanding_amount,
+          json_agg(json_build_object('circle', o.circle, 'amount', (CAST(${sql.raw(column)} AS NUMERIC) * ${LAKHS_TO_RUPEES})::text)) as circle_breakdown
+        FROM outstanding_ftth_lc_amount o
+        LEFT JOIN employee_master em ON em.pers_no = o.pers_no
+        WHERE o.${sql.raw(column)} IS NOT NULL 
+          AND CAST(o.${sql.raw(column)} AS NUMERIC) > 0
           AND ${circleFilter}
-        ORDER BY CAST(${sql.raw(column)} AS NUMERIC) DESC
+        GROUP BY o.pers_no, em.id, em.name, em.circle, em.designation
+        ORDER BY SUM(CAST(o.${sql.raw(column)} AS NUMERIC)) DESC
         LIMIT ${input.limit}
         OFFSET ${input.offset}
       `);
       
       const countResult = await db.execute(sql`
-        SELECT COUNT(*) as total
-        FROM employees
+        SELECT COUNT(DISTINCT pers_no) as total
+        FROM outstanding_ftth_lc_amount
         WHERE ${sql.raw(column)} IS NOT NULL 
           AND CAST(${sql.raw(column)} AS NUMERIC) > 0
           AND ${circleFilter}
@@ -1587,9 +1593,68 @@ export const adminRouter = createTRPCRouter({
           circle: string | null;
           designation: string | null;
           outstanding_amount: string;
+          circle_breakdown: Array<{ circle: string; amount: string }>;
         }>,
         total,
         hasMore: input.offset + input.limit < total,
+      };
+    }),
+
+  getOutstandingByCircle: publicProcedure
+    .input(z.object({
+      type: z.enum(['ftth', 'lc', 'both']).optional().default('both'),
+      limit: z.number().optional().default(50),
+    }))
+    .query(async ({ input }) => {
+      // Amounts are stored in Lakhs - convert to rupees by multiplying by 100000
+      const LAKHS_TO_RUPEES = 100000;
+      
+      // Get circle-wise breakdown of outstanding amounts
+      const result = await db.execute(sql`
+        SELECT 
+          circle,
+          COUNT(DISTINCT pers_no) as employee_count,
+          COALESCE(SUM(CAST(outstanding_ftth_amount AS NUMERIC)), 0) * ${LAKHS_TO_RUPEES} as ftth_amount,
+          COALESCE(SUM(CAST(outstanding_lc_amount AS NUMERIC)), 0) * ${LAKHS_TO_RUPEES} as lc_amount,
+          (COALESCE(SUM(CAST(outstanding_ftth_amount AS NUMERIC)), 0) + COALESCE(SUM(CAST(outstanding_lc_amount AS NUMERIC)), 0)) * ${LAKHS_TO_RUPEES} as total_amount
+        FROM outstanding_ftth_lc_amount
+        WHERE (outstanding_ftth_amount IS NOT NULL AND CAST(outstanding_ftth_amount AS NUMERIC) > 0)
+          OR (outstanding_lc_amount IS NOT NULL AND CAST(outstanding_lc_amount AS NUMERIC) > 0)
+        GROUP BY circle
+        ORDER BY 
+          CASE WHEN ${input.type} = 'ftth' THEN SUM(CAST(outstanding_ftth_amount AS NUMERIC))
+               WHEN ${input.type} = 'lc' THEN SUM(CAST(outstanding_lc_amount AS NUMERIC))
+               ELSE (COALESCE(SUM(CAST(outstanding_ftth_amount AS NUMERIC)), 0) + COALESCE(SUM(CAST(outstanding_lc_amount AS NUMERIC)), 0))
+          END DESC
+        LIMIT ${input.limit}
+      `);
+      
+      // Get total summary
+      const totalResult = await db.execute(sql`
+        SELECT 
+          COUNT(DISTINCT pers_no) as total_employees,
+          COALESCE(SUM(CAST(outstanding_ftth_amount AS NUMERIC)), 0) * ${LAKHS_TO_RUPEES} as total_ftth,
+          COALESCE(SUM(CAST(outstanding_lc_amount AS NUMERIC)), 0) * ${LAKHS_TO_RUPEES} as total_lc
+        FROM outstanding_ftth_lc_amount
+        WHERE (outstanding_ftth_amount IS NOT NULL AND CAST(outstanding_ftth_amount AS NUMERIC) > 0)
+          OR (outstanding_lc_amount IS NOT NULL AND CAST(outstanding_lc_amount AS NUMERIC) > 0)
+      `);
+      
+      const totals = (totalResult as any)[0] || { total_employees: '0', total_ftth: '0', total_lc: '0' };
+      
+      return {
+        circles: result as unknown as Array<{
+          circle: string;
+          employee_count: string;
+          ftth_amount: string;
+          lc_amount: string;
+          total_amount: string;
+        }>,
+        summary: {
+          totalEmployees: parseInt(totals.total_employees || '0'),
+          totalFtth: totals.total_ftth?.toString() || '0',
+          totalLc: totals.total_lc?.toString() || '0',
+        },
       };
     }),
 
