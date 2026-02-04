@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { Plus, Search, Calendar, MapPin, Users, Play, Pause, CheckCircle, XCircle, FileText, Edit3, ChevronRight, Zap } from 'lucide-react-native';
+import { Plus, Search, Calendar, MapPin, Users, Play, Pause, CheckCircle, XCircle, FileText, Edit3, ChevronRight, ChevronDown, ChevronUp, Zap, Briefcase } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
@@ -34,7 +34,9 @@ export default function EventsScreen() {
     }
   );
   
-  const events: Event[] = useMemo(() => {
+  type EventWithOwnership = Event & { ownershipCategory: 'created_by_me' | 'assigned_to_me' | 'subordinate_task' | 'draft_task' };
+  
+  const events: EventWithOwnership[] = useMemo(() => {
     if (!myEventsData) return [];
     return myEventsData.map((e: any) => ({
       id: e.id,
@@ -75,6 +77,7 @@ export default function EventsScreen() {
       ftthDownCompleted: e.ftthDownCompleted || 0,
       routeFailCompleted: e.routeFailCompleted || 0,
       ofcFailCompleted: e.ofcFailCompleted || 0,
+      ownershipCategory: e.ownershipCategory || 'subordinate_task',
     }));
   }, [myEventsData]);
   
@@ -113,6 +116,18 @@ export default function EventsScreen() {
 
   const canEditEvent = canCreateEvents(employee?.role || 'SALES_STAFF');
 
+  const [activeCategory, setActiveCategory] = useState<'all' | 'created_by_me' | 'assigned_to_me' | 'subordinate_task' | 'draft_task'>('all');
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    created_by_me: true,
+    assigned_to_me: true,
+    subordinate_task: true,
+    draft_task: true,
+  });
+
+  const toggleSection = (section: string) => {
+    setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
+
   const filteredEvents = useMemo(() => {
     let filtered = events;
 
@@ -143,32 +158,25 @@ export default function EventsScreen() {
     return { status: 'active', label: 'Active' };
   };
 
-  const draftEvents = filteredEvents.filter(e => e.status === 'draft');
-  const activeEvents = filteredEvents.filter(e => {
-    const status = e.status as EventStatus;
-    if (status === 'draft' || status === 'paused' || status === 'completed' || status === 'cancelled') return false;
-    const today = new Date();
-    const startDate = new Date(e.dateRange.startDate);
-    const endDate = new Date(e.dateRange.endDate);
-    return startDate <= today && endDate >= today;
-  });
-  const pausedEvents = filteredEvents.filter(e => e.status === 'paused');
-  const upcomingEvents = filteredEvents.filter(e => {
-    const status = e.status as EventStatus;
-    if (status === 'draft' || status === 'paused' || status === 'completed' || status === 'cancelled') return false;
-    const today = new Date();
-    const startDate = new Date(e.dateRange.startDate);
-    return startDate > today;
-  });
-  const completedEvents = filteredEvents.filter(e => e.status === 'completed');
-  const cancelledEvents = filteredEvents.filter(e => e.status === 'cancelled');
-  const pastEvents = filteredEvents.filter(e => {
-    const status = e.status as EventStatus;
-    if (status === 'draft' || status === 'paused' || status === 'completed' || status === 'cancelled') return false;
-    const today = new Date();
-    const endDate = new Date(e.dateRange.endDate);
-    return endDate < today;
-  });
+  const createdByMeEvents = filteredEvents.filter(e => e.ownershipCategory === 'created_by_me');
+  const assignedToMeEvents = filteredEvents.filter(e => e.ownershipCategory === 'assigned_to_me');
+  const subordinateEvents = filteredEvents.filter(e => e.ownershipCategory === 'subordinate_task');
+  const draftEvents = filteredEvents.filter(e => e.ownershipCategory === 'draft_task');
+
+  const categoryCounts = {
+    all: filteredEvents.length,
+    created_by_me: createdByMeEvents.length,
+    assigned_to_me: assignedToMeEvents.length,
+    subordinate_task: subordinateEvents.length,
+    draft_task: draftEvents.length,
+  };
+
+  const CATEGORY_CONFIG = {
+    created_by_me: { label: 'Created by Me', icon: Edit3, color: '#1565C0', bg: '#E3F2FD' },
+    assigned_to_me: { label: 'Assigned to Me', icon: Users, color: '#2E7D32', bg: '#E8F5E9' },
+    subordinate_task: { label: 'Team Tasks', icon: Users, color: '#7B1FA2', bg: '#F3E5F5' },
+    draft_task: { label: 'My Drafts', icon: FileText, color: '#78909C', bg: '#ECEFF1' },
+  };
 
   return (
     <>
@@ -206,87 +214,122 @@ export default function EventsScreen() {
           />
         </View>
 
+        <View style={styles.categorySummary}>
+          <View style={styles.categoryChipsRow}>
+            <TouchableOpacity 
+              style={[styles.categoryChip, activeCategory === 'all' && styles.categoryChipActive]}
+              onPress={() => setActiveCategory('all')}
+            >
+              <Text style={[styles.categoryChipText, activeCategory === 'all' && styles.categoryChipTextActive]}>
+                All ({categoryCounts.all})
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.categoryChip, activeCategory === 'created_by_me' && styles.categoryChipActive, { borderColor: '#1565C0' }]}
+              onPress={() => setActiveCategory('created_by_me')}
+            >
+              <Text style={[styles.categoryChipText, activeCategory === 'created_by_me' && styles.categoryChipTextActive]}>
+                Created ({categoryCounts.created_by_me})
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.categoryChip, activeCategory === 'assigned_to_me' && styles.categoryChipActive, { borderColor: '#2E7D32' }]}
+              onPress={() => setActiveCategory('assigned_to_me')}
+            >
+              <Text style={[styles.categoryChipText, activeCategory === 'assigned_to_me' && styles.categoryChipTextActive]}>
+                Assigned ({categoryCounts.assigned_to_me})
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.categoryChipsRow}>
+            <TouchableOpacity 
+              style={[styles.categoryChip, activeCategory === 'subordinate_task' && styles.categoryChipActive, { borderColor: '#7B1FA2' }]}
+              onPress={() => setActiveCategory('subordinate_task')}
+            >
+              <Text style={[styles.categoryChipText, activeCategory === 'subordinate_task' && styles.categoryChipTextActive]}>
+                Team ({categoryCounts.subordinate_task})
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.categoryChip, activeCategory === 'draft_task' && styles.categoryChipActive, { borderColor: '#78909C' }]}
+              onPress={() => setActiveCategory('draft_task')}
+            >
+              <Text style={[styles.categoryChipText, activeCategory === 'draft_task' && styles.categoryChipTextActive]}>
+                Drafts ({categoryCounts.draft_task})
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
         <ScrollView style={styles.scrollView}>
-          {draftEvents.length > 0 && (
+          {(activeCategory === 'all' || activeCategory === 'created_by_me') && createdByMeEvents.length > 0 && (
             <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <FileText size={18} color="#78909C" />
-                <Text style={styles.sectionTitle}>Draft Tasks ({draftEvents.length})</Text>
-              </View>
-              {draftEvents.map(event => (
+              <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('created_by_me')}>
+                <View style={[styles.sectionIconContainer, { backgroundColor: '#E3F2FD' }]}>
+                  <Edit3 size={16} color="#1565C0" />
+                </View>
+                <Text style={[styles.sectionTitle, { color: '#1565C0' }]}>Created by Me</Text>
+                <View style={styles.sectionCountBadge}>
+                  <Text style={styles.sectionCountText}>{createdByMeEvents.length}</Text>
+                </View>
+                {expandedSections.created_by_me ? <ChevronUp size={18} color="#1565C0" /> : <ChevronDown size={18} color="#1565C0" />}
+              </TouchableOpacity>
+              {expandedSections.created_by_me && createdByMeEvents.map(event => (
+                <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} onActivate={event.status === 'draft' ? handleActivateEvent : undefined} />
+              ))}
+            </View>
+          )}
+
+          {(activeCategory === 'all' || activeCategory === 'assigned_to_me') && assignedToMeEvents.length > 0 && (
+            <View style={styles.section}>
+              <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('assigned_to_me')}>
+                <View style={[styles.sectionIconContainer, { backgroundColor: '#E8F5E9' }]}>
+                  <Briefcase size={16} color="#2E7D32" />
+                </View>
+                <Text style={[styles.sectionTitle, { color: '#2E7D32' }]}>Assigned to Me</Text>
+                <View style={styles.sectionCountBadge}>
+                  <Text style={styles.sectionCountText}>{assignedToMeEvents.length}</Text>
+                </View>
+                {expandedSections.assigned_to_me ? <ChevronUp size={18} color="#2E7D32" /> : <ChevronDown size={18} color="#2E7D32" />}
+              </TouchableOpacity>
+              {expandedSections.assigned_to_me && assignedToMeEvents.map(event => (
+                <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
+              ))}
+            </View>
+          )}
+
+          {(activeCategory === 'all' || activeCategory === 'subordinate_task') && subordinateEvents.length > 0 && (
+            <View style={styles.section}>
+              <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('subordinate_task')}>
+                <View style={[styles.sectionIconContainer, { backgroundColor: '#F3E5F5' }]}>
+                  <Users size={16} color="#7B1FA2" />
+                </View>
+                <Text style={[styles.sectionTitle, { color: '#7B1FA2' }]}>Team Tasks</Text>
+                <View style={styles.sectionCountBadge}>
+                  <Text style={styles.sectionCountText}>{subordinateEvents.length}</Text>
+                </View>
+                {expandedSections.subordinate_task ? <ChevronUp size={18} color="#7B1FA2" /> : <ChevronDown size={18} color="#7B1FA2" />}
+              </TouchableOpacity>
+              {expandedSections.subordinate_task && subordinateEvents.map(event => (
+                <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
+              ))}
+            </View>
+          )}
+
+          {(activeCategory === 'all' || activeCategory === 'draft_task') && draftEvents.length > 0 && (
+            <View style={styles.section}>
+              <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleSection('draft_task')}>
+                <View style={[styles.sectionIconContainer, { backgroundColor: '#ECEFF1' }]}>
+                  <FileText size={16} color="#78909C" />
+                </View>
+                <Text style={[styles.sectionTitle, { color: '#78909C' }]}>My Drafts</Text>
+                <View style={styles.sectionCountBadge}>
+                  <Text style={styles.sectionCountText}>{draftEvents.length}</Text>
+                </View>
+                {expandedSections.draft_task ? <ChevronUp size={18} color="#78909C" /> : <ChevronDown size={18} color="#78909C" />}
+              </TouchableOpacity>
+              {expandedSections.draft_task && draftEvents.map(event => (
                 <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} onActivate={handleActivateEvent} />
-              ))}
-            </View>
-          )}
-
-          {activeEvents.length > 0 && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Play size={18} color="#2E7D32" />
-                <Text style={styles.sectionTitle}>Active Tasks ({activeEvents.length})</Text>
-              </View>
-              {activeEvents.map(event => (
-                <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
-              ))}
-            </View>
-          )}
-
-          {pausedEvents.length > 0 && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Pause size={18} color="#EF6C00" />
-                <Text style={styles.sectionTitle}>Paused Tasks ({pausedEvents.length})</Text>
-              </View>
-              {pausedEvents.map(event => (
-                <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
-              ))}
-            </View>
-          )}
-
-          {upcomingEvents.length > 0 && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Calendar size={18} color="#7B1FA2" />
-                <Text style={styles.sectionTitle}>Upcoming Tasks ({upcomingEvents.length})</Text>
-              </View>
-              {upcomingEvents.map(event => (
-                <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
-              ))}
-            </View>
-          )}
-
-          {completedEvents.length > 0 && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <CheckCircle size={18} color="#1565C0" />
-                <Text style={styles.sectionTitle}>Completed Tasks ({completedEvents.length})</Text>
-              </View>
-              {completedEvents.map(event => (
-                <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
-              ))}
-            </View>
-          )}
-
-          {pastEvents.length > 0 && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Calendar size={18} color="#546E7A" />
-                <Text style={styles.sectionTitle}>Past Due Tasks ({pastEvents.length})</Text>
-              </View>
-              {pastEvents.map(event => (
-                <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
-              ))}
-            </View>
-          )}
-
-          {cancelledEvents.length > 0 && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <XCircle size={18} color="#C62828" />
-                <Text style={styles.sectionTitle}>Cancelled Tasks ({cancelledEvents.length})</Text>
-              </View>
-              {cancelledEvents.map(event => (
-                <EventCard key={event.id} event={event} getDisplayStatus={getEventDisplayStatus} canEdit={canEditEvent} />
               ))}
             </View>
           )}
@@ -299,6 +342,16 @@ export default function EventsScreen() {
                 {canCreateEvents(employee?.role || 'SALES_STAFF')
                   ? 'Tap the + button to create your first task'
                   : 'Check back later for upcoming tasks'}
+              </Text>
+            </View>
+          )}
+
+          {filteredEvents.length > 0 && activeCategory !== 'all' && categoryCounts[activeCategory] === 0 && (
+            <View style={styles.emptyState}>
+              <FileText size={48} color={Colors.light.textSecondary} />
+              <Text style={styles.emptyTitle}>No Tasks in This Category</Text>
+              <Text style={styles.emptySubtitle}>
+                Try selecting a different category or "All" to see all tasks
               </Text>
             </View>
           )}
@@ -532,13 +585,64 @@ const styles = StyleSheet.create({
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
     marginBottom: 12,
+    paddingVertical: 8,
+  },
+  sectionIconContainer: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold' as const,
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '700' as const,
     color: Colors.light.text,
+  },
+  sectionCountBadge: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  sectionCountText: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: '#374151',
+  },
+  categorySummary: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  categoryChipsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  categoryChip: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: Colors.light.background,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    alignItems: 'center',
+  },
+  categoryChipActive: {
+    backgroundColor: Colors.light.primary,
+    borderColor: Colors.light.primary,
+  },
+  categoryChipText: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: '#6B7280',
+  },
+  categoryChipTextActive: {
+    color: Colors.light.background,
   },
   eventCard: {
     backgroundColor: Colors.light.card,
