@@ -2,6 +2,7 @@ import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState, useEffect, useCallback } from 'react';
 import { Employee } from '@/types';
+import { setEmployeeId } from '@/lib/trpc';
 
 const AUTH_KEY = 'bsnl_auth';
 const EMPLOYEE_KEY = 'bsnl_employee';
@@ -23,7 +24,9 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       ]);
 
       if (authToken && employeeData) {
-        setEmployee(JSON.parse(employeeData));
+        const parsedEmployee = JSON.parse(employeeData);
+        setEmployee(parsedEmployee);
+        setEmployeeId(parsedEmployee.id);
         setIsAuthenticated(true);
       }
     } catch (error) {
@@ -38,6 +41,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       await AsyncStorage.setItem(AUTH_KEY, 'authenticated');
       await AsyncStorage.setItem(EMPLOYEE_KEY, JSON.stringify(employeeData));
       setEmployee(employeeData);
+      setEmployeeId(employeeData.id);
       setIsAuthenticated(true);
     } catch (error) {
       console.error('Failed to save auth:', error);
@@ -49,6 +53,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     try {
       await AsyncStorage.multiRemove([AUTH_KEY, EMPLOYEE_KEY]);
       setEmployee(null);
+      setEmployeeId(null);
       setIsAuthenticated(false);
     } catch (error) {
       console.error('Failed to logout:', error);

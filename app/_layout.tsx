@@ -43,6 +43,8 @@ function RootLayoutNav() {
       <Stack.Screen name="sales-approval" options={{ headerShown: true }} />
       <Stack.Screen name="resource-management" options={{ headerShown: true }} />
       <Stack.Screen name="notifications" options={{ headerShown: true, title: "Notifications" }} />
+      <Stack.Screen name="submit-sales" options={{ headerShown: true, title: "Submit Sales" }} />
+      <Stack.Screen name="submit-finance" options={{ headerShown: true, title: "Submit Collection" }} />
     </Stack>
   );
 }

@@ -131,6 +131,11 @@ export default function DashboardScreen() {
     { enabled: !!employee?.id && isManagementRole }
   );
 
+  const { data: financeSummary } = trpc.sales.getFinanceSummary.useQuery(
+    { employeeId: employee?.id || '' },
+    { enabled: !!employee?.id }
+  );
+
   const { data: ftthPendingEmployeesData, isLoading: loadingFtthPendingEmployees, error: ftthPendingError } = trpc.ftthPending.getEmployeesWithPending.useQuery(
     { limit: 200 },
     { enabled: ftthPendingModalVisible && isManagementRole }
@@ -281,6 +286,14 @@ export default function DashboardScreen() {
             subtitle="Requires attention"
             color={stats.pendingIssues > 0 ? Colors.light.error : Colors.light.success}
             onPress={() => router.push('/(tabs)/issues')}
+          />
+          <StatCard
+            icon={<IndianRupee size={24} color="#00838F" />}
+            label="Collections"
+            value={formatINRCompact(financeSummary?.totalCollected || 0)}
+            subtitle={financeSummary?.totalTarget ? `${Math.round(((financeSummary?.totalCollected || 0) / financeSummary.totalTarget) * 100)}% of ${formatINRCompact(financeSummary.totalTarget)}` : `${financeSummary?.entries || 0} entries`}
+            color="#00838F"
+            onPress={() => router.push('/finance-collection-detail' as any)}
           />
         </View>
 

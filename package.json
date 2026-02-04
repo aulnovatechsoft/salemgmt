@@ -67,7 +67,7 @@
     "@expo/ngrok": "^4.1.0",
     "@types/bcryptjs": "^3.0.0",
     "@types/react": "~19.1.10",
-    "drizzle-kit": "latest",
+    "drizzle-kit": "^0.31.8",
     "eslint": "^9.31.0",
     "eslint-config-expo": "~10.0.0",
     "typescript": "~5.9.2"
