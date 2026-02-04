@@ -1623,6 +1623,13 @@ export const eventsRouter = createTRPCRouter({
         approvalStatus: 'pending',
       }).returning();
       
+      // Update the event's collected amount
+      const updateData: Record<string, number> = {};
+      updateData[collectedField] = newTotal;
+      await db.update(events).set(updateData).where(eq(events.id, input.eventId));
+      
+      console.log(`[FINANCE] Updated ${collectedField} for event ${input.eventId}: ${currentCollected} -> ${newTotal}`);
+      
       await db.insert(auditLogs).values({
         action: 'SUBMIT_FINANCE_COLLECTION',
         entityType: 'FINANCE',
