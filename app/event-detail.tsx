@@ -433,6 +433,10 @@ export default function EventDetailScreen() {
   const managerPurseId = eventData?.assignedToEmployee ? 
     (eventData.assignedToEmployee as any).persNo || null : null;
   
+  // Parse categories to array for exact matching (not substring matching)
+  const parsedCategories = eventData?.category ? eventData.category.split(',').map((c: string) => c.trim()) : [];
+  const hasCategory = (cat: string) => parsedCategories.includes(cat);
+  
   const { data: availableMembers } = trpc.events.getAvailableTeamMembers.useQuery(
     { circle: eventData?.circle as Circle, eventId: id, managerPurseId: managerPurseId || undefined },
     { enabled: !!eventData?.circle && !!id }
@@ -1246,7 +1250,7 @@ export default function EventDetailScreen() {
           <Text style={styles.sectionTitle}>Task Categories & Assignments</Text>
           
           {/* SIM Sales Category Card */}
-          {eventData.category?.includes('SIM') && (
+          {hasCategory('SIM') && (
             <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.SIM.color }]}>
               <View style={styles.categoryCardHeader}>
                 <View style={styles.categoryTitleRow}>
@@ -1299,7 +1303,7 @@ export default function EventDetailScreen() {
           )}
           
           {/* FTTH Sales Category Card */}
-          {eventData.category?.includes('FTTH') && !eventData.category?.includes('FTTH_DOWN') && (
+          {hasCategory('FTTH') && (
             <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.FTTH.color }]}>
               <View style={styles.categoryCardHeader}>
                 <View style={styles.categoryTitleRow}>
@@ -1352,7 +1356,7 @@ export default function EventDetailScreen() {
           )}
           
           {/* Lease Circuit Maintenance Card */}
-          {eventData.category?.includes('LEASE_CIRCUIT') && eventData.targetLease > 0 && (() => {
+          {hasCategory('LEASE_CIRCUIT') && eventData.targetLease > 0 && (() => {
             const slaDisplay = getSlaTimeDisplay(eventData.slaStatus?.lease);
             const completionPct = Math.round(((eventData.leaseCompleted || 0) / eventData.targetLease) * 100);
             return (
@@ -1453,7 +1457,7 @@ export default function EventDetailScreen() {
           })()}
           
           {/* BTS Down Maintenance Card */}
-          {eventData.category?.includes('BTS_DOWN') && eventData.targetBtsDown > 0 && (() => {
+          {hasCategory('BTS_DOWN') && eventData.targetBtsDown > 0 && (() => {
             const slaDisplay = getSlaTimeDisplay(eventData.slaStatus?.btsDown);
             const completionPct = Math.round(((eventData.btsDownCompleted || 0) / eventData.targetBtsDown) * 100);
             return (
@@ -1554,7 +1558,7 @@ export default function EventDetailScreen() {
           })()}
           
           {/* Route Fail Maintenance Card */}
-          {eventData.category?.includes('ROUTE_FAIL') && eventData.targetRouteFail > 0 && (() => {
+          {hasCategory('ROUTE_FAIL') && eventData.targetRouteFail > 0 && (() => {
             const slaDisplay = getSlaTimeDisplay(eventData.slaStatus?.routeFail);
             const completionPct = Math.round(((eventData.routeFailCompleted || 0) / eventData.targetRouteFail) * 100);
             return (
@@ -1655,7 +1659,7 @@ export default function EventDetailScreen() {
           })()}
           
           {/* FTTH Down Maintenance Card */}
-          {eventData.category?.includes('FTTH_DOWN') && eventData.targetFtthDown > 0 && (() => {
+          {hasCategory('FTTH_DOWN') && eventData.targetFtthDown > 0 && (() => {
             const slaDisplay = getSlaTimeDisplay(eventData.slaStatus?.ftthDown);
             const completionPct = Math.round(((eventData.ftthDownCompleted || 0) / eventData.targetFtthDown) * 100);
             return (
@@ -1756,7 +1760,7 @@ export default function EventDetailScreen() {
           })()}
           
           {/* OFC Fail Maintenance Card */}
-          {eventData.category?.includes('OFC_FAIL') && eventData.targetOfcFail > 0 && (() => {
+          {hasCategory('OFC_FAIL') && eventData.targetOfcFail > 0 && (() => {
             const slaDisplay = getSlaTimeDisplay(eventData.slaStatus?.ofcFail);
             const completionPct = Math.round(((eventData.ofcFailCompleted || 0) / eventData.targetOfcFail) * 100);
             return (
@@ -1960,7 +1964,7 @@ export default function EventDetailScreen() {
           {/* ===== FINANCE CATEGORY CARDS ===== */}
           
           {/* LC Collection Finance Card */}
-          {eventData.category?.includes('FIN_LC') && eventData.targetFinLc > 0 && (
+          {hasCategory('FIN_LC') && eventData.targetFinLc > 0 && (
             <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.FIN_LC.color }]}>
               <View style={styles.categoryCardHeader}>
                 <View style={styles.categoryTitleRow}>
@@ -1986,7 +1990,7 @@ export default function EventDetailScreen() {
           )}
           
           {/* LL/FTTH Collection Finance Card */}
-          {eventData.category?.includes('FIN_LL_FTTH') && eventData.targetFinLlFtth > 0 && (
+          {hasCategory('FIN_LL_FTTH') && eventData.targetFinLlFtth > 0 && (
             <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.FIN_LL_FTTH.color }]}>
               <View style={styles.categoryCardHeader}>
                 <View style={styles.categoryTitleRow}>
@@ -2012,7 +2016,7 @@ export default function EventDetailScreen() {
           )}
           
           {/* Tower Collection Finance Card */}
-          {eventData.category?.includes('FIN_TOWER') && eventData.targetFinTower > 0 && (
+          {hasCategory('FIN_TOWER') && eventData.targetFinTower > 0 && (
             <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.FIN_TOWER.color }]}>
               <View style={styles.categoryCardHeader}>
                 <View style={styles.categoryTitleRow}>
@@ -2038,7 +2042,7 @@ export default function EventDetailScreen() {
           )}
           
           {/* GSM PostPaid Collection Finance Card */}
-          {eventData.category?.includes('FIN_GSM_POSTPAID') && eventData.targetFinGsmPostpaid > 0 && (
+          {hasCategory('FIN_GSM_POSTPAID') && eventData.targetFinGsmPostpaid > 0 && (
             <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.FIN_GSM_POSTPAID.color }]}>
               <View style={styles.categoryCardHeader}>
                 <View style={styles.categoryTitleRow}>
@@ -2064,7 +2068,7 @@ export default function EventDetailScreen() {
           )}
           
           {/* Building Rent Collection Finance Card */}
-          {eventData.category?.includes('FIN_RENT_BUILDING') && eventData.targetFinRentBuilding > 0 && (
+          {hasCategory('FIN_RENT_BUILDING') && eventData.targetFinRentBuilding > 0 && (
             <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.FIN_RENT_BUILDING.color }]}>
               <View style={styles.categoryCardHeader}>
                 <View style={styles.categoryTitleRow}>
@@ -2362,9 +2366,9 @@ export default function EventDetailScreen() {
 
         {/* Finance Collection Entry Button */}
         {(isTeamMember || canManageTeam) && dbStatus === 'active' && 
-          (eventData.category?.includes('FIN_LC') || eventData.category?.includes('FIN_LL_FTTH') || 
-           eventData.category?.includes('FIN_TOWER') || eventData.category?.includes('FIN_GSM_POSTPAID') || 
-           eventData.category?.includes('FIN_RENT_BUILDING')) && (
+          (hasCategory('FIN_LC') || hasCategory('FIN_LL_FTTH') || 
+           hasCategory('FIN_TOWER') || hasCategory('FIN_GSM_POSTPAID') || 
+           hasCategory('FIN_RENT_BUILDING')) && (
           <TouchableOpacity 
             style={[styles.submitSalesButton, { backgroundColor: '#00838F' }]}
             onPress={() => router.push(`/submit-finance?eventId=${id}` as any)}
@@ -2373,11 +2377,11 @@ export default function EventDetailScreen() {
           </TouchableOpacity>
         )}
 
-        {(isTeamMember || canManageTeam) && dbStatus === 'active' && (eventData.category?.includes('SIM') || (eventData.category?.includes('FTTH') && !eventData.category?.includes('FTTH_DOWN'))) && (() => {
+        {(isTeamMember || canManageTeam) && dbStatus === 'active' && (hasCategory('SIM') || hasCategory('FTTH')) && (() => {
           // Find current user's allocation
           const myAllocation = eventData.teamWithAllocations?.find((t: any) => t.employeeId === employee?.id);
-          const hasSim = eventData.category?.includes('SIM');
-          const hasFtth = eventData.category?.includes('FTTH') && !eventData.category?.includes('FTTH_DOWN');
+          const hasSim = hasCategory('SIM');
+          const hasFtth = hasCategory('FTTH');
           
           // Check if targets are fully achieved
           const simAchieved = !hasSim || (myAllocation && (myAllocation.actualSimSold || 0) >= (myAllocation.simTarget || 0) && myAllocation.simTarget > 0);
@@ -2404,13 +2408,13 @@ export default function EventDetailScreen() {
           );
         })()}
 
-        {eventData.salesEntries?.length > 0 && (eventData.category?.includes('SIM') || (eventData.category?.includes('FTTH') && !eventData.category?.includes('FTTH_DOWN'))) && (
+        {eventData.salesEntries?.length > 0 && (hasCategory('SIM') || hasCategory('FTTH')) && (
           <View style={styles.salesSection}>
             <Text style={styles.sectionTitle}>Recent Sales Entries</Text>
             {eventData.salesEntries.slice(0, 5).map((entry: any) => {
               const entryMember = eventData.teamWithAllocations?.find((t: any) => t.employeeId === entry.employeeId);
-              const hasSim = eventData.category?.includes('SIM');
-              const hasFtth = eventData.category?.includes('FTTH') && !eventData.category?.includes('FTTH_DOWN');
+              const hasSim = hasCategory('SIM');
+              const hasFtth = hasCategory('FTTH');
               return (
                 <View key={entry.id} style={styles.salesEntry}>
                   <View style={styles.salesEntryHeader}>
@@ -2463,9 +2467,9 @@ export default function EventDetailScreen() {
 
         {/* Finance Collection Entries Section */}
         {eventData.financeEntries?.length > 0 && (
-          eventData.category?.includes('FIN_LC') || eventData.category?.includes('FIN_LL_FTTH') ||
-          eventData.category?.includes('FIN_TOWER') || eventData.category?.includes('FIN_GSM_POSTPAID') ||
-          eventData.category?.includes('FIN_RENT_BUILDING')
+          hasCategory('FIN_LC') || hasCategory('FIN_LL_FTTH') ||
+          hasCategory('FIN_TOWER') || hasCategory('FIN_GSM_POSTPAID') ||
+          hasCategory('FIN_RENT_BUILDING')
         ) && (
           <View style={styles.salesSection}>
             <Text style={styles.sectionTitle}>Recent Collection Entries</Text>
