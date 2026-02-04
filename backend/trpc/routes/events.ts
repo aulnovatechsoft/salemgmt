@@ -450,6 +450,232 @@ export const eventsRouter = createTRPCRouter({
       return eventsWithProgress;
     }),
 
+  getCategorizedEvents: publicProcedure
+    .input(z.object({
+      employeeId: z.string().uuid(),
+    }))
+    .query(async ({ input }) => {
+      console.log("Fetching categorized events for employee:", input.employeeId);
+      
+      const employee = await db.select().from(employees)
+        .where(eq(employees.id, input.employeeId));
+      
+      if (!employee[0]) {
+        return { createdByMe: [], assignedToMe: [], subordinateTasks: [], draftTasks: [], isAdmin: false };
+      }
+      
+      // Admin users see all tasks - special handling
+      if (employee[0].role === 'ADMIN') {
+        console.log("Admin user - returning all events categorized");
+        const allEvents = await db.select().from(events)
+          .orderBy(desc(events.createdAt));
+        
+        const allEmployeeIds = [...new Set([
+          ...allEvents.map(e => e.createdBy),
+          ...allEvents.map(e => e.assignedTo).filter(Boolean) as string[],
+        ])];
+        
+        let employeeMap = new Map<string, { name: string; designation?: string }>();
+        if (allEmployeeIds.length > 0) {
+          const empRecords = await db.select({
+            id: employees.id,
+            name: employees.name,
+            designation: employees.designation,
+          }).from(employees).where(inArray(employees.id, allEmployeeIds));
+          employeeMap = new Map(empRecords.map(e => [e.id, { name: e.name, designation: e.designation || undefined }]));
+        }
+        
+        const formatEvent = (event: typeof allEvents[0]) => ({
+          id: event.id,
+          name: event.name,
+          location: event.location,
+          circle: event.circle,
+          zone: event.zone,
+          category: event.category,
+          taskCategory: event.taskCategory,
+          status: event.status || 'active',
+          startDate: event.startDate,
+          endDate: event.endDate,
+          targetSim: event.targetSim,
+          targetFtth: event.targetFtth,
+          createdBy: event.createdBy,
+          assignedTo: event.assignedTo,
+          creatorName: employeeMap.get(event.createdBy)?.name || null,
+          assigneeName: event.assignedTo ? employeeMap.get(event.assignedTo)?.name || null : null,
+          assigneeDesignation: event.assignedTo ? employeeMap.get(event.assignedTo)?.designation || null : null,
+          createdAt: event.createdAt,
+        });
+        
+        const nonDrafts = allEvents.filter(e => e.status !== 'draft');
+        const drafts = allEvents.filter(e => e.status === 'draft');
+        
+        return {
+          createdByMe: nonDrafts.map(formatEvent),
+          assignedToMe: [],
+          subordinateTasks: [],
+          draftTasks: drafts.map(formatEvent),
+          isAdmin: true,
+        };
+      }
+      
+      const employeePersNo = employee[0].persNo;
+      const subordinateIds = await getAllSubordinateIds(input.employeeId);
+      
+      let subordinatePersNos: string[] = [];
+      if (subordinateIds.length > 0) {
+        const subEmployees = await db.select({ persNo: employees.persNo })
+          .from(employees)
+          .where(inArray(employees.id, subordinateIds));
+        subordinatePersNos = subEmployees.map(e => e.persNo).filter(Boolean) as string[];
+      }
+      
+      const myPersNos = [employeePersNo].filter(Boolean) as string[];
+      
+      // 1. Tasks created by me (non-draft)
+      const createdByMe = await db.select().from(events)
+        .where(and(
+          eq(events.createdBy, input.employeeId),
+          sql`${events.status} != 'draft'`
+        ))
+        .orderBy(desc(events.createdAt));
+      
+      const createdByMeIds = new Set(createdByMe.map(e => e.id));
+      
+      // 2. Tasks assigned to me or where I'm a team member (not created by me)
+      const myTeamCondition = myPersNos.length > 0
+        ? sql`EXISTS (SELECT 1 FROM jsonb_array_elements_text(${events.assignedTeam}::jsonb) AS elem WHERE elem IN (${sql.raw(myPersNos.map(p => `'${p}'`).join(','))}))`
+        : sql`false`;
+      
+      const assignedToMe = await db.select().from(events)
+        .where(and(
+          sql`${events.status} != 'draft'`,
+          sql`${events.createdBy} != ${input.employeeId}`,
+          or(
+            eq(events.assignedTo, input.employeeId),
+            myTeamCondition
+          )
+        ))
+        .orderBy(desc(events.createdAt));
+      
+      const assignedToMeIds = new Set(assignedToMe.map(e => e.id));
+      
+      // 3. Tasks assigned to subordinates (not created by me, not assigned to me)
+      let subordinateTasks: typeof createdByMe = [];
+      if (subordinateIds.length > 0) {
+        const subTeamCondition = subordinatePersNos.length > 0
+          ? sql`EXISTS (SELECT 1 FROM jsonb_array_elements_text(${events.assignedTeam}::jsonb) AS elem WHERE elem IN (${sql.raw(subordinatePersNos.map(p => `'${p}'`).join(','))}))`
+          : sql`false`;
+        
+        subordinateTasks = await db.select().from(events)
+          .where(and(
+            sql`${events.status} != 'draft'`,
+            sql`${events.createdBy} != ${input.employeeId}`,
+            sql`${events.assignedTo} IS DISTINCT FROM ${input.employeeId}`,
+            or(
+              inArray(events.assignedTo, subordinateIds),
+              subTeamCondition
+            )
+          ))
+          .orderBy(desc(events.createdAt));
+        
+        // Remove tasks that are already in createdByMe or assignedToMe to avoid duplication
+        subordinateTasks = subordinateTasks.filter(e => !createdByMeIds.has(e.id) && !assignedToMeIds.has(e.id));
+      }
+      
+      // 4. Draft tasks visible to me
+      const [allDraftEvents, circleGMMap, managerHierarchyMap] = await Promise.all([
+        db.select().from(events)
+          .where(eq(events.status, 'draft'))
+          .orderBy(desc(events.createdAt)),
+        getAllCircleGMs(),
+        buildManagerHierarchyMap(),
+      ]);
+      
+      const draftTasks: typeof allDraftEvents = [];
+      
+      for (const draftEvent of allDraftEvents) {
+        if (draftEvent.createdBy === input.employeeId) {
+          draftTasks.push(draftEvent);
+          continue;
+        }
+        
+        const circleGMId = circleGMMap.get(draftEvent.circle);
+        
+        if (circleGMId === input.employeeId) {
+          draftTasks.push(draftEvent);
+          continue;
+        }
+        
+        if (circleGMId) {
+          const managersAboveGM = managerHierarchyMap.get(circleGMId) || [];
+          if (managersAboveGM.includes(input.employeeId)) {
+            draftTasks.push(draftEvent);
+            continue;
+          }
+        }
+      }
+      
+      // Get employee names for all events
+      const allEventIds = [
+        ...createdByMe.map(e => e.id),
+        ...assignedToMe.map(e => e.id),
+        ...subordinateTasks.map(e => e.id),
+        ...draftTasks.map(e => e.id),
+      ];
+      
+      const allEmployeeIds = [...new Set([
+        ...createdByMe.map(e => e.createdBy),
+        ...createdByMe.map(e => e.assignedTo).filter(Boolean) as string[],
+        ...assignedToMe.map(e => e.createdBy),
+        ...assignedToMe.map(e => e.assignedTo).filter(Boolean) as string[],
+        ...subordinateTasks.map(e => e.createdBy),
+        ...subordinateTasks.map(e => e.assignedTo).filter(Boolean) as string[],
+        ...draftTasks.map(e => e.createdBy),
+        ...draftTasks.map(e => e.assignedTo).filter(Boolean) as string[],
+      ])];
+      
+      let employeeMap = new Map<string, { name: string; designation?: string }>();
+      if (allEmployeeIds.length > 0) {
+        const empRecords = await db.select({
+          id: employees.id,
+          name: employees.name,
+          designation: employees.designation,
+        }).from(employees).where(inArray(employees.id, allEmployeeIds));
+        employeeMap = new Map(empRecords.map(e => [e.id, { name: e.name, designation: e.designation || undefined }]));
+      }
+      
+      const formatEvents = (eventList: typeof createdByMe) => eventList.map(event => ({
+        id: event.id,
+        name: event.name,
+        location: event.location,
+        circle: event.circle,
+        zone: event.zone,
+        category: event.category,
+        taskCategory: event.taskCategory,
+        status: event.status || 'active',
+        startDate: event.startDate,
+        endDate: event.endDate,
+        targetSim: event.targetSim,
+        targetFtth: event.targetFtth,
+        createdBy: event.createdBy,
+        assignedTo: event.assignedTo,
+        creatorName: employeeMap.get(event.createdBy)?.name || null,
+        assigneeName: event.assignedTo ? employeeMap.get(event.assignedTo)?.name || null : null,
+        assigneeDesignation: event.assignedTo ? employeeMap.get(event.assignedTo)?.designation || null : null,
+        createdAt: event.createdAt,
+      }));
+      
+      console.log(`Categorized events: ${createdByMe.length} created, ${assignedToMe.length} assigned, ${subordinateTasks.length} subordinate, ${draftTasks.length} drafts`);
+      
+      return {
+        createdByMe: formatEvents(createdByMe),
+        assignedToMe: formatEvents(assignedToMe),
+        subordinateTasks: formatEvents(subordinateTasks),
+        draftTasks: formatEvents(draftTasks),
+        isAdmin: false,
+      };
+    }),
+
   getById: publicProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {

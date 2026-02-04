@@ -24,6 +24,7 @@ export default function DashboardScreen() {
   const [showAllCompleted, setShowAllCompleted] = useState(false);
   const [outstandingModal, setOutstandingModal] = useState<{ visible: boolean; type: 'ftth' | 'lc' }>({ visible: false, type: 'ftth' });
   const [ftthPendingModalVisible, setFtthPendingModalVisible] = useState(false);
+  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
 
   const isManagementRole = ['GM', 'CGM', 'DGM', 'AGM'].includes(employee?.role || '');
 
@@ -35,6 +36,16 @@ export default function DashboardScreen() {
       refetchOnWindowFocus: true,
       refetchInterval: 5000,
       staleTime: 0,
+    }
+  );
+
+  const { data: categorizedEvents } = trpc.events.getCategorizedEvents.useQuery(
+    { employeeId: employee?.id || '' },
+    {
+      enabled: !!employee?.id,
+      retry: 1,
+      refetchOnWindowFocus: true,
+      refetchInterval: 10000,
     }
   );
   
@@ -231,14 +242,6 @@ export default function DashboardScreen() {
 
         <View style={styles.statsGrid}>
           <StatCard
-            icon={<Calendar size={24} color={Colors.light.primary} />}
-            label="Total Tasks"
-            value={stats.totalEvents.toString()}
-            subtitle={`${stats.draftEvents} draft, ${stats.activeEvents} active`}
-            color={Colors.light.primary}
-            onPress={() => router.push('/(tabs)/events')}
-          />
-          <StatCard
             icon={<TrendingUp size={24} color={Colors.light.success} />}
             label="SIMs Sold"
             value={stats.simsSold.toString()}
@@ -263,6 +266,180 @@ export default function DashboardScreen() {
             onPress={() => router.push('/(tabs)/issues')}
           />
         </View>
+
+        {categorizedEvents && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>My Tasks Overview</Text>
+            <View style={styles.taskCategoriesContainer}>
+              <TouchableOpacity 
+                style={[styles.taskCategoryCard, expandedCategory === 'created' && styles.taskCategoryCardExpanded]}
+                onPress={() => setExpandedCategory(expandedCategory === 'created' ? null : 'created')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.taskCategoryHeader}>
+                  <View style={[styles.taskCategoryIcon, { backgroundColor: '#E3F2FD' }]}>
+                    <Send size={18} color="#1565C0" />
+                  </View>
+                  <View style={styles.taskCategoryInfo}>
+                    <Text style={styles.taskCategoryTitle}>{categorizedEvents.isAdmin ? 'All Tasks' : 'Created by Me'}</Text>
+                    <Text style={styles.taskCategorySubtitle}>{categorizedEvents.isAdmin ? 'System-wide visibility' : 'Tasks I initiated'}</Text>
+                  </View>
+                  <View style={styles.taskCategoryBadge}>
+                    <Text style={[styles.taskCategoryCount, { color: '#1565C0' }]}>{categorizedEvents.createdByMe.length}</Text>
+                  </View>
+                  <ChevronRight size={18} color="#9CA3AF" style={{ transform: [{ rotate: expandedCategory === 'created' ? '90deg' : '0deg' }] }} />
+                </View>
+                {expandedCategory === 'created' && categorizedEvents.createdByMe.length > 0 && (
+                  <View style={styles.taskCategoryList}>
+                    {categorizedEvents.createdByMe.slice(0, 5).map((task: any) => (
+                      <TouchableOpacity 
+                        key={task.id} 
+                        style={styles.taskListItem}
+                        onPress={() => router.push(`/event-detail?id=${task.id}`)}
+                      >
+                        <View style={[styles.taskStatusDot, { backgroundColor: task.status === 'active' ? '#2E7D32' : task.status === 'completed' ? '#1565C0' : '#78909C' }]} />
+                        <Text style={styles.taskListItemName} numberOfLines={1}>{task.name}</Text>
+                        <Text style={styles.taskListItemStatus}>{task.status}</Text>
+                      </TouchableOpacity>
+                    ))}
+                    {categorizedEvents.createdByMe.length > 5 && (
+                      <TouchableOpacity style={styles.seeMoreLink} onPress={() => router.push('/(tabs)/events')}>
+                        <Text style={styles.seeMoreText}>See all {categorizedEvents.createdByMe.length} tasks</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.taskCategoryCard, expandedCategory === 'assigned' && styles.taskCategoryCardExpanded]}
+                onPress={() => setExpandedCategory(expandedCategory === 'assigned' ? null : 'assigned')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.taskCategoryHeader}>
+                  <View style={[styles.taskCategoryIcon, { backgroundColor: '#E8F5E9' }]}>
+                    <Users size={18} color="#2E7D32" />
+                  </View>
+                  <View style={styles.taskCategoryInfo}>
+                    <Text style={styles.taskCategoryTitle}>Assigned to Me</Text>
+                    <Text style={styles.taskCategorySubtitle}>My team responsibilities</Text>
+                  </View>
+                  <View style={styles.taskCategoryBadge}>
+                    <Text style={[styles.taskCategoryCount, { color: '#2E7D32' }]}>{categorizedEvents.assignedToMe.length}</Text>
+                  </View>
+                  <ChevronRight size={18} color="#9CA3AF" style={{ transform: [{ rotate: expandedCategory === 'assigned' ? '90deg' : '0deg' }] }} />
+                </View>
+                {expandedCategory === 'assigned' && categorizedEvents.assignedToMe.length > 0 && (
+                  <View style={styles.taskCategoryList}>
+                    {categorizedEvents.assignedToMe.slice(0, 5).map((task: any) => (
+                      <TouchableOpacity 
+                        key={task.id} 
+                        style={styles.taskListItem}
+                        onPress={() => router.push(`/event-detail?id=${task.id}`)}
+                      >
+                        <View style={[styles.taskStatusDot, { backgroundColor: task.status === 'active' ? '#2E7D32' : task.status === 'completed' ? '#1565C0' : '#78909C' }]} />
+                        <Text style={styles.taskListItemName} numberOfLines={1}>{task.name}</Text>
+                        <Text style={styles.taskListItemStatus}>{task.status}</Text>
+                      </TouchableOpacity>
+                    ))}
+                    {categorizedEvents.assignedToMe.length > 5 && (
+                      <TouchableOpacity style={styles.seeMoreLink} onPress={() => router.push('/(tabs)/events')}>
+                        <Text style={styles.seeMoreText}>See all {categorizedEvents.assignedToMe.length} tasks</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.taskCategoryCard, expandedCategory === 'subordinate' && styles.taskCategoryCardExpanded]}
+                onPress={() => setExpandedCategory(expandedCategory === 'subordinate' ? null : 'subordinate')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.taskCategoryHeader}>
+                  <View style={[styles.taskCategoryIcon, { backgroundColor: '#FFF3E0' }]}>
+                    <Target size={18} color="#EF6C00" />
+                  </View>
+                  <View style={styles.taskCategoryInfo}>
+                    <Text style={styles.taskCategoryTitle}>Subordinate Tasks</Text>
+                    <Text style={styles.taskCategorySubtitle}>Tasks in my hierarchy</Text>
+                  </View>
+                  <View style={styles.taskCategoryBadge}>
+                    <Text style={[styles.taskCategoryCount, { color: '#EF6C00' }]}>{categorizedEvents.subordinateTasks.length}</Text>
+                  </View>
+                  <ChevronRight size={18} color="#9CA3AF" style={{ transform: [{ rotate: expandedCategory === 'subordinate' ? '90deg' : '0deg' }] }} />
+                </View>
+                {expandedCategory === 'subordinate' && categorizedEvents.subordinateTasks.length > 0 && (
+                  <View style={styles.taskCategoryList}>
+                    {categorizedEvents.subordinateTasks.slice(0, 5).map((task: any) => (
+                      <TouchableOpacity 
+                        key={task.id} 
+                        style={styles.taskListItem}
+                        onPress={() => router.push(`/event-detail?id=${task.id}`)}
+                      >
+                        <View style={[styles.taskStatusDot, { backgroundColor: task.status === 'active' ? '#2E7D32' : task.status === 'completed' ? '#1565C0' : '#78909C' }]} />
+                        <Text style={styles.taskListItemName} numberOfLines={1}>{task.name}</Text>
+                        <Text style={styles.taskListItemAssignee} numberOfLines={1}>{task.assigneeName || 'Unassigned'}</Text>
+                      </TouchableOpacity>
+                    ))}
+                    {categorizedEvents.subordinateTasks.length > 5 && (
+                      <TouchableOpacity style={styles.seeMoreLink} onPress={() => router.push('/(tabs)/events')}>
+                        <Text style={styles.seeMoreText}>See all {categorizedEvents.subordinateTasks.length} tasks</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.taskCategoryCard, expandedCategory === 'draft' && styles.taskCategoryCardExpanded]}
+                onPress={() => setExpandedCategory(expandedCategory === 'draft' ? null : 'draft')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.taskCategoryHeader}>
+                  <View style={[styles.taskCategoryIcon, { backgroundColor: '#ECEFF1' }]}>
+                    <Clock size={18} color="#78909C" />
+                  </View>
+                  <View style={styles.taskCategoryInfo}>
+                    <Text style={styles.taskCategoryTitle}>Draft Tasks</Text>
+                    <Text style={styles.taskCategorySubtitle}>Pending publication</Text>
+                  </View>
+                  <View style={styles.taskCategoryBadge}>
+                    <Text style={[styles.taskCategoryCount, { color: '#78909C' }]}>{categorizedEvents.draftTasks.length}</Text>
+                  </View>
+                  <ChevronRight size={18} color="#9CA3AF" style={{ transform: [{ rotate: expandedCategory === 'draft' ? '90deg' : '0deg' }] }} />
+                </View>
+                {expandedCategory === 'draft' && categorizedEvents.draftTasks.length > 0 && (
+                  <View style={styles.taskCategoryList}>
+                    {categorizedEvents.draftTasks.slice(0, 5).map((task: any) => (
+                      <TouchableOpacity 
+                        key={task.id} 
+                        style={styles.taskListItem}
+                        onPress={() => router.push(`/event-detail?id=${task.id}`)}
+                      >
+                        <View style={[styles.taskStatusDot, { backgroundColor: '#78909C' }]} />
+                        <Text style={styles.taskListItemName} numberOfLines={1}>{task.name}</Text>
+                        <Text style={styles.taskListItemAssignee} numberOfLines={1}>{task.creatorName || 'Unknown'}</Text>
+                      </TouchableOpacity>
+                    ))}
+                    {categorizedEvents.draftTasks.length > 5 && (
+                      <TouchableOpacity style={styles.seeMoreLink} onPress={() => router.push('/(tabs)/events')}>
+                        <Text style={styles.seeMoreText}>See all {categorizedEvents.draftTasks.length} drafts</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.totalTasksSummary}>
+              <Text style={styles.totalTasksLabel}>Total Visible Tasks</Text>
+              <Text style={styles.totalTasksValue}>
+                {(categorizedEvents.createdByMe.length + categorizedEvents.assignedToMe.length + categorizedEvents.subordinateTasks.length + categorizedEvents.draftTasks.length).toLocaleString()}
+              </Text>
+            </View>
+          </View>
+        )}
 
         {isManagementRole && (
           (outstandingSummary && (safeNumber(outstandingSummary.ftth.totalAmount) > 0 || safeNumber(outstandingSummary.lc.totalAmount) > 0)) ||
@@ -340,136 +517,81 @@ export default function DashboardScreen() {
           </View>
         )}
 
-        {isManagementRole && kamEbGoldSummary && (kamEbGoldSummary.totalPersonnel > 0 || kamEbGoldSummary.totalLeads > 0) && (
+        {isManagementRole && (kamEbGoldSummary || oltSummary) && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>KAM EB Gold Performance</Text>
-            <View style={styles.outstandingCardsRow}>
-              <TouchableOpacity 
-                style={styles.outstandingCard}
-                onPress={() => router.push('/kam-eb-gold-report')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.outstandingCardHeader}>
-                  <View style={[styles.outstandingIconContainer, { backgroundColor: '#E3F2FD' }]}>
-                    <Target size={20} color="#1565C0" />
+            <Text style={styles.sectionTitle}>Management Reports</Text>
+            <View style={styles.reportsRow}>
+              {kamEbGoldSummary && (kamEbGoldSummary.totalPersonnel > 0 || kamEbGoldSummary.totalLeads > 0) && (
+                <TouchableOpacity 
+                  style={styles.consolidatedReportCard}
+                  onPress={() => router.push('/kam-eb-gold-report')}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.reportCardHeader}>
+                    <View style={[styles.reportIconContainer, { backgroundColor: '#E3F2FD' }]}>
+                      <Award size={22} color="#1565C0" />
+                    </View>
+                    <Text style={styles.reportCardTitle}>KAM EB Gold</Text>
+                    <ChevronRight size={18} color="#1565C0" />
                   </View>
-                  <Award size={16} color="#F9A825" />
-                </View>
-                <Text style={styles.outstandingCardTitle}>Total Leads</Text>
-                <Text style={[styles.outstandingCardAmount, { color: '#1565C0' }]} numberOfLines={1} adjustsFontSizeToFit>{kamEbGoldSummary.totalLeads.toLocaleString()}</Text>
-                <Text style={styles.outstandingCardCount}>{kamEbGoldSummary.totalPersonnel} personnel</Text>
-                <View style={styles.outstandingCardAction}>
-                  <Text style={[styles.outstandingCardActionText, { color: '#1565C0' }]}>View Details</Text>
-                  <ChevronRight size={14} color="#1565C0" />
-                </View>
-              </TouchableOpacity>
+                  <View style={styles.reportMetricsRow}>
+                    <View style={styles.reportMetricItem}>
+                      <Target size={16} color="#1565C0" />
+                      <Text style={styles.reportMetricValue}>{kamEbGoldSummary.totalLeads.toLocaleString()}</Text>
+                      <Text style={styles.reportMetricLabel}>Leads</Text>
+                    </View>
+                    <View style={styles.reportMetricDivider} />
+                    <View style={styles.reportMetricItem}>
+                      <DollarSign size={16} color="#2E7D32" />
+                      <Text style={[styles.reportMetricValue, { color: '#2E7D32' }]}>{kamEbGoldSummary.totalLeadValueCrore >= 100 ? `${kamEbGoldSummary.totalLeadValueCrore.toFixed(0)}` : kamEbGoldSummary.totalLeadValueCrore.toFixed(1)} Cr</Text>
+                      <Text style={styles.reportMetricLabel}>Value</Text>
+                    </View>
+                    <View style={styles.reportMetricDivider} />
+                    <View style={styles.reportMetricItem}>
+                      <TrendingUp size={16} color="#7B1FA2" />
+                      <Text style={[styles.reportMetricValue, { color: '#7B1FA2' }]}>{kamEbGoldSummary.leadToBillCrore >= 100 ? `${kamEbGoldSummary.leadToBillCrore.toFixed(0)}` : kamEbGoldSummary.leadToBillCrore.toFixed(1)} Cr</Text>
+                      <Text style={styles.reportMetricLabel}>To Bill</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.reportSubtext}>{kamEbGoldSummary.totalPersonnel} personnel | {kamEbGoldSummary.ebExclusiveCount} EB exclusive</Text>
+                </TouchableOpacity>
+              )}
               
-              <TouchableOpacity 
-                style={styles.outstandingCard}
-                onPress={() => router.push('/kam-eb-gold-report')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.outstandingCardHeader}>
-                  <View style={[styles.outstandingIconContainer, { backgroundColor: '#E8F5E9' }]}>
-                    <DollarSign size={20} color="#2E7D32" />
+              {oltSummary && (
+                <TouchableOpacity 
+                  style={styles.consolidatedReportCard}
+                  onPress={() => router.push('/olt-report')}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.reportCardHeader}>
+                    <View style={[styles.reportIconContainer, { backgroundColor: '#E8F5E9' }]}>
+                      <Server size={22} color="#2E7D32" />
+                    </View>
+                    <Text style={styles.reportCardTitle}>BBM Wise OLT</Text>
+                    <ChevronRight size={18} color="#2E7D32" />
                   </View>
-                  <Award size={16} color="#F9A825" />
-                </View>
-                <Text style={styles.outstandingCardTitle}>Lead Value</Text>
-                <Text style={[styles.outstandingCardAmount, { color: '#2E7D32' }]} numberOfLines={1} adjustsFontSizeToFit>{kamEbGoldSummary.totalLeadValueCrore >= 100 ? `${kamEbGoldSummary.totalLeadValueCrore.toFixed(0)}` : kamEbGoldSummary.totalLeadValueCrore.toFixed(1)} Cr</Text>
-                <Text style={styles.outstandingCardCount}>{kamEbGoldSummary.ebExclusiveCount} EB exclusive</Text>
-                <View style={styles.outstandingCardAction}>
-                  <Text style={[styles.outstandingCardActionText, { color: '#2E7D32' }]}>View Details</Text>
-                  <ChevronRight size={14} color="#2E7D32" />
-                </View>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.outstandingCard}
-                onPress={() => router.push('/kam-eb-gold-report')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.outstandingCardHeader}>
-                  <View style={[styles.outstandingIconContainer, { backgroundColor: '#F3E5F5' }]}>
-                    <TrendingUp size={20} color="#7B1FA2" />
+                  <View style={styles.reportMetricsRow}>
+                    <View style={styles.reportMetricItem}>
+                      <Users size={16} color="#1565C0" />
+                      <Text style={styles.reportMetricValue}>{oltSummary.uniquePersonnel.toLocaleString()}</Text>
+                      <Text style={styles.reportMetricLabel}>Personnel</Text>
+                    </View>
+                    <View style={styles.reportMetricDivider} />
+                    <View style={styles.reportMetricItem}>
+                      <Wifi size={16} color="#2E7D32" />
+                      <Text style={[styles.reportMetricValue, { color: '#2E7D32' }]}>{oltSummary.uniqueOltIps.toLocaleString()}</Text>
+                      <Text style={styles.reportMetricLabel}>OLT IPs</Text>
+                    </View>
+                    <View style={styles.reportMetricDivider} />
+                    <View style={styles.reportMetricItem}>
+                      <Target size={16} color="#EF6C00" />
+                      <Text style={[styles.reportMetricValue, { color: '#EF6C00' }]}>{oltSummary.totalRecords.toLocaleString()}</Text>
+                      <Text style={styles.reportMetricLabel}>Records</Text>
+                    </View>
                   </View>
-                  <Award size={16} color="#F9A825" />
-                </View>
-                <Text style={styles.outstandingCardTitle}>To Bill</Text>
-                <Text style={[styles.outstandingCardAmount, { color: '#7B1FA2' }]} numberOfLines={1} adjustsFontSizeToFit>{kamEbGoldSummary.leadToBillCrore >= 100 ? `${kamEbGoldSummary.leadToBillCrore.toFixed(0)}` : kamEbGoldSummary.leadToBillCrore.toFixed(1)} Cr</Text>
-                <Text style={styles.outstandingCardCount}>{kamEbGoldSummary.totalSalesVisits.toLocaleString()} visits</Text>
-                <View style={styles.outstandingCardAction}>
-                  <Text style={[styles.outstandingCardActionText, { color: '#7B1FA2' }]}>View Details</Text>
-                  <ChevronRight size={14} color="#7B1FA2" />
-                </View>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
-        {isManagementRole && oltSummary && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>BBM Wise OLT Report</Text>
-            <View style={styles.outstandingCardsRow}>
-              <TouchableOpacity 
-                style={styles.outstandingCard}
-                onPress={() => router.push('/olt-report')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.outstandingCardHeader}>
-                  <View style={[styles.outstandingIconContainer, { backgroundColor: '#E3F2FD' }]}>
-                    <Users size={20} color="#1565C0" />
-                  </View>
-                  <Server size={16} color="#2E7D32" />
-                </View>
-                <Text style={styles.outstandingCardTitle}>Personnel</Text>
-                <Text style={[styles.outstandingCardAmount, { color: '#1565C0' }]} numberOfLines={1} adjustsFontSizeToFit>{oltSummary.uniquePersonnel.toLocaleString()}</Text>
-                <Text style={styles.outstandingCardCount}>BBM assignments</Text>
-                <View style={styles.outstandingCardAction}>
-                  <Text style={[styles.outstandingCardActionText, { color: '#1565C0' }]}>View Details</Text>
-                  <ChevronRight size={14} color="#1565C0" />
-                </View>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.outstandingCard}
-                onPress={() => router.push('/olt-report')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.outstandingCardHeader}>
-                  <View style={[styles.outstandingIconContainer, { backgroundColor: '#E8F5E9' }]}>
-                    <Wifi size={20} color="#2E7D32" />
-                  </View>
-                  <Server size={16} color="#2E7D32" />
-                </View>
-                <Text style={styles.outstandingCardTitle}>OLT IPs</Text>
-                <Text style={[styles.outstandingCardAmount, { color: '#2E7D32' }]} numberOfLines={1} adjustsFontSizeToFit>{oltSummary.uniqueOltIps.toLocaleString()}</Text>
-                <Text style={styles.outstandingCardCount}>Network nodes</Text>
-                <View style={styles.outstandingCardAction}>
-                  <Text style={[styles.outstandingCardActionText, { color: '#2E7D32' }]}>View Details</Text>
-                  <ChevronRight size={14} color="#2E7D32" />
-                </View>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.outstandingCard}
-                onPress={() => router.push('/olt-report')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.outstandingCardHeader}>
-                  <View style={[styles.outstandingIconContainer, { backgroundColor: '#FFF3E0' }]}>
-                    <Target size={20} color="#EF6C00" />
-                  </View>
-                  <Server size={16} color="#2E7D32" />
-                </View>
-                <Text style={styles.outstandingCardTitle}>Total Records</Text>
-                <Text style={[styles.outstandingCardAmount, { color: '#EF6C00' }]} numberOfLines={1} adjustsFontSizeToFit>{oltSummary.totalRecords.toLocaleString()}</Text>
-                <Text style={styles.outstandingCardCount}>Infrastructure tracking</Text>
-                <View style={styles.outstandingCardAction}>
-                  <Text style={[styles.outstandingCardActionText, { color: '#EF6C00' }]}>View Details</Text>
-                  <ChevronRight size={14} color="#EF6C00" />
-                </View>
-              </TouchableOpacity>
+                  <Text style={styles.reportSubtext}>Network infrastructure tracking</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         )}
@@ -1537,6 +1659,188 @@ const styles = StyleSheet.create({
   outstandingCardsRow: {
     flexDirection: 'row',
     gap: 12,
+  },
+  reportsRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  consolidatedReportCard: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  reportCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  reportIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  reportCardTitle: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  reportMetricsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  reportMetricItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  reportMetricValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1565C0',
+    marginTop: 4,
+  },
+  reportMetricLabel: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  reportMetricDivider: {
+    width: 1,
+    height: 30,
+    backgroundColor: '#E5E7EB',
+  },
+  reportSubtext: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    textAlign: 'center',
+  },
+  taskCategoriesContainer: {
+    gap: 10,
+  },
+  taskCategoryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    overflow: 'hidden',
+  },
+  taskCategoryCardExpanded: {
+    borderColor: Colors.light.primary,
+  },
+  taskCategoryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+  },
+  taskCategoryIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  taskCategoryInfo: {
+    flex: 1,
+  },
+  taskCategoryTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  taskCategorySubtitle: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    marginTop: 1,
+  },
+  taskCategoryBadge: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    marginRight: 8,
+  },
+  taskCategoryCount: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  taskCategoryList: {
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    backgroundColor: '#F9FAFB',
+    paddingVertical: 8,
+  },
+  taskListItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  taskStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 10,
+  },
+  taskListItemName: {
+    flex: 1,
+    fontSize: 13,
+    color: '#374151',
+  },
+  taskListItemStatus: {
+    fontSize: 11,
+    color: '#6B7280',
+    textTransform: 'capitalize',
+  },
+  taskListItemAssignee: {
+    fontSize: 11,
+    color: '#6B7280',
+    maxWidth: 100,
+  },
+  seeMoreLink: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+  },
+  seeMoreText: {
+    fontSize: 12,
+    color: Colors.light.primary,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  totalTasksSummary: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginTop: 12,
+  },
+  totalTasksLabel: {
+    fontSize: 13,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  totalTasksValue: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1F2937',
   },
   outstandingCard: {
     flex: 1,
