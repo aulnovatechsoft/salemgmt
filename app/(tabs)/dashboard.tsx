@@ -24,7 +24,6 @@ export default function DashboardScreen() {
   const [showAllCompleted, setShowAllCompleted] = useState(false);
   const [outstandingModal, setOutstandingModal] = useState<{ visible: boolean; type: 'ftth' | 'lc' }>({ visible: false, type: 'ftth' });
   const [ftthPendingModalVisible, setFtthPendingModalVisible] = useState(false);
-  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
 
   const isManagementRole = ['GM', 'CGM', 'DGM', 'AGM'].includes(employee?.role || '');
 
@@ -36,16 +35,6 @@ export default function DashboardScreen() {
       refetchOnWindowFocus: true,
       refetchInterval: 5000,
       staleTime: 0,
-    }
-  );
-
-  const { data: categorizedEvents } = trpc.events.getCategorizedEvents.useQuery(
-    { employeeId: employee?.id || '' },
-    {
-      enabled: !!employee?.id,
-      retry: 1,
-      refetchOnWindowFocus: true,
-      refetchInterval: 10000,
     }
   );
   
@@ -242,12 +231,20 @@ export default function DashboardScreen() {
 
         <View style={styles.statsGrid}>
           <StatCard
+            icon={<Calendar size={24} color={Colors.light.primary} />}
+            label="Total Tasks"
+            value={stats.totalEvents.toString()}
+            subtitle={`${stats.draftEvents} draft, ${stats.activeEvents} active`}
+            color={Colors.light.primary}
+            onPress={() => router.push('/(tabs)/events')}
+          />
+          <StatCard
             icon={<TrendingUp size={24} color={Colors.light.success} />}
             label="SIMs Sold"
             value={stats.simsSold.toString()}
             subtitle={`${stats.simsActivated} activated`}
             color={Colors.light.success}
-            onPress={() => router.push('/(tabs)/sales')}
+            onPress={() => router.push('/sim-sales-detail')}
           />
           <StatCard
             icon={<Target size={24} color={Colors.light.info} />}
@@ -255,7 +252,7 @@ export default function DashboardScreen() {
             value={stats.ftthLeads.toString()}
             subtitle={`${stats.ftthInstalled} installed`}
             color={Colors.light.info}
-            onPress={() => router.push('/(tabs)/sales')}
+            onPress={() => router.push('/ftth-sales-detail')}
           />
           <StatCard
             icon={<AlertCircle size={24} color={Colors.light.error} />}
@@ -266,180 +263,6 @@ export default function DashboardScreen() {
             onPress={() => router.push('/(tabs)/issues')}
           />
         </View>
-
-        {categorizedEvents && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>My Tasks Overview</Text>
-            <View style={styles.taskCategoriesContainer}>
-              <TouchableOpacity 
-                style={[styles.taskCategoryCard, expandedCategory === 'created' && styles.taskCategoryCardExpanded]}
-                onPress={() => setExpandedCategory(expandedCategory === 'created' ? null : 'created')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.taskCategoryHeader}>
-                  <View style={[styles.taskCategoryIcon, { backgroundColor: '#E3F2FD' }]}>
-                    <Send size={18} color="#1565C0" />
-                  </View>
-                  <View style={styles.taskCategoryInfo}>
-                    <Text style={styles.taskCategoryTitle}>{categorizedEvents.isAdmin ? 'All Tasks' : 'Created by Me'}</Text>
-                    <Text style={styles.taskCategorySubtitle}>{categorizedEvents.isAdmin ? 'System-wide visibility' : 'Tasks I initiated'}</Text>
-                  </View>
-                  <View style={styles.taskCategoryBadge}>
-                    <Text style={[styles.taskCategoryCount, { color: '#1565C0' }]}>{categorizedEvents.createdByMe.length}</Text>
-                  </View>
-                  <ChevronRight size={18} color="#9CA3AF" style={{ transform: [{ rotate: expandedCategory === 'created' ? '90deg' : '0deg' }] }} />
-                </View>
-                {expandedCategory === 'created' && categorizedEvents.createdByMe.length > 0 && (
-                  <View style={styles.taskCategoryList}>
-                    {categorizedEvents.createdByMe.slice(0, 5).map((task: any) => (
-                      <TouchableOpacity 
-                        key={task.id} 
-                        style={styles.taskListItem}
-                        onPress={() => router.push(`/event-detail?id=${task.id}`)}
-                      >
-                        <View style={[styles.taskStatusDot, { backgroundColor: task.status === 'active' ? '#2E7D32' : task.status === 'completed' ? '#1565C0' : '#78909C' }]} />
-                        <Text style={styles.taskListItemName} numberOfLines={1}>{task.name}</Text>
-                        <Text style={styles.taskListItemStatus}>{task.status}</Text>
-                      </TouchableOpacity>
-                    ))}
-                    {categorizedEvents.createdByMe.length > 5 && (
-                      <TouchableOpacity style={styles.seeMoreLink} onPress={() => router.push('/(tabs)/events')}>
-                        <Text style={styles.seeMoreText}>See all {categorizedEvents.createdByMe.length} tasks</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={[styles.taskCategoryCard, expandedCategory === 'assigned' && styles.taskCategoryCardExpanded]}
-                onPress={() => setExpandedCategory(expandedCategory === 'assigned' ? null : 'assigned')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.taskCategoryHeader}>
-                  <View style={[styles.taskCategoryIcon, { backgroundColor: '#E8F5E9' }]}>
-                    <Users size={18} color="#2E7D32" />
-                  </View>
-                  <View style={styles.taskCategoryInfo}>
-                    <Text style={styles.taskCategoryTitle}>Assigned to Me</Text>
-                    <Text style={styles.taskCategorySubtitle}>My team responsibilities</Text>
-                  </View>
-                  <View style={styles.taskCategoryBadge}>
-                    <Text style={[styles.taskCategoryCount, { color: '#2E7D32' }]}>{categorizedEvents.assignedToMe.length}</Text>
-                  </View>
-                  <ChevronRight size={18} color="#9CA3AF" style={{ transform: [{ rotate: expandedCategory === 'assigned' ? '90deg' : '0deg' }] }} />
-                </View>
-                {expandedCategory === 'assigned' && categorizedEvents.assignedToMe.length > 0 && (
-                  <View style={styles.taskCategoryList}>
-                    {categorizedEvents.assignedToMe.slice(0, 5).map((task: any) => (
-                      <TouchableOpacity 
-                        key={task.id} 
-                        style={styles.taskListItem}
-                        onPress={() => router.push(`/event-detail?id=${task.id}`)}
-                      >
-                        <View style={[styles.taskStatusDot, { backgroundColor: task.status === 'active' ? '#2E7D32' : task.status === 'completed' ? '#1565C0' : '#78909C' }]} />
-                        <Text style={styles.taskListItemName} numberOfLines={1}>{task.name}</Text>
-                        <Text style={styles.taskListItemStatus}>{task.status}</Text>
-                      </TouchableOpacity>
-                    ))}
-                    {categorizedEvents.assignedToMe.length > 5 && (
-                      <TouchableOpacity style={styles.seeMoreLink} onPress={() => router.push('/(tabs)/events')}>
-                        <Text style={styles.seeMoreText}>See all {categorizedEvents.assignedToMe.length} tasks</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={[styles.taskCategoryCard, expandedCategory === 'subordinate' && styles.taskCategoryCardExpanded]}
-                onPress={() => setExpandedCategory(expandedCategory === 'subordinate' ? null : 'subordinate')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.taskCategoryHeader}>
-                  <View style={[styles.taskCategoryIcon, { backgroundColor: '#FFF3E0' }]}>
-                    <Target size={18} color="#EF6C00" />
-                  </View>
-                  <View style={styles.taskCategoryInfo}>
-                    <Text style={styles.taskCategoryTitle}>Subordinate Tasks</Text>
-                    <Text style={styles.taskCategorySubtitle}>Tasks in my hierarchy</Text>
-                  </View>
-                  <View style={styles.taskCategoryBadge}>
-                    <Text style={[styles.taskCategoryCount, { color: '#EF6C00' }]}>{categorizedEvents.subordinateTasks.length}</Text>
-                  </View>
-                  <ChevronRight size={18} color="#9CA3AF" style={{ transform: [{ rotate: expandedCategory === 'subordinate' ? '90deg' : '0deg' }] }} />
-                </View>
-                {expandedCategory === 'subordinate' && categorizedEvents.subordinateTasks.length > 0 && (
-                  <View style={styles.taskCategoryList}>
-                    {categorizedEvents.subordinateTasks.slice(0, 5).map((task: any) => (
-                      <TouchableOpacity 
-                        key={task.id} 
-                        style={styles.taskListItem}
-                        onPress={() => router.push(`/event-detail?id=${task.id}`)}
-                      >
-                        <View style={[styles.taskStatusDot, { backgroundColor: task.status === 'active' ? '#2E7D32' : task.status === 'completed' ? '#1565C0' : '#78909C' }]} />
-                        <Text style={styles.taskListItemName} numberOfLines={1}>{task.name}</Text>
-                        <Text style={styles.taskListItemAssignee} numberOfLines={1}>{task.assigneeName || 'Unassigned'}</Text>
-                      </TouchableOpacity>
-                    ))}
-                    {categorizedEvents.subordinateTasks.length > 5 && (
-                      <TouchableOpacity style={styles.seeMoreLink} onPress={() => router.push('/(tabs)/events')}>
-                        <Text style={styles.seeMoreText}>See all {categorizedEvents.subordinateTasks.length} tasks</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={[styles.taskCategoryCard, expandedCategory === 'draft' && styles.taskCategoryCardExpanded]}
-                onPress={() => setExpandedCategory(expandedCategory === 'draft' ? null : 'draft')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.taskCategoryHeader}>
-                  <View style={[styles.taskCategoryIcon, { backgroundColor: '#ECEFF1' }]}>
-                    <Clock size={18} color="#78909C" />
-                  </View>
-                  <View style={styles.taskCategoryInfo}>
-                    <Text style={styles.taskCategoryTitle}>Draft Tasks</Text>
-                    <Text style={styles.taskCategorySubtitle}>Pending publication</Text>
-                  </View>
-                  <View style={styles.taskCategoryBadge}>
-                    <Text style={[styles.taskCategoryCount, { color: '#78909C' }]}>{categorizedEvents.draftTasks.length}</Text>
-                  </View>
-                  <ChevronRight size={18} color="#9CA3AF" style={{ transform: [{ rotate: expandedCategory === 'draft' ? '90deg' : '0deg' }] }} />
-                </View>
-                {expandedCategory === 'draft' && categorizedEvents.draftTasks.length > 0 && (
-                  <View style={styles.taskCategoryList}>
-                    {categorizedEvents.draftTasks.slice(0, 5).map((task: any) => (
-                      <TouchableOpacity 
-                        key={task.id} 
-                        style={styles.taskListItem}
-                        onPress={() => router.push(`/event-detail?id=${task.id}`)}
-                      >
-                        <View style={[styles.taskStatusDot, { backgroundColor: '#78909C' }]} />
-                        <Text style={styles.taskListItemName} numberOfLines={1}>{task.name}</Text>
-                        <Text style={styles.taskListItemAssignee} numberOfLines={1}>{task.creatorName || 'Unknown'}</Text>
-                      </TouchableOpacity>
-                    ))}
-                    {categorizedEvents.draftTasks.length > 5 && (
-                      <TouchableOpacity style={styles.seeMoreLink} onPress={() => router.push('/(tabs)/events')}>
-                        <Text style={styles.seeMoreText}>See all {categorizedEvents.draftTasks.length} drafts</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                )}
-              </TouchableOpacity>
-            </View>
-            
-            <View style={styles.totalTasksSummary}>
-              <Text style={styles.totalTasksLabel}>Total Visible Tasks</Text>
-              <Text style={styles.totalTasksValue}>
-                {(categorizedEvents.createdByMe.length + categorizedEvents.assignedToMe.length + categorizedEvents.subordinateTasks.length + categorizedEvents.draftTasks.length).toLocaleString()}
-              </Text>
-            </View>
-          </View>
-        )}
 
         {isManagementRole && (
           (outstandingSummary && (safeNumber(outstandingSummary.ftth.totalAmount) > 0 || safeNumber(outstandingSummary.lc.totalAmount) > 0)) ||
@@ -1726,121 +1549,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#9CA3AF',
     textAlign: 'center',
-  },
-  taskCategoriesContainer: {
-    gap: 10,
-  },
-  taskCategoryCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    overflow: 'hidden',
-  },
-  taskCategoryCardExpanded: {
-    borderColor: Colors.light.primary,
-  },
-  taskCategoryHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 14,
-  },
-  taskCategoryIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  taskCategoryInfo: {
-    flex: 1,
-  },
-  taskCategoryTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1F2937',
-  },
-  taskCategorySubtitle: {
-    fontSize: 11,
-    color: '#9CA3AF',
-    marginTop: 1,
-  },
-  taskCategoryBadge: {
-    backgroundColor: '#F3F4F6',
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    marginRight: 8,
-  },
-  taskCategoryCount: {
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  taskCategoryList: {
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
-    backgroundColor: '#F9FAFB',
-    paddingVertical: 8,
-  },
-  taskListItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-  },
-  taskStatusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 10,
-  },
-  taskListItemName: {
-    flex: 1,
-    fontSize: 13,
-    color: '#374151',
-  },
-  taskListItemStatus: {
-    fontSize: 11,
-    color: '#6B7280',
-    textTransform: 'capitalize',
-  },
-  taskListItemAssignee: {
-    fontSize: 11,
-    color: '#6B7280',
-    maxWidth: 100,
-  },
-  seeMoreLink: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
-  },
-  seeMoreText: {
-    fontSize: 12,
-    color: Colors.light.primary,
-    fontWeight: '500',
-    textAlign: 'center',
-  },
-  totalTasksSummary: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#F3F4F6',
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginTop: 12,
-  },
-  totalTasksLabel: {
-    fontSize: 13,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
-  totalTasksValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1F2937',
   },
   outstandingCard: {
     flex: 1,

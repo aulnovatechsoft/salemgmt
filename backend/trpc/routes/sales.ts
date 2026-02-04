@@ -70,6 +70,73 @@ export const salesRouter = createTRPCRouter({
       return result;
     }),
 
+  getByType: publicProcedure
+    .input(z.object({ 
+      type: z.enum(['sim', 'ftth']),
+      employeeId: z.string().uuid(),
+      limit: z.number().min(1).max(500).optional().default(100)
+    }))
+    .query(async ({ input }) => {
+      console.log("Fetching sales data by type:", input.type, "for employee:", input.employeeId);
+      
+      const employee = await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1);
+      if (!employee[0]) {
+        return [];
+      }
+      
+      const userRole = employee[0].role;
+      const userCircle = employee[0].circle;
+      const isAdmin = userRole === 'ADMIN';
+      const isManagement = ['GM', 'CGM', 'DGM', 'AGM'].includes(userRole || '');
+      
+      const conditions = [];
+      if (input.type === 'sim') {
+        conditions.push(sql`${salesReports.simsSold} > 0`);
+      } else {
+        conditions.push(sql`(${salesReports.ftthLeads} > 0 OR ${salesReports.ftthInstalled} > 0)`);
+      }
+      
+      if (!isAdmin && !isManagement && userCircle) {
+        conditions.push(eq(employees.circle, userCircle));
+      }
+      
+      const whereClause = conditions.length > 1 
+        ? and(...conditions)
+        : conditions[0];
+      
+      const results = await db.select({
+        id: salesReports.id,
+        eventId: salesReports.eventId,
+        salesStaffId: salesReports.salesStaffId,
+        simsSold: salesReports.simsSold,
+        simsActivated: salesReports.simsActivated,
+        activatedMobileNumbers: salesReports.activatedMobileNumbers,
+        ftthLeads: salesReports.ftthLeads,
+        ftthInstalled: salesReports.ftthInstalled,
+        activatedFtthIds: salesReports.activatedFtthIds,
+        customerType: salesReports.customerType,
+        status: salesReports.status,
+        createdAt: salesReports.createdAt,
+        remarks: salesReports.remarks,
+        salesStaffName: employees.name,
+        salesStaffDesignation: employees.designation,
+        salesStaffCircle: employees.circle,
+        eventName: events.name,
+        eventLocation: events.location,
+        eventCircle: events.circle,
+        eventStartDate: events.startDate,
+        eventEndDate: events.endDate,
+      })
+      .from(salesReports)
+      .leftJoin(employees, eq(salesReports.salesStaffId, employees.id))
+      .leftJoin(events, eq(salesReports.eventId, events.id))
+      .where(whereClause)
+      .orderBy(desc(salesReports.createdAt))
+      .limit(input.limit);
+      
+      return results;
+    }),
+
   create: publicProcedure
     .input(z.object({
       eventId: z.string().uuid(),
