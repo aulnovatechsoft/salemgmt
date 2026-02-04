@@ -206,14 +206,36 @@ export default function EmployeeOltProfileScreen() {
                 </View>
               </View>
             )}
-            {emp.ssa && (
+            {emp.zone && (
               <View style={styles.infoRow}>
                 <View style={[styles.infoIcon, { backgroundColor: '#F3E5F5' }]}>
                   <Building2 size={18} color="#7B1FA2" />
                 </View>
                 <View style={styles.infoContent}>
-                  <Text style={styles.infoLabel}>SSA</Text>
-                  <Text style={styles.infoValue}>{emp.ssa}</Text>
+                  <Text style={styles.infoLabel}>Zone/SSA</Text>
+                  <Text style={styles.infoValue}>{emp.zone}</Text>
+                </View>
+              </View>
+            )}
+            {emp.division && (
+              <View style={styles.infoRow}>
+                <View style={[styles.infoIcon, { backgroundColor: '#E0F2F1' }]}>
+                  <Briefcase size={18} color="#00796B" />
+                </View>
+                <View style={styles.infoContent}>
+                  <Text style={styles.infoLabel}>Division</Text>
+                  <Text style={styles.infoValue}>{emp.division}</Text>
+                </View>
+              </View>
+            )}
+            {emp.officeName && (
+              <View style={styles.infoRow}>
+                <View style={[styles.infoIcon, { backgroundColor: '#FFECB3' }]}>
+                  <Building2 size={18} color="#FF8F00" />
+                </View>
+                <View style={styles.infoContent}>
+                  <Text style={styles.infoLabel}>Office</Text>
+                  <Text style={styles.infoValue}>{emp.officeName}</Text>
                 </View>
               </View>
             )}
