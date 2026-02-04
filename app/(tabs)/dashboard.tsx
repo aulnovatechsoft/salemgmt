@@ -279,13 +279,13 @@ export default function DashboardScreen() {
                 >
                   <View style={styles.outstandingCardHeader}>
                     <View style={[styles.outstandingIconContainer, { backgroundColor: '#FFEBEE' }]}>
-                      <IndianRupee size={20} color="#D32F2F" />
+                      <IndianRupee size={16} color="#D32F2F" />
                     </View>
-                    <AlertTriangle size={16} color="#D32F2F" />
+                    <AlertTriangle size={14} color="#D32F2F" />
                   </View>
-                  <Text style={styles.outstandingCardTitle}>FTTH Outstanding</Text>
-                  <Text style={styles.outstandingCardAmount} numberOfLines={1} adjustsFontSizeToFit>{formatINRCompact(outstandingSummary.ftth.totalAmount)}</Text>
-                  <Text style={styles.outstandingCardCount}>{outstandingSummary.ftth.employeeCount} employees</Text>
+                  <Text style={styles.outstandingCardTitle} numberOfLines={1}>FTTH Outstanding</Text>
+                  <Text style={styles.outstandingCardAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{formatINRCompact(outstandingSummary.ftth.totalAmount)}</Text>
+                  <Text style={styles.outstandingCardCount} numberOfLines={1}>{outstandingSummary.ftth.employeeCount} employees</Text>
                   <View style={styles.outstandingCardAction}>
                     <Text style={styles.outstandingCardActionText}>View Details</Text>
                     <ChevronRight size={14} color="#D32F2F" />
@@ -301,13 +301,13 @@ export default function DashboardScreen() {
                 >
                   <View style={styles.outstandingCardHeader}>
                     <View style={[styles.outstandingIconContainer, { backgroundColor: '#FFF3E0' }]}>
-                      <IndianRupee size={20} color="#E65100" />
+                      <IndianRupee size={16} color="#E65100" />
                     </View>
-                    <AlertTriangle size={16} color="#E65100" />
+                    <AlertTriangle size={14} color="#E65100" />
                   </View>
-                  <Text style={styles.outstandingCardTitle}>LC Outstanding</Text>
-                  <Text style={[styles.outstandingCardAmount, { color: '#E65100' }]} numberOfLines={1} adjustsFontSizeToFit>{formatINRCompact(outstandingSummary.lc.totalAmount)}</Text>
-                  <Text style={styles.outstandingCardCount}>{outstandingSummary.lc.employeeCount} employees</Text>
+                  <Text style={styles.outstandingCardTitle} numberOfLines={1}>LC Outstanding</Text>
+                  <Text style={[styles.outstandingCardAmount, { color: '#E65100' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{formatINRCompact(outstandingSummary.lc.totalAmount)}</Text>
+                  <Text style={styles.outstandingCardCount} numberOfLines={1}>{outstandingSummary.lc.employeeCount} employees</Text>
                   <View style={styles.outstandingCardAction}>
                     <Text style={[styles.outstandingCardActionText, { color: '#E65100' }]}>View Details</Text>
                     <ChevronRight size={14} color="#E65100" />
@@ -323,13 +323,13 @@ export default function DashboardScreen() {
                 >
                   <View style={styles.outstandingCardHeader}>
                     <View style={[styles.outstandingIconContainer, { backgroundColor: '#E3F2FD' }]}>
-                      <Clock size={20} color="#1565C0" />
+                      <Clock size={16} color="#1565C0" />
                     </View>
-                    <AlertTriangle size={16} color="#1565C0" />
+                    <AlertTriangle size={14} color="#1565C0" />
                   </View>
-                  <Text style={styles.outstandingCardTitle}>FTTH Order Pending</Text>
-                  <Text style={[styles.outstandingCardAmount, { color: '#1565C0' }]} numberOfLines={1} adjustsFontSizeToFit>{Number(ftthPendingSummary.totalPendingOrders).toLocaleString()}</Text>
-                  <Text style={styles.outstandingCardCount}>{Number(ftthPendingSummary.uniqueEmployees).toLocaleString()} employees</Text>
+                  <Text style={styles.outstandingCardTitle} numberOfLines={1}>FTTH Pending</Text>
+                  <Text style={[styles.outstandingCardAmount, { color: '#1565C0' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{Number(ftthPendingSummary.totalPendingOrders).toLocaleString()}</Text>
+                  <Text style={styles.outstandingCardCount} numberOfLines={1}>{Number(ftthPendingSummary.uniqueEmployees).toLocaleString()} employees</Text>
                   <View style={styles.outstandingCardAction}>
                     <Text style={[styles.outstandingCardActionText, { color: '#1565C0' }]}>View Details</Text>
                     <ChevronRight size={14} color="#1565C0" />
@@ -360,23 +360,23 @@ export default function DashboardScreen() {
                   <View style={styles.reportMetricsRow}>
                     <View style={styles.reportMetricItem}>
                       <Target size={16} color="#1565C0" />
-                      <Text style={styles.reportMetricValue}>{kamEbGoldSummary.totalLeads.toLocaleString()}</Text>
+                      <Text style={styles.reportMetricValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{kamEbGoldSummary.totalLeads.toLocaleString()}</Text>
                       <Text style={styles.reportMetricLabel}>Leads</Text>
                     </View>
                     <View style={styles.reportMetricDivider} />
                     <View style={styles.reportMetricItem}>
                       <DollarSign size={16} color="#2E7D32" />
-                      <Text style={[styles.reportMetricValue, { color: '#2E7D32' }]}>{kamEbGoldSummary.totalLeadValueCrore >= 100 ? `${kamEbGoldSummary.totalLeadValueCrore.toFixed(0)}` : kamEbGoldSummary.totalLeadValueCrore.toFixed(1)} Cr</Text>
+                      <Text style={[styles.reportMetricValue, { color: '#2E7D32' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{kamEbGoldSummary.totalLeadValueCrore >= 100 ? `${kamEbGoldSummary.totalLeadValueCrore.toFixed(0)}Cr` : `${kamEbGoldSummary.totalLeadValueCrore.toFixed(1)}Cr`}</Text>
                       <Text style={styles.reportMetricLabel}>Value</Text>
                     </View>
                     <View style={styles.reportMetricDivider} />
                     <View style={styles.reportMetricItem}>
                       <TrendingUp size={16} color="#7B1FA2" />
-                      <Text style={[styles.reportMetricValue, { color: '#7B1FA2' }]}>{kamEbGoldSummary.leadToBillCrore >= 100 ? `${kamEbGoldSummary.leadToBillCrore.toFixed(0)}` : kamEbGoldSummary.leadToBillCrore.toFixed(1)} Cr</Text>
+                      <Text style={[styles.reportMetricValue, { color: '#7B1FA2' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{kamEbGoldSummary.leadToBillCrore >= 100 ? `${kamEbGoldSummary.leadToBillCrore.toFixed(0)}Cr` : `${kamEbGoldSummary.leadToBillCrore.toFixed(1)}Cr`}</Text>
                       <Text style={styles.reportMetricLabel}>To Bill</Text>
                     </View>
                   </View>
-                  <Text style={styles.reportSubtext}>{kamEbGoldSummary.totalPersonnel} personnel | {kamEbGoldSummary.ebExclusiveCount} EB exclusive</Text>
+                  <Text style={styles.reportSubtext} numberOfLines={1}>{kamEbGoldSummary.totalPersonnel} personnel | {kamEbGoldSummary.ebExclusiveCount} EB exclusive</Text>
                 </TouchableOpacity>
               )}
               
@@ -396,23 +396,23 @@ export default function DashboardScreen() {
                   <View style={styles.reportMetricsRow}>
                     <View style={styles.reportMetricItem}>
                       <Users size={16} color="#1565C0" />
-                      <Text style={styles.reportMetricValue}>{oltSummary.uniquePersonnel.toLocaleString()}</Text>
+                      <Text style={styles.reportMetricValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{oltSummary.uniquePersonnel.toLocaleString()}</Text>
                       <Text style={styles.reportMetricLabel}>Personnel</Text>
                     </View>
                     <View style={styles.reportMetricDivider} />
                     <View style={styles.reportMetricItem}>
                       <Wifi size={16} color="#2E7D32" />
-                      <Text style={[styles.reportMetricValue, { color: '#2E7D32' }]}>{oltSummary.uniqueOltIps.toLocaleString()}</Text>
+                      <Text style={[styles.reportMetricValue, { color: '#2E7D32' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{oltSummary.uniqueOltIps.toLocaleString()}</Text>
                       <Text style={styles.reportMetricLabel}>OLT IPs</Text>
                     </View>
                     <View style={styles.reportMetricDivider} />
                     <View style={styles.reportMetricItem}>
                       <Target size={16} color="#EF6C00" />
-                      <Text style={[styles.reportMetricValue, { color: '#EF6C00' }]}>{oltSummary.totalRecords.toLocaleString()}</Text>
+                      <Text style={[styles.reportMetricValue, { color: '#EF6C00' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{oltSummary.totalRecords.toLocaleString()}</Text>
                       <Text style={styles.reportMetricLabel}>Records</Text>
                     </View>
                   </View>
-                  <Text style={styles.reportSubtext}>Network infrastructure tracking</Text>
+                  <Text style={styles.reportSubtext} numberOfLines={1}>Network infrastructure tracking</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -1481,120 +1481,144 @@ const styles = StyleSheet.create({
   },
   outstandingCardsRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 12,
+    justifyContent: 'space-between',
   },
   reportsRow: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     gap: 12,
   },
   consolidatedReportCard: {
-    flex: 1,
+    width: '100%',
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 16,
     borderWidth: 1,
     borderColor: '#E5E7EB',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
   },
   reportCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 14,
   },
   reportIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 10,
+    marginRight: 12,
   },
   reportCardTitle: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '700',
     color: '#1F2937',
   },
   reportMetricsRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    marginBottom: 12,
+    paddingHorizontal: 0,
   },
   reportMetricItem: {
     flex: 1,
     alignItems: 'center',
+    paddingHorizontal: 2,
+    minWidth: 0,
   },
   reportMetricValue: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
     color: '#1565C0',
     marginTop: 4,
+    textAlign: 'center',
   },
   reportMetricLabel: {
     fontSize: 11,
     color: '#6B7280',
     marginTop: 2,
+    textAlign: 'center',
   },
   reportMetricDivider: {
     width: 1,
-    height: 30,
+    height: 36,
     backgroundColor: '#E5E7EB',
+    marginHorizontal: 2,
   },
   reportSubtext: {
     fontSize: 11,
-    color: '#9CA3AF',
+    color: '#6B7280',
     textAlign: 'center',
+    marginTop: 2,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
   },
   outstandingCard: {
-    flex: 1,
+    width: (width - 56) / 3,
+    minWidth: 105,
+    maxWidth: 130,
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 14,
+    padding: 10,
     borderWidth: 1,
-    borderColor: '#FFCDD2',
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 2,
   },
   outstandingCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
   },
   outstandingIconContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
   },
   outstandingCardTitle: {
-    fontSize: 13,
+    fontSize: 10,
     fontWeight: '600',
     color: Colors.light.textSecondary,
     marginBottom: 4,
+    lineHeight: 13,
+    minHeight: 26,
   },
   outstandingCardAmount: {
-    fontSize: 22,
+    fontSize: 14,
     fontWeight: '800',
     color: '#D32F2F',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   outstandingCardCount: {
-    fontSize: 12,
+    fontSize: 9,
     color: Colors.light.textSecondary,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   outstandingCardAction: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 2,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
   },
   outstandingCardActionText: {
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '600',
     color: '#D32F2F',
   },
