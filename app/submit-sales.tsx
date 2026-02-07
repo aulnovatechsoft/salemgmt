@@ -8,6 +8,7 @@ import { useAuth } from '@/contexts/auth';
 import { trpc } from '@/lib/trpc';
 import Colors from '@/constants/colors';
 import { CUSTOMER_TYPES } from '@/constants/app';
+import { uploadPhotos } from '@/lib/photoUpload';
 
 export default function SubmitSalesScreen() {
   const router = useRouter();
@@ -41,6 +42,8 @@ export default function SubmitSalesScreen() {
   const [ftthLeads, setFtthLeads] = useState('');
   const [ftthInstalled, setFtthInstalled] = useState('');
   const [activatedFtthIds, setActivatedFtthIds] = useState('');
+  const [leaseSold, setLeaseSold] = useState('');
+  const [ebSold, setEbSold] = useState('');
   const [customerType, setCustomerType] = useState<any>('B2C');
   const [remarks, setRemarks] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
@@ -141,20 +144,16 @@ export default function SubmitSalesScreen() {
       Alert.alert('Error', 'Please select an event');
       return;
     }
-    const categories = selectedEvent?.category ? selectedEvent.category.split(',') : [];
-    const taskHasSIM = categories.includes('SIM');
-    const taskHasFTTH = categories.includes('FTTH');
-    
-    if (taskHasSIM && !simsSold) {
+    if (hasSIM && !simsSold) {
       Alert.alert('Error', 'Please enter SIMs sold');
       return;
     }
-    if (taskHasFTTH && !ftthLeads) {
+    if (hasFTTH && !ftthLeads) {
       Alert.alert('Error', 'Please enter FTTH sold');
       return;
     }
-    if (!taskHasSIM && !taskHasFTTH) {
-      Alert.alert('Error', 'This task does not have SIM or FTTH sales targets');
+    if (!hasSIM && !hasFTTH && !hasLC && !hasEB) {
+      Alert.alert('Error', 'No sales tasks are assigned to you for this event');
       return;
     }
 
@@ -177,6 +176,30 @@ export default function SubmitSalesScreen() {
     setIsSubmitting(true);
 
     try {
+      let uploadedPhotoResults: { uri: string; latitude?: string; longitude?: string; timestamp: string }[] | undefined;
+
+      if (photos.length > 0) {
+        try {
+          const photosToUpload = photos.map(uri => ({
+            uri,
+            latitude: location?.latitude?.toString(),
+            longitude: location?.longitude?.toString(),
+            timestamp: new Date().toISOString(),
+          }));
+          uploadedPhotoResults = await uploadPhotos(
+            photosToUpload,
+            employee?.id,
+            'sales_entry',
+            selectedEventId
+          );
+        } catch (uploadErr) {
+          console.error('Photo upload failed:', uploadErr);
+          Alert.alert('Upload Error', 'Failed to upload photos. Please try again.');
+          setIsSubmitting(false);
+          return;
+        }
+      }
+
       await submitSalesMutation.mutateAsync({
         eventId: selectedEventId,
         employeeId: employee?.id || '',
@@ -184,7 +207,10 @@ export default function SubmitSalesScreen() {
         simsActivated: parseInt(simsActivated) || 0,
         ftthSold: parseInt(ftthLeads) || 0,
         ftthActivated: parseInt(ftthInstalled) || 0,
+        leaseSold: parseInt(leaseSold) || 0,
+        ebSold: parseInt(ebSold) || 0,
         customerType,
+        photos: uploadedPhotoResults && uploadedPhotoResults.length > 0 ? uploadedPhotoResults : undefined,
         gpsLatitude: location?.latitude?.toString(),
         gpsLongitude: location?.longitude?.toString(),
         remarks: remarks.trim() || undefined,
@@ -197,10 +223,20 @@ export default function SubmitSalesScreen() {
   };
 
   const selectedEvent = events.find(e => e.id === selectedEventId);
+
+  const { data: selectedEventDetails } = trpc.events.getEventWithDetails.useQuery(
+    { id: selectedEventId },
+    { enabled: !!selectedEventId }
+  );
+  const myAssignment = selectedEventDetails?.teamWithAllocations?.find((t: any) => t.employeeId === employee?.id);
+  const myAssignedTypes: string[] = (myAssignment as any)?.assignedTaskTypes || [];
+  const hasSpecificAssignment = myAssignedTypes.length > 0;
   
-  const selectedCategories = selectedEvent?.category ? selectedEvent.category.split(',') : [];
-  const hasSIM = selectedCategories.includes('SIM');
-  const hasFTTH = selectedCategories.includes('FTTH');
+  const selectedCategories = selectedEvent?.category ? selectedEvent.category.split(',').map((c: string) => c.trim()) : [];
+  const hasSIM = selectedCategories.includes('SIM') && (!hasSpecificAssignment || myAssignedTypes.includes('SIM'));
+  const hasFTTH = selectedCategories.includes('FTTH') && (!hasSpecificAssignment || myAssignedTypes.includes('FTTH'));
+  const hasLC = selectedCategories.includes('Lease Circuit') && (!hasSpecificAssignment || myAssignedTypes.includes('LEASE_CIRCUIT'));
+  const hasEB = selectedCategories.includes('EB') && (!hasSpecificAssignment || myAssignedTypes.includes('EB'));
 
   return (
     <>
@@ -357,9 +393,41 @@ export default function SubmitSalesScreen() {
             </View>
           )}
           
-          {!hasSIM && !hasFTTH && selectedEventId && (
+          {hasLC && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Lease Circuit Sales</Text>
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Lease Circuit Sold *</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="0"
+                  value={leaseSold}
+                  onChangeText={setLeaseSold}
+                  keyboardType="number-pad"
+                />
+              </View>
+            </View>
+          )}
+
+          {hasEB && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>EB Connection Sales</Text>
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>EB Connections Sold *</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="0"
+                  value={ebSold}
+                  onChangeText={setEbSold}
+                  keyboardType="number-pad"
+                />
+              </View>
+            </View>
+          )}
+
+          {!hasSIM && !hasFTTH && !hasLC && !hasEB && selectedEventId && (
             <View style={styles.noSalesSection}>
-              <Text style={styles.noSalesText}>This task does not have SIM or FTTH sales targets.</Text>
+              <Text style={styles.noSalesText}>This task does not have any sales targets.</Text>
               <Text style={styles.noSalesSubtext}>Please use the task detail page to update maintenance progress.</Text>
             </View>
           )}

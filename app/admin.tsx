@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, RefreshControl, Platform, Modal, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { Upload, Users, Search, Trash2, Link, ChevronLeft, FileText, CheckCircle, XCircle, BarChart3, Calendar, UserPlus, X } from 'lucide-react-native';
+import { Upload, Users, Search, Trash2, Link, ChevronLeft, ChevronRight, FileText, CheckCircle, XCircle, BarChart3, Calendar, UserPlus, X } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
@@ -29,6 +29,9 @@ export default function AdminScreen() {
   const [activating, setActivating] = useState(false);
   const [activationResult, setActivationResult] = useState<{ activated: number; skipped: number; errors: string[]; passwordFormula: string } | null>(null);
   
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 100;
+  
   const trpcUtils = trpc.useUtils();
   
   const { data: stats, refetch: refetchStats } = trpc.admin.getEmployeeMasterStats.useQuery({ userId: employee?.id });
@@ -38,9 +41,26 @@ export default function AdminScreen() {
   });
   const { data: employeeList, isLoading, refetch } = trpc.admin.getEmployeeMasterList.useQuery({
     linked: filterLinked,
-    limit: 100,
+    limit: ITEMS_PER_PAGE,
+    offset: (currentPage - 1) * ITEMS_PER_PAGE,
     userId: employee?.id,
   });
+  
+  const totalRecords = employeeList?.total || 0;
+  const totalPages = Math.ceil(totalRecords / ITEMS_PER_PAGE);
+  const startRecord = totalRecords === 0 ? 0 : (currentPage - 1) * ITEMS_PER_PAGE + 1;
+  const endRecord = Math.min(currentPage * ITEMS_PER_PAGE, totalRecords);
+  
+  const handlePageChange = (page: number) => {
+    if (page >= 1 && page <= totalPages) {
+      setCurrentPage(page);
+    }
+  };
+  
+  const handleFilterChange = (linked: boolean | undefined) => {
+    setFilterLinked(linked);
+    setCurrentPage(1);
+  };
   
   const importMutation = trpc.admin.importEmployeeMaster.useMutation({
     onSuccess: (result) => {
@@ -720,19 +740,19 @@ Harvest Fair,Bangalore,KARNATAKA,Agri-Tourism,2025-11-01 to 2025-11-05,Agricultu
             <View style={styles.filterRow}>
               <TouchableOpacity 
                 style={[styles.filterBtn, filterLinked === undefined && styles.filterBtnActive]}
-                onPress={() => setFilterLinked(undefined)}
+                onPress={() => handleFilterChange(undefined)}
               >
                 <Text style={[styles.filterBtnText, filterLinked === undefined && styles.filterBtnTextActive]}>All</Text>
               </TouchableOpacity>
               <TouchableOpacity 
                 style={[styles.filterBtn, filterLinked === true && styles.filterBtnActive]}
-                onPress={() => setFilterLinked(true)}
+                onPress={() => handleFilterChange(true)}
               >
                 <Text style={[styles.filterBtnText, filterLinked === true && styles.filterBtnTextActive]}>Linked</Text>
               </TouchableOpacity>
               <TouchableOpacity 
                 style={[styles.filterBtn, filterLinked === false && styles.filterBtnActive]}
-                onPress={() => setFilterLinked(false)}
+                onPress={() => handleFilterChange(false)}
               >
                 <Text style={[styles.filterBtnText, filterLinked === false && styles.filterBtnTextActive]}>Unlinked</Text>
               </TouchableOpacity>
@@ -780,6 +800,54 @@ Harvest Fair,Bangalore,KARNATAKA,Agri-Tourism,2025-11-01 to 2025-11-05,Agricultu
                 </View>
               </View>
             ))
+          )}
+          
+          {totalRecords > 0 && (
+            <View style={styles.paginationContainer}>
+              <Text style={styles.paginationInfo}>
+                Showing {startRecord}-{endRecord} of {totalRecords.toLocaleString()} records
+              </Text>
+              
+              <View style={styles.paginationControls}>
+                <TouchableOpacity
+                  style={[styles.pageButton, currentPage === 1 && styles.pageButtonDisabled]}
+                  onPress={() => handlePageChange(1)}
+                  disabled={currentPage === 1}
+                >
+                  <Text style={[styles.pageButtonText, currentPage === 1 && styles.pageButtonTextDisabled]}>First</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[styles.pageButton, currentPage === 1 && styles.pageButtonDisabled]}
+                  onPress={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage === 1}
+                >
+                  <ChevronLeft size={18} color={currentPage === 1 ? Colors.light.textSecondary : Colors.light.primary} />
+                </TouchableOpacity>
+                
+                <View style={styles.pageIndicator}>
+                  <Text style={styles.pageIndicatorText}>
+                    Page {currentPage} of {totalPages}
+                  </Text>
+                </View>
+                
+                <TouchableOpacity
+                  style={[styles.pageButton, currentPage === totalPages && styles.pageButtonDisabled]}
+                  onPress={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                >
+                  <ChevronRight size={18} color={currentPage === totalPages ? Colors.light.textSecondary : Colors.light.primary} />
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[styles.pageButton, currentPage === totalPages && styles.pageButtonDisabled]}
+                  onPress={() => handlePageChange(totalPages)}
+                  disabled={currentPage === totalPages}
+                >
+                  <Text style={[styles.pageButtonText, currentPage === totalPages && styles.pageButtonTextDisabled]}>Last</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           )}
         </View>
 
@@ -1399,5 +1467,56 @@ const styles = StyleSheet.create({
     color: Colors.light.background,
     fontWeight: '600',
     fontSize: 16,
+  },
+  paginationContainer: {
+    marginTop: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
+    alignItems: 'center',
+  },
+  paginationInfo: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+    marginBottom: 12,
+  },
+  paginationControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  pageButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    backgroundColor: Colors.light.background,
+    borderWidth: 1,
+    borderColor: Colors.light.primary,
+    minWidth: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pageButtonDisabled: {
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.surface,
+  },
+  pageButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.light.primary,
+  },
+  pageButtonTextDisabled: {
+    color: Colors.light.textSecondary,
+  },
+  pageIndicator: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: Colors.light.primary,
+    borderRadius: 6,
+  },
+  pageIndicatorText: {
+    color: Colors.light.background,
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

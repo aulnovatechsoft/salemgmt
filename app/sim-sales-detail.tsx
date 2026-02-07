@@ -23,9 +23,9 @@ export default function SimSalesDetailScreen() {
 
   const totals = useMemo(() => {
     return {
-      sold: salesData.reduce((sum, r) => sum + (r.simsSold || 0), 0),
-      activated: salesData.reduce((sum, r) => sum + (r.simsActivated || 0), 0),
-      target: salesData.reduce((sum, r) => sum + (r.simTarget || 0), 0)
+      sold: salesData.reduce((sum, r) => sum + Number(r.simsSold || 0), 0),
+      activated: salesData.reduce((sum, r) => sum + Number(r.simsActivated || 0), 0),
+      target: salesData.reduce((sum, r) => sum + Number(r.simTarget || 0), 0)
     };
   }, [salesData]);
 

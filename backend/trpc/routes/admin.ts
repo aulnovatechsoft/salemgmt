@@ -34,7 +34,7 @@ export const adminRouter = createTRPCRouter({
       
       // Server-side role validation: Only ADMIN can import CSV
       const uploader = await db.select().from(employees).where(eq(employees.id, input.uploadedBy)).limit(1);
-      if (uploader[0]?.role !== 'ADMIN') {
+      if (uploader[0]?.role !== 'ADMIN' && uploader[0]?.role !== 'CMD') {
         throw new Error('Only admin users can import employee data. Access denied.');
       }
       
@@ -110,7 +110,7 @@ export const adminRouter = createTRPCRouter({
     .input(z.object({
       search: z.string().optional(),
       linked: z.boolean().optional(),
-      limit: z.number().min(1).max(100).default(50),
+      limit: z.number().min(1).max(200).default(100),
       offset: z.number().min(0).default(0),
       userId: z.string().uuid().optional(),
     }).optional())
@@ -356,7 +356,7 @@ export const adminRouter = createTRPCRouter({
       
       // Server-side role validation: Only ADMIN can clear records
       const user = await db.select().from(employees).where(eq(employees.id, input.clearedBy)).limit(1);
-      if (user[0]?.role !== 'ADMIN') {
+      if (user[0]?.role !== 'ADMIN' && user[0]?.role !== 'CMD') {
         throw new Error('Only admin users can clear employee data. Access denied.');
       }
       
@@ -432,7 +432,7 @@ export const adminRouter = createTRPCRouter({
       
       // Server-side role validation: Only ADMIN can import events
       const uploader = await db.select().from(employees).where(eq(employees.id, input.uploadedBy)).limit(1);
-      if (uploader[0]?.role !== 'ADMIN') {
+      if (uploader[0]?.role !== 'ADMIN' && uploader[0]?.role !== 'CMD') {
         throw new Error('Only admin users can import events. Access denied.');
       }
       
@@ -1323,7 +1323,7 @@ export const adminRouter = createTRPCRouter({
       
       // Server-side role validation: Only ADMIN can bulk activate
       const admin = await db.select().from(employees).where(eq(employees.id, input.adminId)).limit(1);
-      if (admin[0]?.role !== 'ADMIN') {
+      if (admin[0]?.role !== 'ADMIN' && admin[0]?.role !== 'CMD') {
         throw new Error('Only admin users can bulk activate employees. Access denied.');
       }
       
@@ -1671,7 +1671,7 @@ export const adminRouter = createTRPCRouter({
       if (!requester[0]) {
         throw new Error('Invalid requester ID. Access denied.');
       }
-      if (!['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(requester[0].role)) {
+      if (!['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(requester[0].role)) {
         throw new Error('Only management users can access outstanding details. Access denied.');
       }
       
@@ -1738,7 +1738,7 @@ export const adminRouter = createTRPCRouter({
     }))
     .query(async ({ input }) => {
       const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
-      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+      if (!user[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
         throw new Error('Only management users can access OLT reports. Access denied.');
       }
       
@@ -1768,7 +1768,7 @@ export const adminRouter = createTRPCRouter({
     }))
     .query(async ({ input }) => {
       const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
-      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+      if (!user[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
         throw new Error('Only management users can access OLT reports. Access denied.');
       }
       
@@ -1824,7 +1824,7 @@ export const adminRouter = createTRPCRouter({
     }))
     .query(async ({ input }) => {
       const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
-      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+      if (!user[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
         throw new Error('Only management users can access OLT reports. Access denied.');
       }
       
@@ -1863,7 +1863,7 @@ export const adminRouter = createTRPCRouter({
     }))
     .query(async ({ input }) => {
       const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
-      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+      if (!user[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
         throw new Error('Only management users can access employee profiles. Access denied.');
       }
       
@@ -1968,7 +1968,7 @@ export const adminRouter = createTRPCRouter({
     }))
     .mutation(async ({ input }) => {
       const uploader = await db.select().from(employees).where(eq(employees.id, input.uploadedBy)).limit(1);
-      if (!uploader[0] || !['ADMIN', 'GM', 'CGM', 'DGM'].includes(uploader[0].role)) {
+      if (!uploader[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM'].includes(uploader[0].role)) {
         throw new Error('Only management users can import OLT data. Access denied.');
       }
       
@@ -2014,7 +2014,7 @@ export const adminRouter = createTRPCRouter({
     }))
     .query(async ({ input }) => {
       const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
-      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+      if (!user[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
         throw new Error('Only management users can access KAM EB Gold reports. Access denied.');
       }
       
@@ -2054,7 +2054,7 @@ export const adminRouter = createTRPCRouter({
     }))
     .query(async ({ input }) => {
       const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
-      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+      if (!user[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
         throw new Error('Only management users can access KAM EB Gold reports. Access denied.');
       }
       
@@ -2145,7 +2145,7 @@ export const adminRouter = createTRPCRouter({
     }))
     .query(async ({ input }) => {
       const user = await db.select().from(employees).where(eq(employees.id, input.userId)).limit(1);
-      if (!user[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
+      if (!user[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(user[0].role)) {
         throw new Error('Only management users can access KAM EB Gold reports. Access denied.');
       }
       

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { eq, and, desc, gte, lte, sql, or, inArray } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
-import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations, financeCollectionEntries } from "@/backend/db";
+import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations, financeCollectionEntries, notifications, maintenanceEntries } from "@/backend/db";
 import { 
   notifyEventAssignment, 
   notifyTaskSubmitted, 
@@ -24,7 +24,15 @@ function getISTDateString(): string {
   return getISTDate().toISOString().split('T')[0];
 }
 
+const subordinateCache = new Map<string, { ids: string[], timestamp: number }>();
+const SUBORDINATE_CACHE_TTL = 5 * 60 * 1000;
+
 async function getAllSubordinateIds(employeeId: string, maxDepth: number = 10): Promise<string[]> {
+  const cached = subordinateCache.get(employeeId);
+  if (cached && (Date.now() - cached.timestamp) < SUBORDINATE_CACHE_TTL) {
+    return cached.ids;
+  }
+
   const employee = await db.select({ persNo: employees.persNo }).from(employees)
     .where(eq(employees.id, employeeId));
   
@@ -33,37 +41,37 @@ async function getAllSubordinateIds(employeeId: string, maxDepth: number = 10): 
   }
   
   const allSubordinateIds: string[] = [];
-  const persNosToProcess: string[] = [employee[0].persNo];
+  let persNosToProcess: string[] = [employee[0].persNo];
   const processedPersNos = new Set<string>();
   let depth = 0;
   
   while (persNosToProcess.length > 0 && depth < maxDepth) {
-    const currentBatch = [...persNosToProcess];
-    persNosToProcess.length = 0;
+    const currentBatch = persNosToProcess.filter(p => !processedPersNos.has(p));
+    if (currentBatch.length === 0) break;
     
-    for (const persNo of currentBatch) {
-      if (processedPersNos.has(persNo)) continue;
-      processedPersNos.add(persNo);
-      
-      const subordinates = await db.select({
-        persNo: employeeMaster.persNo,
-        linkedEmployeeId: employeeMaster.linkedEmployeeId,
-      }).from(employeeMaster)
-        .where(eq(employeeMaster.reportingPersNo, persNo));
-      
-      for (const sub of subordinates) {
-        if (sub.linkedEmployeeId) {
-          allSubordinateIds.push(sub.linkedEmployeeId);
-        }
-        if (sub.persNo && !processedPersNos.has(sub.persNo)) {
-          persNosToProcess.push(sub.persNo);
-        }
+    for (const p of currentBatch) processedPersNos.add(p);
+    
+    const subordinates = await db.select({
+      persNo: employeeMaster.persNo,
+      linkedEmployeeId: employeeMaster.linkedEmployeeId,
+    }).from(employeeMaster)
+      .where(inArray(employeeMaster.reportingPersNo, currentBatch));
+    
+    persNosToProcess = [];
+    for (const sub of subordinates) {
+      if (sub.linkedEmployeeId) {
+        allSubordinateIds.push(sub.linkedEmployeeId);
+      }
+      if (sub.persNo && !processedPersNos.has(sub.persNo)) {
+        persNosToProcess.push(sub.persNo);
       }
     }
     depth++;
   }
   
-  return [...new Set(allSubordinateIds)];
+  const result = [...new Set(allSubordinateIds)];
+  subordinateCache.set(employeeId, { ids: result, timestamp: Date.now() });
+  return result;
 }
 
 let cachedCircleGMs: Map<string, string> | null = null;
@@ -153,7 +161,20 @@ async function buildManagerHierarchyMap(): Promise<Map<string, string[]>> {
   return employeeToManagers;
 }
 
+let lastAutoCompleteRun = 0;
+const AUTO_COMPLETE_INTERVAL = 60 * 1000;
+
 async function autoCompleteExpiredEvents(eventsList: typeof events.$inferSelect[]) {
+  const now = Date.now();
+  if (now - lastAutoCompleteRun < AUTO_COMPLETE_INTERVAL) {
+    const today = getISTDate();
+    today.setHours(0, 0, 0, 0);
+    return eventsList
+      .filter(e => e.status === 'active' && e.endDate && new Date(e.endDate).setHours(23,59,59,999) < today.getTime())
+      .map(e => e.id);
+  }
+  lastAutoCompleteRun = now;
+
   const today = getISTDate();
   today.setHours(0, 0, 0, 0);
   
@@ -189,11 +210,20 @@ export const eventsRouter = createTRPCRouter({
       status: z.string().optional(),
     }).optional())
     .query(async ({ input }) => {
-      console.log("Fetching all events", input);
       const results = await db.select().from(events).orderBy(desc(events.createdAt));
       
       // Get all event assignments to calculate sales progress
       const allAssignments = await db.select().from(eventAssignments);
+      
+      // Get actual sales from event_sales_entries (real submitted data)
+      const allSalesEntrySums = await db.select({
+        eventId: eventSalesEntries.eventId,
+        totalSimsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+        totalFtthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+        totalLeaseSold: sql<number>`COALESCE(SUM(${eventSalesEntries.leaseSold}), 0)::integer`,
+        totalEbSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ebSold}), 0)::integer`,
+      }).from(eventSalesEntries).groupBy(eventSalesEntries.eventId);
+      const salesEntryMap = new Map(allSalesEntrySums.map(s => [s.eventId, s]));
       
       // Get all employee master records for resolving team member names
       const allMasterRecords = await db.select({
@@ -223,9 +253,9 @@ export const eventsRouter = createTRPCRouter({
       
       // Add sales progress and team member details to each event
       const eventsWithProgress = results.map(event => {
-        const eventAssigns = allAssignments.filter(a => a.eventId === event.id);
-        const simSold = eventAssigns.reduce((sum, a) => sum + a.simSold, 0);
-        const ftthSold = eventAssigns.reduce((sum, a) => sum + a.ftthSold, 0);
+        const salesEntry = salesEntryMap.get(event.id);
+        const simSold = Number(salesEntry?.totalSimsSold || 0);
+        const ftthSold = Number(salesEntry?.totalFtthSold || 0);
         
         // Resolve team member names from persNos
         const assignedTeamPurseIds = (event.assignedTeam || []) as string[];
@@ -265,7 +295,6 @@ export const eventsRouter = createTRPCRouter({
       status: z.string().optional(),
     }))
     .query(async ({ input }) => {
-      console.log("Fetching my events for employee:", input.employeeId);
       
       const employee = await db.select().from(employees)
         .where(eq(employees.id, input.employeeId));
@@ -274,9 +303,8 @@ export const eventsRouter = createTRPCRouter({
         return [];
       }
       
-      // Admin users can see all tasks across all circles
-      if (employee[0].role === 'ADMIN') {
-        console.log("Admin user - returning all events");
+      // CMD and Admin users can see all tasks across all circles
+      if (employee[0].role === 'ADMIN' || employee[0].role === 'CMD') {
         const allEvents = await db.select().from(events)
           .orderBy(desc(events.createdAt));
         
@@ -295,7 +323,7 @@ export const eventsRouter = createTRPCRouter({
           } else {
             ownershipCategory = 'subordinate_task';
           }
-          return { ...event, ownershipCategory, simSold: 0, ftthSold: 0, submissionStatus: 'not_started', teamMembers: [], creatorName: null, assigneeName: null, assigneeDesignation: null };
+          return { ...event, ownershipCategory, simSold: 0, ftthSold: 0, submissionStatus: 'not_started', teamMembers: [], creatorName: null, assigneeName: null, assigneeDesignation: null, myAssignment: null };
         });
       }
       
@@ -334,9 +362,16 @@ export const eventsRouter = createTRPCRouter({
         ))
         .orderBy(desc(events.createdAt));
       
+      const employeeCircle = employee[0].circle;
       const [allDraftEvents, circleGMMap, managerHierarchyMap] = await Promise.all([
         db.select().from(events)
-          .where(eq(events.status, 'draft'))
+          .where(and(
+            eq(events.status, 'draft'),
+            or(
+              eq(events.createdBy, input.employeeId),
+              employeeCircle ? eq(events.circle, employeeCircle) : sql`false`
+            )
+          ))
           .orderBy(desc(events.createdAt)),
         getAllCircleGMs(),
         buildManagerHierarchyMap(),
@@ -388,6 +423,16 @@ export const eventsRouter = createTRPCRouter({
       const relevantAssignments = await db.select().from(eventAssignments)
         .where(inArray(eventAssignments.eventId, eventIds));
       
+      // Get actual sales from event_sales_entries (real submitted data)
+      const salesEntrySums = await db.select({
+        eventId: eventSalesEntries.eventId,
+        totalSimsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+        totalFtthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+        totalLeaseSold: sql<number>`COALESCE(SUM(${eventSalesEntries.leaseSold}), 0)::integer`,
+        totalEbSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ebSold}), 0)::integer`,
+      }).from(eventSalesEntries).where(inArray(eventSalesEntries.eventId, eventIds)).groupBy(eventSalesEntries.eventId);
+      const salesEntryMap2 = new Map(salesEntrySums.map(s => [s.eventId, s]));
+      
       const allTeamPersNos = results.flatMap(e => (e.assignedTeam || []) as string[]);
       const uniquePersNos = [...new Set(allTeamPersNos)];
       let masterMap = new Map<string, { persNo: string; name: string; designation: string | null }>();
@@ -418,8 +463,9 @@ export const eventsRouter = createTRPCRouter({
       
       const eventsWithProgress = results.map(event => {
         const eventAssigns = relevantAssignments.filter(a => a.eventId === event.id);
-        const simSold = eventAssigns.reduce((sum, a) => sum + a.simSold, 0);
-        const ftthSold = eventAssigns.reduce((sum, a) => sum + a.ftthSold, 0);
+        const salesEntry2 = salesEntryMap2.get(event.id);
+        const simSold = Number(salesEntry2?.totalSimsSold || 0);
+        const ftthSold = Number(salesEntry2?.totalFtthSold || 0);
         
         // Determine ownership category for this event
         let ownershipCategory: 'created_by_me' | 'assigned_to_me' | 'subordinate_task' | 'draft_task' = 'subordinate_task';
@@ -476,6 +522,12 @@ export const eventsRouter = createTRPCRouter({
           creatorName: creatorInfo?.name || null,
           assigneeName: assigneeInfo?.name || null,
           assigneeDesignation: assigneeInfo?.designation || null,
+          myAssignment: myAssignment ? {
+            simTarget: myAssignment.simTarget,
+            ftthTarget: myAssignment.ftthTarget,
+            simSold: myAssignment.simSold,
+            ftthSold: myAssignment.ftthSold,
+          } : null,
         };
       });
       
@@ -486,7 +538,6 @@ export const eventsRouter = createTRPCRouter({
   getById: publicProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
-      console.log("Fetching event by id:", input.id);
       const result = await db.select().from(events).where(eq(events.id, input.id));
       return result[0] || null;
     }),
@@ -530,11 +581,10 @@ export const eventsRouter = createTRPCRouter({
       teamAssignments: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Creating event:", input.name);
       
       // Server-side role validation: ADMIN cannot create events
       const creator = await db.select().from(employees).where(eq(employees.id, input.createdBy)).limit(1);
-      if (creator[0]?.role === 'ADMIN') {
+      if (creator[0]?.role === 'ADMIN' && creator[0]?.role !== 'CMD') {
         throw new Error('Admin users cannot create tasks. Please use a manager account.');
       }
       
@@ -673,11 +723,12 @@ export const eventsRouter = createTRPCRouter({
             taskIds: string[];
           }>;
           
-          console.log("Processing team assignments:", assignments.length);
           
           for (const assignment of assignments) {
             const hasSim = assignment.taskIds.includes('SIM');
             const hasFtth = assignment.taskIds.includes('FTTH');
+            const hasLease = assignment.taskIds.includes('LEASE_CIRCUIT');
+            const hasEb = assignment.taskIds.includes('EB');
             
             let employeeId = assignment.linkedEmployeeId;
             
@@ -696,6 +747,9 @@ export const eventsRouter = createTRPCRouter({
               
               const simTarget = hasSim ? Math.ceil(input.targetSim / (assignments.filter(a => a.taskIds.includes('SIM')).length || 1)) : 0;
               const ftthTarget = hasFtth ? Math.ceil(input.targetFtth / (assignments.filter(a => a.taskIds.includes('FTTH')).length || 1)) : 0;
+              const leaseTarget = hasLease ? Math.ceil((input.targetLease || 0) / (assignments.filter(a => a.taskIds.includes('LEASE_CIRCUIT')).length || 1)) : 0;
+              const ebTarget = hasEb ? Math.ceil((input.targetEb || 0) / (assignments.filter(a => a.taskIds.includes('EB')).length || 1)) : 0;
+              const assignedTaskTypes = assignment.taskIds;
               
               if (!existingAssignment[0]) {
                 await db.insert(eventAssignments).values({
@@ -703,11 +757,14 @@ export const eventsRouter = createTRPCRouter({
                   employeeId: employeeId,
                   simTarget: simTarget,
                   ftthTarget: ftthTarget,
+                  leaseTarget: leaseTarget,
+                  ebTarget: ebTarget,
+                  assignedTaskTypes: assignedTaskTypes,
                   assignedBy: input.createdBy,
                 });
               } else {
                 await db.update(eventAssignments)
-                  .set({ simTarget, ftthTarget, updatedAt: new Date() })
+                  .set({ simTarget, ftthTarget, leaseTarget, ebTarget, assignedTaskTypes, updatedAt: new Date() })
                   .where(eq(eventAssignments.id, existingAssignment[0].id));
               }
             }
@@ -755,7 +812,6 @@ export const eventsRouter = createTRPCRouter({
       updatedBy: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Updating event:", input.id);
       const { id, updatedBy, startDate, endDate, ...updateData } = input;
       
       const existingEvent = await db.select().from(events).where(eq(events.id, id));
@@ -862,7 +918,6 @@ export const eventsRouter = createTRPCRouter({
       deletedBy: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Deleting event:", input.id);
       await db.update(events)
         .set({ status: 'deleted', updatedAt: new Date() })
         .where(eq(events.id, input.id));
@@ -883,7 +938,6 @@ export const eventsRouter = createTRPCRouter({
       circle: z.enum(['ANDAMAN_NICOBAR', 'ANDHRA_PRADESH', 'ASSAM', 'BIHAR', 'CHHATTISGARH', 'GUJARAT', 'HARYANA', 'HIMACHAL_PRADESH', 'JAMMU_KASHMIR', 'JHARKHAND', 'KARNATAKA', 'KERALA', 'MADHYA_PRADESH', 'MAHARASHTRA', 'NORTH_EAST_I', 'NORTH_EAST_II', 'ODISHA', 'PUNJAB', 'RAJASTHAN', 'TAMIL_NADU', 'TELANGANA', 'UTTARAKHAND', 'UTTAR_PRADESH_EAST', 'UTTAR_PRADESH_WEST', 'WEST_BENGAL'])
     }))
     .query(async ({ input }) => {
-      console.log("Fetching events by circle:", input.circle);
       const result = await db.select().from(events)
         .where(eq(events.circle, input.circle))
         .orderBy(desc(events.createdAt));
@@ -899,7 +953,6 @@ export const eventsRouter = createTRPCRouter({
 
   getActiveEvents: publicProcedure
     .query(async () => {
-      console.log("Fetching active events");
       
       // First auto-complete any expired events in the database
       const allActive = await db.select().from(events)
@@ -920,7 +973,6 @@ export const eventsRouter = createTRPCRouter({
 
   getUpcomingEvents: publicProcedure
     .query(async () => {
-      console.log("Fetching upcoming events");
       
       // First auto-complete any expired events
       const allActive = await db.select().from(events)
@@ -944,7 +996,6 @@ export const eventsRouter = createTRPCRouter({
       assignedBy: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Assigning team to event:", input.eventId);
       
       for (const employeeId of input.employeeIds) {
         await db.insert(eventAssignments).values({
@@ -972,7 +1023,6 @@ export const eventsRouter = createTRPCRouter({
   getEventWithDetails: publicProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ input }) => {
-      console.log("Fetching event with details - Input ID:", input.id);
       
       if (!input.id || input.id.trim() === '') {
         console.error("getEventWithDetails: Empty ID provided");
@@ -981,10 +1031,8 @@ export const eventsRouter = createTRPCRouter({
       
       try {
         const eventResult = await db.select().from(events).where(eq(events.id, input.id));
-        console.log("Event query result:", eventResult.length > 0 ? "Found" : "Not found");
         
         if (!eventResult[0]) {
-          console.log("No event found with ID:", input.id);
           return null;
         }
       
@@ -998,6 +1046,10 @@ export const eventsRouter = createTRPCRouter({
       const financeEntries = await db.select().from(financeCollectionEntries)
         .where(eq(financeCollectionEntries.eventId, input.id))
         .orderBy(desc(financeCollectionEntries.createdAt));
+      
+      const omEntries = await db.select().from(maintenanceEntries)
+        .where(eq(maintenanceEntries.eventId, input.id))
+        .orderBy(desc(maintenanceEntries.createdAt));
       
       const subtasks = await db.select().from(eventSubtasks)
         .where(eq(eventSubtasks.eventId, input.id))
@@ -1033,8 +1085,14 @@ export const eventsRouter = createTRPCRouter({
       const teamWithAllocations = assignments.map(assignment => {
         const employee = teamMembers.find(e => e.id === assignment.employeeId);
         const memberSales = salesEntries.filter(s => s.employeeId === assignment.employeeId);
-        const totalSimsSold = memberSales.reduce((sum, s) => sum + s.simsSold, 0);
-        const totalFtthSold = memberSales.reduce((sum, s) => sum + s.ftthSold, 0);
+        const memberMaintenance = omEntries.filter(m => m.employeeId === assignment.employeeId);
+        const salesEntrySimsSold = memberSales.reduce((sum, s) => sum + s.simsSold, 0);
+        const salesEntryFtthSold = memberSales.reduce((sum, s) => sum + s.ftthSold, 0);
+        
+        const totalSimsSold = salesEntrySimsSold;
+        const totalFtthSold = salesEntryFtthSold;
+        const totalLeaseCompleted = assignment.leaseCompleted || 0;
+        const totalEbCompleted = assignment.ebCompleted || 0;
         
         let employeeData = employee ? { ...employee, persNo: persNoMap.get(employee.id) || null } : undefined;
         
@@ -1057,7 +1115,10 @@ export const eventsRouter = createTRPCRouter({
           employee: employeeData,
           actualSimSold: totalSimsSold,
           actualFtthSold: totalFtthSold,
+          actualLeaseCompleted: totalLeaseCompleted,
+          actualEbCompleted: totalEbCompleted,
           salesEntries: memberSales,
+          maintenanceEntries: memberMaintenance,
         };
       });
       
@@ -1076,6 +1137,11 @@ export const eventsRouter = createTRPCRouter({
               ftthTarget: 0,
               simSold: 0,
               ftthSold: 0,
+              leaseTarget: 0,
+              leaseCompleted: 0,
+              ebTarget: 0,
+              ebCompleted: 0,
+              assignedTaskTypes: [],
               assignedBy: eventResult[0].createdBy,
               assignedAt: new Date(),
               updatedAt: new Date(),
@@ -1093,7 +1159,10 @@ export const eventsRouter = createTRPCRouter({
               },
               actualSimSold: 0,
               actualFtthSold: 0,
+              actualLeaseCompleted: 0,
+              actualEbCompleted: 0,
               salesEntries: [],
+              maintenanceEntries: [],
             } as any);
           }
         }
@@ -1109,7 +1178,14 @@ export const eventsRouter = createTRPCRouter({
       
       const totalSimsSold = salesEntries.reduce((sum, s) => sum + s.simsSold, 0);
       const totalFtthSold = salesEntries.reduce((sum, s) => sum + s.ftthSold, 0);
+      const totalLeaseCompleted = salesEntries.reduce((sum, s) => sum + (s.leaseSold || 0), 0);
+      const totalEbCompleted = salesEntries.reduce((sum, s) => sum + (s.ebSold || 0), 0);
       
+      const totalBtsDownCompleted = assignments.reduce((sum, a) => sum + (a.btsDownCompleted || 0), 0);
+      const totalFtthDownCompleted = assignments.reduce((sum, a) => sum + (a.ftthDownCompleted || 0), 0);
+      const totalRouteFailCompleted = assignments.reduce((sum, a) => sum + (a.routeFailCompleted || 0), 0);
+      const totalOfcFailCompleted = assignments.reduce((sum, a) => sum + (a.ofcFailCompleted || 0), 0);
+
       const subtaskStats = {
         total: subtasks.length,
         completed: subtasks.filter(s => s.status === 'completed').length,
@@ -1199,19 +1275,26 @@ export const eventsRouter = createTRPCRouter({
           teamWithAllocations,
           salesEntries,
           financeEntries,
+          maintenanceEntries: omEntries,
           subtasks: subtasksWithAssignees,
           slaStatus,
           summary: {
             totalSimsSold,
             totalFtthSold,
+            totalLeaseCompleted,
+            totalEbCompleted,
+            totalBtsDownCompleted,
+            totalFtthDownCompleted,
+            totalRouteFailCompleted,
+            totalOfcFailCompleted,
             totalEntries: salesEntries.length,
             totalFinanceEntries: financeEntries.length,
+            totalMaintenanceEntries: omEntries.length,
             teamCount: assignments.length,
             subtaskStats,
           },
         };
         
-        console.log("Returning event details for:", result.name);
         return result;
       } catch (error) {
         console.error("Error fetching event details:", error);
@@ -1230,8 +1313,16 @@ export const eventsRouter = createTRPCRouter({
       
       const totalSimDistributed = assignments.reduce((sum, a) => sum + a.simTarget, 0);
       const totalFtthDistributed = assignments.reduce((sum, a) => sum + a.ftthTarget, 0);
-      const totalSimSold = assignments.reduce((sum, a) => sum + a.simSold, 0);
-      const totalFtthSold = assignments.reduce((sum, a) => sum + a.ftthSold, 0);
+      
+      // Get actual sales from event_sales_entries (real submitted data)
+      const resourceSalesEntries = await db.select({
+        totalSimsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+        totalFtthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+        totalLeaseSold: sql<number>`COALESCE(SUM(${eventSalesEntries.leaseSold}), 0)::integer`,
+        totalEbSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ebSold}), 0)::integer`,
+      }).from(eventSalesEntries).where(eq(eventSalesEntries.eventId, input.eventId));
+      const totalSimSold = Number(resourceSalesEntries[0]?.totalSimsSold || 0);
+      const totalFtthSold = Number(resourceSalesEntries[0]?.totalFtthSold || 0);
       
       // Use targetSim/targetFtth as the max distributable (falls back to allocated if target is 0)
       const maxSim = event[0].targetSim || event[0].allocatedSim;
@@ -1269,13 +1360,27 @@ export const eventsRouter = createTRPCRouter({
       employeeId: z.string().uuid(),
       simTarget: z.number().min(0),
       ftthTarget: z.number().min(0),
+      leaseTarget: z.number().min(0).optional(),
+      ebTarget: z.number().min(0).optional(),
+      assignedTaskTypes: z.array(z.string()).optional(),
       assignedBy: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Assigning team member with targets:", input);
       
       const event = await db.select().from(events).where(eq(events.id, input.eventId));
       if (!event[0]) throw new Error("Event not found");
+      
+      const leaseTarget = input.leaseTarget ?? 0;
+      const ebTarget = input.ebTarget ?? 0;
+      
+      let assignedTaskTypes = input.assignedTaskTypes;
+      if (!assignedTaskTypes) {
+        assignedTaskTypes = [];
+        if (input.simTarget > 0) assignedTaskTypes.push('SIM');
+        if (input.ftthTarget > 0) assignedTaskTypes.push('FTTH');
+        if (leaseTarget > 0) assignedTaskTypes.push('LEASE_CIRCUIT');
+        if (ebTarget > 0) assignedTaskTypes.push('EB');
+      }
       
       const allAssignments = await db.select().from(eventAssignments)
         .where(eq(eventAssignments.eventId, input.eventId));
@@ -1285,9 +1390,13 @@ export const eventsRouter = createTRPCRouter({
       const otherAssignments = allAssignments.filter(a => a.employeeId !== input.employeeId);
       const currentSimDistributed = otherAssignments.reduce((sum, a) => sum + a.simTarget, 0);
       const currentFtthDistributed = otherAssignments.reduce((sum, a) => sum + a.ftthTarget, 0);
+      const currentLeaseDistributed = otherAssignments.reduce((sum, a) => sum + a.leaseTarget, 0);
+      const currentEbDistributed = otherAssignments.reduce((sum, a) => sum + a.ebTarget, 0);
       
       const newTotalSim = currentSimDistributed + input.simTarget;
       const newTotalFtth = currentFtthDistributed + input.ftthTarget;
+      const newTotalLease = currentLeaseDistributed + leaseTarget;
+      const newTotalEb = currentEbDistributed + ebTarget;
       
       if (newTotalSim > event[0].allocatedSim) {
         const available = event[0].allocatedSim - currentSimDistributed;
@@ -1299,11 +1408,26 @@ export const eventsRouter = createTRPCRouter({
         throw new Error(`Cannot assign ${input.ftthTarget} FTTH. Only ${available} FTTH available for distribution.`);
       }
       
+      const maxLease = event[0].targetLease || 0;
+      if (maxLease > 0 && newTotalLease > maxLease) {
+        const available = maxLease - currentLeaseDistributed;
+        throw new Error(`Cannot assign ${leaseTarget} Lease Circuit. Only ${available} available for distribution.`);
+      }
+      
+      const maxEb = event[0].targetEb || 0;
+      if (maxEb > 0 && newTotalEb > maxEb) {
+        const available = maxEb - currentEbDistributed;
+        throw new Error(`Cannot assign ${ebTarget} EB. Only ${available} available for distribution.`);
+      }
+      
       if (existing) {
         await db.update(eventAssignments)
           .set({
             simTarget: input.simTarget,
             ftthTarget: input.ftthTarget,
+            leaseTarget: leaseTarget,
+            ebTarget: ebTarget,
+            assignedTaskTypes: assignedTaskTypes,
             updatedAt: new Date(),
           })
           .where(eq(eventAssignments.id, existing.id));
@@ -1313,6 +1437,9 @@ export const eventsRouter = createTRPCRouter({
           employeeId: input.employeeId,
           simTarget: input.simTarget,
           ftthTarget: input.ftthTarget,
+          leaseTarget: leaseTarget,
+          ebTarget: ebTarget,
+          assignedTaskTypes: assignedTaskTypes,
           assignedBy: input.assignedBy,
         });
         
@@ -1329,7 +1456,7 @@ export const eventsRouter = createTRPCRouter({
         entityType: 'EVENT',
         entityId: input.eventId,
         performedBy: input.assignedBy,
-        details: { employeeId: input.employeeId, simTarget: input.simTarget, ftthTarget: input.ftthTarget },
+        details: { employeeId: input.employeeId, simTarget: input.simTarget, ftthTarget: input.ftthTarget, leaseTarget, ebTarget, assignedTaskTypes },
       });
 
       // Send notification to assigned team member (only for new assignments)
@@ -1345,7 +1472,6 @@ export const eventsRouter = createTRPCRouter({
               input.eventId,
               assigner[0].name
             );
-            console.log("Assignment notification sent to:", input.employeeId);
           }
         } catch (notifError) {
           console.error("Failed to send assignment notification:", notifError);
@@ -1362,7 +1488,6 @@ export const eventsRouter = createTRPCRouter({
       removedBy: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Removing team member:", input);
       
       const assignment = await db.select().from(eventAssignments)
         .where(and(
@@ -1408,6 +1533,8 @@ export const eventsRouter = createTRPCRouter({
       simsActivated: z.number().min(0),
       ftthSold: z.number().min(0),
       ftthActivated: z.number().min(0),
+      leaseSold: z.number().min(0).optional().default(0),
+      ebSold: z.number().min(0).optional().default(0),
       customerType: z.enum(['B2C', 'B2B', 'Government', 'Enterprise']),
       photos: z.array(z.object({
         uri: z.string(),
@@ -1420,7 +1547,6 @@ export const eventsRouter = createTRPCRouter({
       remarks: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Submitting event sales:", input);
       
       const event = await db.select().from(events).where(eq(events.id, input.eventId));
       if (!event[0]) throw new Error("Event not found");
@@ -1438,9 +1564,28 @@ export const eventsRouter = createTRPCRouter({
       if (!assignment[0]) {
         throw new Error("You are not assigned to this event. Please contact the event manager.");
       }
+
+      const assignedTypes = (assignment[0].assignedTaskTypes as string[]) || [];
+      const hasAssignedTypes = assignedTypes.length > 0;
+      if (hasAssignedTypes) {
+        if (input.simsSold > 0 && !assignedTypes.includes('SIM')) {
+          throw new Error('You are not assigned to SIM tasks');
+        }
+        if (input.ftthSold > 0 && !assignedTypes.includes('FTTH')) {
+          throw new Error('You are not assigned to FTTH tasks');
+        }
+        if (input.leaseSold > 0 && !assignedTypes.includes('LEASE_CIRCUIT')) {
+          throw new Error('You are not assigned to Lease Circuit tasks');
+        }
+        if (input.ebSold > 0 && !assignedTypes.includes('EB')) {
+          throw new Error('You are not assigned to EB tasks');
+        }
+      }
       
       const newTotalSim = assignment[0].simSold + input.simsSold;
       const newTotalFtth = assignment[0].ftthSold + input.ftthSold;
+      const newTotalLease = (assignment[0].leaseCompleted || 0) + input.leaseSold;
+      const newTotalEb = (assignment[0].ebCompleted || 0) + input.ebSold;
       
       if (newTotalSim > assignment[0].simTarget) {
         const remaining = assignment[0].simTarget - assignment[0].simSold;
@@ -1451,6 +1596,16 @@ export const eventsRouter = createTRPCRouter({
         const remaining = assignment[0].ftthTarget - assignment[0].ftthSold;
         throw new Error(`Cannot sell ${input.ftthSold} FTTH. Only ${remaining} remaining in your target. Contact manager to increase target.`);
       }
+
+      if (input.leaseSold > 0 && newTotalLease > (assignment[0].leaseTarget || 0)) {
+        const remaining = (assignment[0].leaseTarget || 0) - (assignment[0].leaseCompleted || 0);
+        throw new Error(`Cannot sell ${input.leaseSold} Lease Circuit. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+      }
+
+      if (input.ebSold > 0 && newTotalEb > (assignment[0].ebTarget || 0)) {
+        const remaining = (assignment[0].ebTarget || 0) - (assignment[0].ebCompleted || 0);
+        throw new Error(`Cannot sell ${input.ebSold} EB. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+      }
       
       const result = await db.insert(eventSalesEntries).values({
         eventId: input.eventId,
@@ -1459,20 +1614,51 @@ export const eventsRouter = createTRPCRouter({
         simsActivated: input.simsActivated,
         ftthSold: input.ftthSold,
         ftthActivated: input.ftthActivated,
+        leaseSold: input.leaseSold,
+        ebSold: input.ebSold,
         customerType: input.customerType,
         photos: input.photos || [],
         gpsLatitude: input.gpsLatitude,
         gpsLongitude: input.gpsLongitude,
         remarks: input.remarks,
       }).returning();
+
+      const assignmentUpdate: any = {
+        simSold: newTotalSim,
+        ftthSold: newTotalFtth,
+        updatedAt: new Date(),
+      };
+      if (input.leaseSold > 0) {
+        assignmentUpdate.leaseCompleted = newTotalLease;
+      }
+      if (input.ebSold > 0) {
+        assignmentUpdate.ebCompleted = newTotalEb;
+      }
       
       await db.update(eventAssignments)
-        .set({
-          simSold: newTotalSim,
-          ftthSold: newTotalFtth,
-          updatedAt: new Date(),
-        })
+        .set(assignmentUpdate)
         .where(eq(eventAssignments.id, assignment[0].id));
+
+      if (input.leaseSold > 0 || input.ebSold > 0) {
+        const allAssignments = await db.select().from(eventAssignments)
+          .where(eq(eventAssignments.eventId, input.eventId));
+        const eventUpdate: any = { updatedAt: new Date() };
+        if (input.leaseSold > 0) {
+          eventUpdate.leaseCompleted = allAssignments.reduce((sum, a) => sum + (a.leaseCompleted || 0), 0);
+          if (!event[0].leaseStartedAt && eventUpdate.leaseCompleted > 0) {
+            eventUpdate.leaseStartedAt = new Date();
+          }
+        }
+        if (input.ebSold > 0) {
+          eventUpdate.ebCompleted = allAssignments.reduce((sum, a) => sum + (a.ebCompleted || 0), 0);
+          if (!event[0].ebStartedAt && eventUpdate.ebCompleted > 0) {
+            eventUpdate.ebStartedAt = new Date();
+          }
+        }
+        await db.update(events)
+          .set(eventUpdate)
+          .where(eq(events.id, input.eventId));
+      }
       
       if (input.simsSold > 0) {
         const simResource = await db.select().from(resources)
@@ -1511,7 +1697,24 @@ export const eventsRouter = createTRPCRouter({
         entityType: 'SALES',
         entityId: result[0].id,
         performedBy: input.employeeId,
-        details: { eventId: input.eventId, simsSold: input.simsSold, ftthSold: input.ftthSold },
+        details: { eventId: input.eventId, simsSold: input.simsSold, ftthSold: input.ftthSold, leaseSold: input.leaseSold, ebSold: input.ebSold },
+      });
+
+      await db.insert(auditLogs).values({
+        action: 'SUBMIT_EVENT_SALES',
+        entityType: 'EVENT',
+        entityId: input.eventId,
+        performedBy: input.employeeId,
+        timestamp: new Date(),
+        details: {
+          simsSold: input.simsSold,
+          simsActivated: input.simsActivated,
+          ftthSold: input.ftthSold,
+          ftthActivated: input.ftthActivated,
+          leaseSold: input.leaseSold,
+          ebSold: input.ebSold,
+          customerType: input.customerType,
+        },
       });
 
       return result[0];
@@ -1520,7 +1723,6 @@ export const eventsRouter = createTRPCRouter({
   getEventSalesEntries: publicProcedure
     .input(z.object({ eventId: z.string().uuid() }))
     .query(async ({ input }) => {
-      console.log("Fetching event sales entries:", input.eventId);
       const entries = await db.select().from(eventSalesEntries)
         .where(eq(eventSalesEntries.eventId, input.eventId))
         .orderBy(desc(eventSalesEntries.createdAt));
@@ -1548,7 +1750,6 @@ export const eventsRouter = createTRPCRouter({
       gpsLongitude: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Submitting finance collection:", input);
       
       const VALID_FINANCE_TYPES = ['FIN_LC', 'FIN_LL_FTTH', 'FIN_TOWER', 'FIN_GSM_POSTPAID', 'FIN_RENT_BUILDING'];
       const VALID_PAYMENT_MODES = ['CASH', 'CHEQUE', 'NEFT', 'UPI', 'CARD', 'DD', 'OTHER'];
@@ -1645,12 +1846,13 @@ export const eventsRouter = createTRPCRouter({
       // Send notification to event creator for review
       if (event[0].assignedTo && event[0].assignedTo !== input.employeeId) {
         await db.insert(notifications).values({
-          userId: event[0].assignedTo,
+          recipientId: event[0].assignedTo,
           type: 'FINANCE_COLLECTION_SUBMITTED',
           title: 'Finance Collection Pending Review',
-          message: `${submitterName} submitted ₹${input.amountCollected.toLocaleString('en-IN')} collection (${input.financeType.replace('FIN_', '').replace(/_/g, ' ')}) for "${event[0].title}". Review required.`,
-          relatedEventId: input.eventId,
-          data: { 
+          message: `${submitterName} submitted ₹${input.amountCollected.toLocaleString('en-IN')} collection (${input.financeType.replace('FIN_', '').replace(/_/g, ' ')}) for "${event[0].name}". Review required.`,
+          entityType: 'EVENT',
+          entityId: input.eventId,
+          metadata: { 
             entryId: result[0].id, 
             financeType: input.financeType, 
             amount: input.amountCollected,
@@ -1666,7 +1868,6 @@ export const eventsRouter = createTRPCRouter({
   getFinanceCollectionEntries: publicProcedure
     .input(z.object({ eventId: z.string().uuid() }))
     .query(async ({ input }) => {
-      console.log("Fetching finance collection entries:", input.eventId);
       const entries = await db.select({
         entry: financeCollectionEntries,
         submitterName: employees.name,
@@ -1690,28 +1891,26 @@ export const eventsRouter = createTRPCRouter({
       financeType: z.string().optional(),
     }))
     .query(async ({ input }) => {
-      console.log("Fetching pending finance collections for reviewer:", input.reviewerId);
       
       // Check if user has management role
       const reviewer = await db.select().from(employees).where(eq(employees.id, input.reviewerId)).limit(1);
-      if (!reviewer[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
+      if (!reviewer[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
         throw new Error('Only management users can review finance collections');
       }
       
       // For senior managers (ADMIN, GM, CGM), show all pending collections in their circle
       // For DGM/AGM, show only their own events' collections
-      const isTopManagement = ['ADMIN', 'GM', 'CGM'].includes(reviewer[0].role);
+      const isTopManagement = ['CMD', 'ADMIN', 'GM', 'CGM'].includes(reviewer[0].role);
       
-      let userEvents: { id: string; title: string }[];
+      let userEvents: { id: string; name: string }[];
       
       if (isTopManagement) {
-        // Get all finance events in reviewer's circle (or all for ADMIN)
-        if (reviewer[0].role === 'ADMIN') {
-          userEvents = await db.select({ id: events.id, title: events.title })
+        if (reviewer[0].role === 'ADMIN' || reviewer[0].role === 'CMD') {
+          userEvents = await db.select({ id: events.id, name: events.name })
             .from(events)
             .where(sql`${events.taskCategory} LIKE 'FIN_%'`);
         } else {
-          userEvents = await db.select({ id: events.id, title: events.title })
+          userEvents = await db.select({ id: events.id, name: events.name })
             .from(events)
             .where(and(
               sql`${events.taskCategory} LIKE 'FIN_%'`,
@@ -1719,8 +1918,7 @@ export const eventsRouter = createTRPCRouter({
             ));
         }
       } else {
-        // DGM/AGM see only their own events
-        userEvents = await db.select({ id: events.id, title: events.title })
+        userEvents = await db.select({ id: events.id, name: events.name })
           .from(events)
           .where(eq(events.assignedTo, input.reviewerId));
       }
@@ -1728,7 +1926,7 @@ export const eventsRouter = createTRPCRouter({
       if (userEvents.length === 0) return [];
       
       const eventIds = userEvents.map(e => e.id);
-      const eventTitleMap = new Map(userEvents.map(e => [e.id, e.title]));
+      const eventTitleMap = new Map(userEvents.map(e => [e.id, e.name]));
       
       // Build filter conditions
       const conditions = [
@@ -1769,11 +1967,10 @@ export const eventsRouter = createTRPCRouter({
       remarks: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Approving finance collection:", input.entryId);
       
       // Check if user has management role
       const reviewer = await db.select().from(employees).where(eq(employees.id, input.reviewerId)).limit(1);
-      if (!reviewer[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
+      if (!reviewer[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
         throw new Error('Only management users can approve finance collections');
       }
       
@@ -1789,7 +1986,7 @@ export const eventsRouter = createTRPCRouter({
       // Verify reviewer owns the event
       const event = await db.select().from(events).where(eq(events.id, entry[0].eventId)).limit(1);
       if (!event[0]) throw new Error('Event not found');
-      if (event[0].assignedTo !== input.reviewerId && !['ADMIN', 'GM', 'CGM'].includes(reviewer[0].role)) {
+      if (event[0].assignedTo !== input.reviewerId && !['CMD', 'ADMIN', 'GM', 'CGM'].includes(reviewer[0].role)) {
         throw new Error('You can only approve collections for events you manage');
       }
       
@@ -1830,12 +2027,13 @@ export const eventsRouter = createTRPCRouter({
       
       // Notify the submitter
       await db.insert(notifications).values({
-        userId: entry[0].employeeId,
+        recipientId: entry[0].employeeId,
         type: 'FINANCE_COLLECTION_APPROVED',
         title: 'Collection Approved',
-        message: `Your ₹${entry[0].amountCollected.toLocaleString('en-IN')} collection for "${event[0].title}" has been approved.`,
-        relatedEventId: entry[0].eventId,
-        data: { entryId: input.entryId, amount: entry[0].amountCollected },
+        message: `Your ₹${entry[0].amountCollected.toLocaleString('en-IN')} collection for "${event[0].name}" has been approved.`,
+        entityType: 'EVENT',
+        entityId: entry[0].eventId,
+        metadata: { entryId: input.entryId, amount: entry[0].amountCollected },
       });
       
       return { success: true };
@@ -1848,11 +2046,10 @@ export const eventsRouter = createTRPCRouter({
       remarks: z.string().min(1, 'Rejection reason is required'),
     }))
     .mutation(async ({ input }) => {
-      console.log("Rejecting finance collection:", input.entryId);
       
       // Check if user has management role
       const reviewer = await db.select().from(employees).where(eq(employees.id, input.reviewerId)).limit(1);
-      if (!reviewer[0] || !['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
+      if (!reviewer[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
         throw new Error('Only management users can reject finance collections');
       }
       
@@ -1868,7 +2065,7 @@ export const eventsRouter = createTRPCRouter({
       // Verify reviewer owns the event
       const event = await db.select().from(events).where(eq(events.id, entry[0].eventId)).limit(1);
       if (!event[0]) throw new Error('Event not found');
-      if (event[0].assignedTo !== input.reviewerId && !['ADMIN', 'GM', 'CGM'].includes(reviewer[0].role)) {
+      if (event[0].assignedTo !== input.reviewerId && !['CMD', 'ADMIN', 'GM', 'CGM'].includes(reviewer[0].role)) {
         throw new Error('You can only reject collections for events you manage');
       }
       
@@ -1893,12 +2090,13 @@ export const eventsRouter = createTRPCRouter({
       
       // Notify the submitter
       await db.insert(notifications).values({
-        userId: entry[0].employeeId,
+        recipientId: entry[0].employeeId,
         type: 'FINANCE_COLLECTION_REJECTED',
         title: 'Collection Rejected',
-        message: `Your ₹${entry[0].amountCollected.toLocaleString('en-IN')} collection for "${event[0].title}" was rejected. Reason: ${input.remarks}`,
-        relatedEventId: entry[0].eventId,
-        data: { entryId: input.entryId, amount: entry[0].amountCollected, reason: input.remarks },
+        message: `Your ₹${entry[0].amountCollected.toLocaleString('en-IN')} collection for "${event[0].name}" was rejected. Reason: ${input.remarks}`,
+        entityType: 'EVENT',
+        entityId: entry[0].eventId,
+        metadata: { entryId: input.entryId, amount: entry[0].amountCollected, reason: input.remarks },
       });
       
       return { success: true };
@@ -1907,7 +2105,6 @@ export const eventsRouter = createTRPCRouter({
   getMyAssignedEvents: publicProcedure
     .input(z.object({ employeeId: z.string().uuid() }))
     .query(async ({ input }) => {
-      console.log("Fetching assigned events for employee:", input.employeeId);
       
       const assignments = await db.select().from(eventAssignments)
         .where(eq(eventAssignments.employeeId, input.employeeId));
@@ -1935,7 +2132,6 @@ export const eventsRouter = createTRPCRouter({
       managerPurseId: z.string().optional(),
     }))
     .query(async ({ input }) => {
-      console.log("Fetching available team members for circle:", input.circle, "manager:", input.managerPurseId);
       
       const masterRecords = await db.select().from(employeeMaster);
       const persNoMap = new Map<string, string>();
@@ -1952,7 +2148,6 @@ export const eventsRouter = createTRPCRouter({
         directReportPurseIds = masterRecords
           .filter(m => m.reportingPersNo === input.managerPurseId)
           .map(m => m.persNo);
-        console.log("Direct reports of", input.managerPurseId, ":", directReportPurseIds.length);
       }
       
       const directReportEmployeeIds = directReportPurseIds
@@ -1992,7 +2187,6 @@ export const eventsRouter = createTRPCRouter({
       updatedBy: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Updating event status:", input);
       
       const result = await db.update(events)
         .set({ status: input.status, updatedAt: new Date() })
@@ -2018,7 +2212,6 @@ export const eventsRouter = createTRPCRouter({
       updatedBy: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Updating task progress:", input);
       
       const event = await db.select().from(events).where(eq(events.id, input.eventId));
       if (!event[0]) throw new Error("Event not found");
@@ -2042,6 +2235,20 @@ export const eventsRouter = createTRPCRouter({
       
       if (!isInAssignedTeam && !hasAssignmentRecord) {
         throw new Error("You are not assigned to this task. Only assigned team members can update progress.");
+      }
+
+      if (hasAssignmentRecord) {
+        const assignedTypes = (hasAssignment[0].assignedTaskTypes as string[]) || [];
+        if (assignedTypes.length > 0) {
+          const taskTypeToAssignedType: Record<string, string> = {
+            'SIM': 'SIM', 'FTTH': 'FTTH', 'EB': 'EB', 'LEASE': 'LEASE_CIRCUIT',
+            'BTS_DOWN': 'BTS_DOWN', 'FTTH_DOWN': 'FTTH_DOWN', 'ROUTE_FAIL': 'ROUTE_FAIL', 'OFC_FAIL': 'OFC_FAIL',
+          };
+          const requiredType = taskTypeToAssignedType[input.taskType];
+          if (requiredType && !assignedTypes.includes(requiredType)) {
+            throw new Error(`You are not assigned to ${input.taskType} tasks`);
+          }
+        }
       }
       
       const columnMap: Record<string, keyof typeof events> = {
@@ -2114,23 +2321,6 @@ export const eventsRouter = createTRPCRouter({
       updatedBy: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Updating member task progress:", input);
-      
-      const event = await db.select().from(events).where(eq(events.id, input.eventId));
-      console.log("Found event:", event[0] ? event[0].name : "NOT FOUND");
-      if (!event[0]) throw new Error("Event not found");
-      
-      const assignment = await db.select().from(eventAssignments)
-        .where(and(
-          eq(eventAssignments.eventId, input.eventId),
-          eq(eventAssignments.employeeId, input.employeeId)
-        ));
-      
-      console.log("Found assignment:", assignment[0] ? "YES" : "NOT FOUND");
-      if (!assignment[0]) throw new Error("Team member assignment not found");
-      
-      console.log("Assignment data:", JSON.stringify(assignment[0]));
-      
       const memberCompletedMap: Record<string, keyof typeof eventAssignments.$inferSelect> = {
         'EB': 'ebCompleted',
         'LEASE': 'leaseCompleted',
@@ -2171,11 +2361,36 @@ export const eventsRouter = createTRPCRouter({
       const targetColumn = memberTargetMap[input.taskType];
       const eventCompletedColumn = eventCompletedMap[input.taskType];
       const eventStartedAtColumn = eventStartedAtMap[input.taskType];
-      
+
+      const event = await db.select().from(events).where(eq(events.id, input.eventId));
+      if (!event[0]) throw new Error("Event not found");
+
+      const assignment = await db.select().from(eventAssignments)
+        .where(and(
+          eq(eventAssignments.eventId, input.eventId),
+          eq(eventAssignments.employeeId, input.employeeId)
+        ));
+      if (!assignment[0]) throw new Error("Team member assignment not found");
+
+      const assignedTypes = (assignment[0].assignedTaskTypes as string[]) || [];
+      if (assignedTypes.length > 0) {
+        const taskTypeToAssignedType: Record<string, string> = {
+          'EB': 'EB',
+          'LEASE': 'LEASE_CIRCUIT',
+          'BTS_DOWN': 'BTS_DOWN',
+          'FTTH_DOWN': 'FTTH_DOWN',
+          'ROUTE_FAIL': 'ROUTE_FAIL',
+          'OFC_FAIL': 'OFC_FAIL',
+        };
+        const requiredType = taskTypeToAssignedType[input.taskType];
+        if (requiredType && !assignedTypes.includes(requiredType)) {
+          throw new Error(`You are not assigned to ${input.taskType} tasks. Your assigned types: ${assignedTypes.join(', ')}`);
+        }
+      }
+
       const currentMemberCompleted = (assignment[0] as any)[completedColumn] || 0;
       let memberTarget = (assignment[0] as any)[targetColumn] || 0;
-      
-      // If member has no individual target, use distributed target from event level
+
       if (memberTarget === 0) {
         const eventTargetMap: Record<string, keyof typeof events.$inferSelect> = {
           'EB': 'targetEb',
@@ -2187,40 +2402,33 @@ export const eventsRouter = createTRPCRouter({
         };
         const eventTargetColumn = eventTargetMap[input.taskType];
         const eventTarget = (event[0] as any)[eventTargetColumn] || 0;
-        
-        // Get all assignments to calculate distributed target
+
         const allAssignmentsForDistribution = await db.select().from(eventAssignments)
           .where(eq(eventAssignments.eventId, input.eventId));
         const teamSize = allAssignmentsForDistribution.length;
         const memberIdx = allAssignmentsForDistribution.findIndex(a => a.employeeId === input.employeeId);
-        
+
         if (teamSize > 0) {
           const baseTarget = Math.floor(eventTarget / teamSize);
           const remainder = eventTarget % teamSize;
           memberTarget = baseTarget + (memberIdx < remainder ? 1 : 0);
         }
-        console.log(`Using distributed target: ${memberTarget} (event target: ${eventTarget}, team size: ${teamSize})`);
       }
-      
-      console.log(`Task type: ${input.taskType}, Current: ${currentMemberCompleted}, Target: ${memberTarget}`);
-      
+
       let newMemberCompleted = currentMemberCompleted + input.increment;
       newMemberCompleted = Math.max(0, Math.min(newMemberCompleted, memberTarget));
-      
-      console.log(`New completed value: ${newMemberCompleted}`);
-      
+
       await db.update(eventAssignments)
         .set({ [completedColumn]: newMemberCompleted, updatedAt: new Date() } as any)
         .where(and(
           eq(eventAssignments.eventId, input.eventId),
           eq(eventAssignments.employeeId, input.employeeId)
         ));
-      
+
       const allAssignments = await db.select().from(eventAssignments)
         .where(eq(eventAssignments.eventId, input.eventId));
-      
       const totalCompleted = allAssignments.reduce((sum, a) => sum + ((a as any)[completedColumn] || 0), 0);
-      
+
       const currentStartedAt = (event[0] as any)[eventStartedAtColumn];
       const updateData: any = { 
         [eventCompletedColumn]: totalCompleted, 
@@ -2229,12 +2437,42 @@ export const eventsRouter = createTRPCRouter({
       if (!currentStartedAt && totalCompleted > 0) {
         updateData[eventStartedAtColumn] = new Date();
       }
-      
+
       const result = await db.update(events)
         .set(updateData)
         .where(eq(events.id, input.eventId))
         .returning();
-      
+
+      const omTypes = ['BTS_DOWN', 'FTTH_DOWN', 'ROUTE_FAIL', 'OFC_FAIL'];
+      const salesTypes = ['EB', 'LEASE'];
+
+      if (input.increment > 0) {
+        try {
+          if (omTypes.includes(input.taskType)) {
+            await db.insert(maintenanceEntries).values({
+              eventId: input.eventId,
+              employeeId: input.employeeId,
+              taskType: input.taskType,
+              increment: input.increment,
+            });
+          } else if (salesTypes.includes(input.taskType)) {
+            await db.insert(eventSalesEntries).values({
+              eventId: input.eventId,
+              employeeId: input.employeeId,
+              simsSold: 0,
+              simsActivated: 0,
+              ftthSold: 0,
+              ftthActivated: 0,
+              leaseSold: input.taskType === 'LEASE' ? input.increment : 0,
+              ebSold: input.taskType === 'EB' ? input.increment : 0,
+              customerType: 'B2C',
+            });
+          }
+        } catch (entryError) {
+          console.error(`Failed to create entry record for ${input.taskType}:`, entryError);
+        }
+      }
+
       await db.insert(auditLogs).values({
         action: 'UPDATE_MEMBER_TASK_PROGRESS',
         entityType: 'EVENT',
@@ -2249,7 +2487,7 @@ export const eventsRouter = createTRPCRouter({
           totalCompleted,
         },
       });
-      
+
       return { 
         memberCompleted: newMemberCompleted, 
         memberTarget,
@@ -2291,7 +2529,6 @@ export const eventsRouter = createTRPCRouter({
       createdBy: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Creating subtask:", input);
       
       let assignedEmployeeId = input.assignedTo;
       
@@ -2393,7 +2630,6 @@ export const eventsRouter = createTRPCRouter({
       updatedBy: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Updating subtask:", input);
       
       const { subtaskId, updatedBy, dueDate, ...updateData } = input;
       
@@ -2461,7 +2697,6 @@ export const eventsRouter = createTRPCRouter({
       deletedBy: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Deleting subtask:", input.subtaskId);
       
       const subtask = await db.select().from(eventSubtasks).where(eq(eventSubtasks.id, input.subtaskId));
       
@@ -2483,23 +2718,35 @@ export const eventsRouter = createTRPCRouter({
   updateTeamMemberTargets: publicProcedure
     .input(z.object({
       eventId: z.string().uuid(),
-      employeeId: z.string(), // Can be UUID or persNo
+      employeeId: z.string(),
       simTarget: z.number().min(0),
       ftthTarget: z.number().min(0),
+      leaseTarget: z.number().min(0).optional(),
+      ebTarget: z.number().min(0).optional(),
+      assignedTaskTypes: z.array(z.string()).optional(),
       updatedBy: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Updating team member targets:", input);
       
       const event = await db.select().from(events).where(eq(events.id, input.eventId));
       if (!event[0]) throw new Error("Event not found");
       
-      // Check if employeeId is a UUID or persNo
+      const leaseTarget = input.leaseTarget ?? 0;
+      const ebTarget = input.ebTarget ?? 0;
+      
+      let assignedTaskTypes = input.assignedTaskTypes;
+      if (!assignedTaskTypes) {
+        assignedTaskTypes = [];
+        if (input.simTarget > 0) assignedTaskTypes.push('SIM');
+        if (input.ftthTarget > 0) assignedTaskTypes.push('FTTH');
+        if (leaseTarget > 0) assignedTaskTypes.push('LEASE_CIRCUIT');
+        if (ebTarget > 0) assignedTaskTypes.push('EB');
+      }
+      
       const isUUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(input.employeeId);
       
       let actualEmployeeId = input.employeeId;
       
-      // If it's a persNo, look up the linked employee
       if (!isUUID) {
         const masterRecord = await db.select().from(employeeMaster)
           .where(eq(employeeMaster.persNo, input.employeeId));
@@ -2520,19 +2767,22 @@ export const eventsRouter = createTRPCRouter({
       
       let currentAssignment = allAssignments.find(a => a.employeeId === actualEmployeeId);
       
-      // If no assignment exists, create one (upsert behavior)
       if (!currentAssignment) {
-        // Validate targets against event target (not allocated - target is the max to distribute)
         const otherAssignments = allAssignments;
         const currentSimDistributed = otherAssignments.reduce((sum, a) => sum + a.simTarget, 0);
         const currentFtthDistributed = otherAssignments.reduce((sum, a) => sum + a.ftthTarget, 0);
+        const currentLeaseDistributed = otherAssignments.reduce((sum, a) => sum + a.leaseTarget, 0);
+        const currentEbDistributed = otherAssignments.reduce((sum, a) => sum + a.ebTarget, 0);
         
         const newTotalSim = currentSimDistributed + Math.floor(input.simTarget);
         const newTotalFtth = currentFtthDistributed + Math.floor(input.ftthTarget);
+        const newTotalLease = currentLeaseDistributed + Math.floor(leaseTarget);
+        const newTotalEb = currentEbDistributed + Math.floor(ebTarget);
         
-        // Use targetSim/targetFtth for distribution validation
         const maxSim = event[0].targetSim || event[0].allocatedSim;
         const maxFtth = event[0].targetFtth || event[0].allocatedFtth;
+        const maxLease = event[0].targetLease || 0;
+        const maxEb = event[0].targetEb || 0;
         
         if (maxSim > 0 && newTotalSim > maxSim) {
           const available = maxSim - currentSimDistributed;
@@ -2544,12 +2794,24 @@ export const eventsRouter = createTRPCRouter({
           throw new Error(`Cannot assign ${input.ftthTarget} FTTH. Only ${available} FTTH available for distribution (Total target: ${maxFtth}).`);
         }
         
-        // Create new assignment
+        if (maxLease > 0 && newTotalLease > maxLease) {
+          const available = maxLease - currentLeaseDistributed;
+          throw new Error(`Cannot assign ${leaseTarget} Lease Circuit. Only ${available} available for distribution (Total target: ${maxLease}).`);
+        }
+        
+        if (maxEb > 0 && newTotalEb > maxEb) {
+          const available = maxEb - currentEbDistributed;
+          throw new Error(`Cannot assign ${ebTarget} EB. Only ${available} available for distribution (Total target: ${maxEb}).`);
+        }
+        
         const newAssignment = await db.insert(eventAssignments).values({
           eventId: input.eventId,
           employeeId: actualEmployeeId,
           simTarget: input.simTarget,
           ftthTarget: input.ftthTarget,
+          leaseTarget: leaseTarget,
+          ebTarget: ebTarget,
+          assignedTaskTypes: assignedTaskTypes,
           assignedBy: input.updatedBy,
         }).returning();
         
@@ -2558,7 +2820,7 @@ export const eventsRouter = createTRPCRouter({
           entityType: 'EVENT',
           entityId: input.eventId,
           performedBy: input.updatedBy,
-          details: { employeeId: actualEmployeeId, simTarget: input.simTarget, ftthTarget: input.ftthTarget },
+          details: { employeeId: actualEmployeeId, simTarget: input.simTarget, ftthTarget: input.ftthTarget, leaseTarget, ebTarget, assignedTaskTypes },
         });
         
         return newAssignment[0];
@@ -2570,17 +2832,28 @@ export const eventsRouter = createTRPCRouter({
       if (input.ftthTarget < currentAssignment.ftthSold) {
         throw new Error(`Cannot set FTTH target below already sold amount (${currentAssignment.ftthSold})`);
       }
+      if (leaseTarget < currentAssignment.leaseCompleted) {
+        throw new Error(`Cannot set Lease target below already completed amount (${currentAssignment.leaseCompleted})`);
+      }
+      if (ebTarget < currentAssignment.ebCompleted) {
+        throw new Error(`Cannot set EB target below already completed amount (${currentAssignment.ebCompleted})`);
+      }
       
       const otherAssignments = allAssignments.filter(a => a.employeeId !== actualEmployeeId);
       const currentSimDistributed = otherAssignments.reduce((sum, a) => sum + a.simTarget, 0);
       const currentFtthDistributed = otherAssignments.reduce((sum, a) => sum + a.ftthTarget, 0);
+      const currentLeaseDistributed = otherAssignments.reduce((sum, a) => sum + a.leaseTarget, 0);
+      const currentEbDistributed = otherAssignments.reduce((sum, a) => sum + a.ebTarget, 0);
       
       const newTotalSim = currentSimDistributed + Math.floor(input.simTarget);
       const newTotalFtth = currentFtthDistributed + Math.floor(input.ftthTarget);
+      const newTotalLease = currentLeaseDistributed + Math.floor(leaseTarget);
+      const newTotalEb = currentEbDistributed + Math.floor(ebTarget);
       
-      // Use targetSim/targetFtth for distribution validation
       const maxSim = event[0].targetSim || event[0].allocatedSim;
       const maxFtth = event[0].targetFtth || event[0].allocatedFtth;
+      const maxLease = event[0].targetLease || 0;
+      const maxEb = event[0].targetEb || 0;
       
       if (maxSim > 0 && newTotalSim > maxSim) {
         const available = maxSim - currentSimDistributed;
@@ -2592,10 +2865,23 @@ export const eventsRouter = createTRPCRouter({
         throw new Error(`Cannot assign ${input.ftthTarget} FTTH. Only ${available} FTTH available for distribution (Total target: ${maxFtth}).`);
       }
       
+      if (maxLease > 0 && newTotalLease > maxLease) {
+        const available = maxLease - currentLeaseDistributed;
+        throw new Error(`Cannot assign ${leaseTarget} Lease Circuit. Only ${available} available for distribution (Total target: ${maxLease}).`);
+      }
+      
+      if (maxEb > 0 && newTotalEb > maxEb) {
+        const available = maxEb - currentEbDistributed;
+        throw new Error(`Cannot assign ${ebTarget} EB. Only ${available} available for distribution (Total target: ${maxEb}).`);
+      }
+      
       const result = await db.update(eventAssignments)
         .set({
           simTarget: input.simTarget,
           ftthTarget: input.ftthTarget,
+          leaseTarget: leaseTarget,
+          ebTarget: ebTarget,
+          assignedTaskTypes: assignedTaskTypes,
           updatedAt: new Date(),
         })
         .where(and(
@@ -2609,7 +2895,7 @@ export const eventsRouter = createTRPCRouter({
         entityType: 'EVENT',
         entityId: input.eventId,
         performedBy: input.updatedBy,
-        details: { employeeId: actualEmployeeId, simTarget: input.simTarget, ftthTarget: input.ftthTarget },
+        details: { employeeId: actualEmployeeId, simTarget: input.simTarget, ftthTarget: input.ftthTarget, leaseTarget, ebTarget, assignedTaskTypes },
       });
 
       return result[0];
@@ -2620,7 +2906,6 @@ export const eventsRouter = createTRPCRouter({
       circle: z.enum(['ANDAMAN_NICOBAR', 'ANDHRA_PRADESH', 'ASSAM', 'BIHAR', 'CHHATTISGARH', 'GUJARAT', 'HARYANA', 'HIMACHAL_PRADESH', 'JAMMU_KASHMIR', 'JHARKHAND', 'KARNATAKA', 'KERALA', 'MADHYA_PRADESH', 'MAHARASHTRA', 'NORTH_EAST_I', 'NORTH_EAST_II', 'ODISHA', 'PUNJAB', 'RAJASTHAN', 'TAMIL_NADU', 'TELANGANA', 'UTTARAKHAND', 'UTTAR_PRADESH_EAST', 'UTTAR_PRADESH_WEST', 'WEST_BENGAL'])
     }))
     .query(async ({ input }) => {
-      console.log("Fetching circle resource dashboard:", input.circle);
       
       const circleResources = await db.select().from(resources)
         .where(eq(resources.circle, input.circle));
@@ -2638,12 +2923,24 @@ export const eventsRouter = createTRPCRouter({
           .where(sql`${eventAssignments.eventId} IN ${eventIds}`);
       }
       
+      // Get actual sales from event_sales_entries
+      let circleSalesMap = new Map<string, { totalSimsSold: number; totalFtthSold: number }>();
+      if (eventIds.length > 0) {
+        const circleSalesEntrySums = await db.select({
+          eventId: eventSalesEntries.eventId,
+          totalSimsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+          totalFtthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+        }).from(eventSalesEntries).where(sql`${eventSalesEntries.eventId} IN ${eventIds}`).groupBy(eventSalesEntries.eventId);
+        circleSalesMap = new Map(circleSalesEntrySums.map(s => [s.eventId, { totalSimsSold: Number(s.totalSimsSold), totalFtthSold: Number(s.totalFtthSold) }]));
+      }
+      
       const eventSummaries = circleEvents.map(event => {
         const eventAssigns = allAssignments.filter(a => a.eventId === event.id);
         const simDistributed = eventAssigns.reduce((sum, a) => sum + a.simTarget, 0);
         const ftthDistributed = eventAssigns.reduce((sum, a) => sum + a.ftthTarget, 0);
-        const simSold = eventAssigns.reduce((sum, a) => sum + a.simSold, 0);
-        const ftthSold = eventAssigns.reduce((sum, a) => sum + a.ftthSold, 0);
+        const salesData = circleSalesMap.get(event.id);
+        const simSold = salesData?.totalSimsSold || 0;
+        const ftthSold = salesData?.totalFtthSold || 0;
         
         return {
           id: event.id,
@@ -2658,6 +2955,9 @@ export const eventsRouter = createTRPCRouter({
         };
       });
       
+      const totalSimSoldAll = Array.from(circleSalesMap.values()).reduce((sum, s) => sum + s.totalSimsSold, 0);
+      const totalFtthSoldAll = Array.from(circleSalesMap.values()).reduce((sum, s) => sum + s.totalFtthSold, 0);
+      
       return {
         circle: input.circle,
         inventory: {
@@ -2668,8 +2968,8 @@ export const eventsRouter = createTRPCRouter({
         totals: {
           simAllocated: circleEvents.reduce((sum, e) => sum + e.allocatedSim, 0),
           ftthAllocated: circleEvents.reduce((sum, e) => sum + e.allocatedFtth, 0),
-          simSold: allAssignments.reduce((sum, a) => sum + a.simSold, 0),
-          ftthSold: allAssignments.reduce((sum, a) => sum + a.ftthSold, 0),
+          simSold: totalSimSoldAll,
+          ftthSold: totalFtthSoldAll,
         },
       };
     }),
@@ -2679,7 +2979,6 @@ export const eventsRouter = createTRPCRouter({
       employeeId: z.string().uuid(),
     }))
     .query(async ({ input }) => {
-      console.log("Fetching hierarchical report for employee:", input.employeeId);
       
       const employee = await db.select().from(employees).where(eq(employees.id, input.employeeId));
       if (!employee[0]) throw new Error("Employee not found");
@@ -2698,14 +2997,26 @@ export const eventsRouter = createTRPCRouter({
           .where(sql`${eventAssignments.eventId} IN ${allEventIds}`);
       }
       
+      // Get actual sales from event_sales_entries
+      let hierSalesMap = new Map<string, { totalSimsSold: number; totalFtthSold: number }>();
+      if (allEventIds.length > 0) {
+        const hierSalesEntrySums = await db.select({
+          eventId: eventSalesEntries.eventId,
+          totalSimsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+          totalFtthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+        }).from(eventSalesEntries).where(sql`${eventSalesEntries.eventId} IN ${allEventIds}`).groupBy(eventSalesEntries.eventId);
+        hierSalesMap = new Map(hierSalesEntrySums.map(s => [s.eventId, { totalSimsSold: Number(s.totalSimsSold), totalFtthSold: Number(s.totalFtthSold) }]));
+      }
+      
       const allEvents = [...createdEvents, ...managedEvents.filter(e => !createdEvents.find(c => c.id === e.id))];
       
       const eventReports = allEvents.map(event => {
         const eventAssigns = allAssignments.filter(a => a.eventId === event.id);
         const simDistributed = eventAssigns.reduce((sum, a) => sum + a.simTarget, 0);
         const ftthDistributed = eventAssigns.reduce((sum, a) => sum + a.ftthTarget, 0);
-        const simSold = eventAssigns.reduce((sum, a) => sum + a.simSold, 0);
-        const ftthSold = eventAssigns.reduce((sum, a) => sum + a.ftthSold, 0);
+        const salesData = hierSalesMap.get(event.id);
+        const simSold = salesData?.totalSimsSold || 0;
+        const ftthSold = salesData?.totalFtthSold || 0;
         
         return {
           id: event.id,
@@ -2742,27 +3053,21 @@ export const eventsRouter = createTRPCRouter({
       employeeId: z.string().uuid(),
     }))
     .query(async ({ input }) => {
-      console.log("=== FETCHING MY ASSIGNED TASKS ===");
-      console.log("Employee ID:", input.employeeId);
       
       const employee = await db.select().from(employees)
         .where(eq(employees.id, input.employeeId));
       
       if (!employee[0]) {
-        console.log("Employee not found, returning empty");
         return [];
       }
       
       const employeePersNo = employee[0].persNo;
-      console.log("Employee persNo:", employeePersNo);
       
       // Get events where employee has direct assignment in event_assignments table
       const myAssignments = await db.select().from(eventAssignments)
         .where(eq(eventAssignments.employeeId, input.employeeId));
-      console.log("Direct assignments count:", myAssignments.length);
       
       const assignedEventIds = myAssignments.map(a => a.eventId);
-      console.log("Direct assignment event IDs:", assignedEventIds);
       
       // Get events where employee is in assignedTeam array (by persNo)
       let teamEventIds: string[] = [];
@@ -2771,7 +3076,6 @@ export const eventsRouter = createTRPCRouter({
           .from(events)
           .where(sql`EXISTS (SELECT 1 FROM jsonb_array_elements_text(${events.assignedTeam}::jsonb) AS elem WHERE elem = ${employeePersNo})`);
         teamEventIds = eventsWithPersNoAssignment.map(e => e.id);
-        console.log("Events from assignedTeam (persNo match):", teamEventIds.length);
       }
       
       // Get events where employee is the assigned manager (assignedTo)
@@ -2779,21 +3083,17 @@ export const eventsRouter = createTRPCRouter({
         .from(events)
         .where(eq(events.assignedTo, input.employeeId));
       const managerEventIds = managerEvents.map(e => e.id);
-      console.log("Events as manager (assignedTo):", managerEventIds.length);
       
       // Get events where employee is the creator
       const creatorEvents = await db.select({ id: events.id })
         .from(events)
         .where(eq(events.createdBy, input.employeeId));
       const creatorEventIds = creatorEvents.map(e => e.id);
-      console.log("Events as creator:", creatorEventIds.length);
       
       // Combine all event IDs (deduplicated)
       const allEventIds = [...new Set([...assignedEventIds, ...teamEventIds, ...managerEventIds, ...creatorEventIds])];
-      console.log("Total unique event IDs:", allEventIds.length);
       
       if (allEventIds.length === 0) {
-        console.log("No events found for this employee's tasks");
         return [];
       }
       
@@ -2808,15 +3108,15 @@ export const eventsRouter = createTRPCRouter({
       
       return myEvents.map(event => {
         const assignment = assignmentMap.get(event.id);
-        const categories = (event.category || '').split(',').filter(Boolean);
-        const hasSIM = categories.includes('SIM');
-        const hasFTTH = categories.includes('FTTH');
-        const hasLease = categories.includes('LEASE_CIRCUIT');
-        const hasBtsDown = categories.includes('BTS_DOWN');
-        const hasRouteFail = categories.includes('ROUTE_FAIL');
-        const hasFtthDown = categories.includes('FTTH_DOWN');
-        const hasOfcFail = categories.includes('OFC_FAIL');
-        const hasEb = categories.includes('EB');
+        const eventCategories = (event.category || '').split(',').filter(Boolean);
+        const eventHasSIM = eventCategories.includes('SIM');
+        const eventHasFTTH = eventCategories.includes('FTTH');
+        const eventHasLease = eventCategories.includes('LEASE_CIRCUIT');
+        const eventHasBtsDown = eventCategories.includes('BTS_DOWN');
+        const eventHasRouteFail = eventCategories.includes('ROUTE_FAIL');
+        const eventHasFtthDown = eventCategories.includes('FTTH_DOWN');
+        const eventHasOfcFail = eventCategories.includes('OFC_FAIL');
+        const eventHasEb = eventCategories.includes('EB');
         
         const teamSize = (event.assignedTeam as string[] || []).length || 1;
         const teamIndex = employeePersNo ? (event.assignedTeam as string[] || []).indexOf(employeePersNo) : 0;
@@ -2828,7 +3128,6 @@ export const eventsRouter = createTRPCRouter({
           return effectiveIndex < remainder ? base + 1 : base;
         };
         
-        // Determine employee's role in this task
         const isCreator = event.createdBy === input.employeeId;
         const isManager = event.assignedTo === input.employeeId;
         const isTeamMember = employeePersNo ? (event.assignedTeam as string[] || []).includes(employeePersNo) : false;
@@ -2839,6 +3138,38 @@ export const eventsRouter = createTRPCRouter({
         else if (isManager) myRole = 'manager';
         else if (hasDirectAssignment) myRole = 'assigned';
         
+        const mySimTarget = assignment
+          ? assignment.simTarget
+          : (eventHasSIM ? getDistributedTarget(event.targetSim) : 0);
+        const myFtthTarget = assignment
+          ? assignment.ftthTarget
+          : (eventHasFTTH ? getDistributedTarget(event.targetFtth) : 0);
+        const myLeaseTarget = eventHasLease ? getDistributedTarget(event.targetLease ?? 0) : 0;
+        const myBtsDownTarget = eventHasBtsDown ? getDistributedTarget(event.targetBtsDown ?? 0) : 0;
+        const myRouteFailTarget = eventHasRouteFail ? getDistributedTarget(event.targetRouteFail ?? 0) : 0;
+        const myFtthDownTarget = eventHasFtthDown ? getDistributedTarget(event.targetFtthDown ?? 0) : 0;
+        const myOfcFailTarget = eventHasOfcFail ? getDistributedTarget(event.targetOfcFail ?? 0) : 0;
+        const myEbTarget = eventHasEb ? getDistributedTarget(event.targetEb ?? 0) : 0;
+        
+        const hasSIM = assignment ? assignment.simTarget > 0 : eventHasSIM;
+        const hasFTTH = assignment ? assignment.ftthTarget > 0 : eventHasFTTH;
+        const hasLease = assignment ? false : eventHasLease;
+        const hasBtsDown = assignment ? false : eventHasBtsDown;
+        const hasRouteFail = assignment ? false : eventHasRouteFail;
+        const hasFtthDown = assignment ? false : eventHasFtthDown;
+        const hasOfcFail = assignment ? false : eventHasOfcFail;
+        const hasEb = assignment ? false : eventHasEb;
+        
+        const assignedCategoryLabels: string[] = [];
+        if (hasSIM) assignedCategoryLabels.push('SIM');
+        if (hasFTTH) assignedCategoryLabels.push('FTTH');
+        if (hasLease) assignedCategoryLabels.push('LEASE_CIRCUIT');
+        if (hasBtsDown) assignedCategoryLabels.push('BTS_DOWN');
+        if (hasRouteFail) assignedCategoryLabels.push('ROUTE_FAIL');
+        if (hasFtthDown) assignedCategoryLabels.push('FTTH_DOWN');
+        if (hasOfcFail) assignedCategoryLabels.push('OFC_FAIL');
+        if (hasEb) assignedCategoryLabels.push('EB');
+        
         return {
           id: event.id,
           name: event.name,
@@ -2848,40 +3179,40 @@ export const eventsRouter = createTRPCRouter({
           startDate: event.startDate,
           endDate: event.endDate,
           status: event.status,
-          category: event.category,
+          category: assignedCategoryLabels.join(','),
           myRole,
           isCreator,
           isManager,
           isTeamMember,
           hasDirectAssignment,
-          assignmentId: assignment?.id || null,
+          assignmentId: assignment?.id ?? null,
           myTargets: {
-            sim: assignment?.simTarget || (hasSIM ? getDistributedTarget(event.targetSim) : 0),
-            ftth: assignment?.ftthTarget || (hasFTTH ? getDistributedTarget(event.targetFtth) : 0),
-            lease: hasLease ? getDistributedTarget(event.targetLease || 0) : 0,
-            btsDown: hasBtsDown ? getDistributedTarget(event.targetBtsDown || 0) : 0,
-            routeFail: hasRouteFail ? getDistributedTarget(event.targetRouteFail || 0) : 0,
-            ftthDown: hasFtthDown ? getDistributedTarget(event.targetFtthDown || 0) : 0,
-            ofcFail: hasOfcFail ? getDistributedTarget(event.targetOfcFail || 0) : 0,
-            eb: hasEb ? getDistributedTarget(event.targetEb || 0) : 0,
+            sim: mySimTarget,
+            ftth: myFtthTarget,
+            lease: myLeaseTarget,
+            btsDown: myBtsDownTarget,
+            routeFail: myRouteFailTarget,
+            ftthDown: myFtthDownTarget,
+            ofcFail: myOfcFailTarget,
+            eb: myEbTarget,
           },
           myProgress: {
-            simSold: assignment?.simSold || 0,
-            ftthSold: assignment?.ftthSold || 0,
+            simSold: assignment?.simSold ?? 0,
+            ftthSold: assignment?.ftthSold ?? 0,
           },
           maintenanceProgress: {
-            lease: event.leaseCompleted || 0,
-            leaseTarget: event.targetLease || 0,
-            btsDown: event.btsDownCompleted || 0,
-            btsDownTarget: event.targetBtsDown || 0,
-            routeFail: event.routeFailCompleted || 0,
-            routeFailTarget: event.targetRouteFail || 0,
-            ftthDown: event.ftthDownCompleted || 0,
-            ftthDownTarget: event.targetFtthDown || 0,
-            ofcFail: event.ofcFailCompleted || 0,
-            ofcFailTarget: event.targetOfcFail || 0,
-            eb: event.ebCompleted || 0,
-            ebTarget: event.targetEb || 0,
+            lease: event.leaseCompleted ?? 0,
+            leaseTarget: event.targetLease ?? 0,
+            btsDown: event.btsDownCompleted ?? 0,
+            btsDownTarget: event.targetBtsDown ?? 0,
+            routeFail: event.routeFailCompleted ?? 0,
+            routeFailTarget: event.targetRouteFail ?? 0,
+            ftthDown: event.ftthDownCompleted ?? 0,
+            ftthDownTarget: event.targetFtthDown ?? 0,
+            ofcFail: event.ofcFailCompleted ?? 0,
+            ofcFailTarget: event.targetOfcFail ?? 0,
+            eb: event.ebCompleted ?? 0,
+            ebTarget: event.targetEb ?? 0,
           },
           categories: {
             hasSIM,
@@ -2894,25 +3225,23 @@ export const eventsRouter = createTRPCRouter({
             hasEb,
           },
           submissionStatus: (() => {
-            // If already has a submission status, use it
             if (assignment?.submissionStatus && assignment.submissionStatus !== 'not_started') {
               return assignment.submissionStatus;
             }
-            // Calculate effective status based on actual progress
             const hasProgress = 
-              (assignment?.simSold || 0) > 0 || 
-              (assignment?.ftthSold || 0) > 0 ||
-              (event.leaseCompleted || 0) > 0 ||
-              (event.btsDownCompleted || 0) > 0 ||
-              (event.routeFailCompleted || 0) > 0 ||
-              (event.ftthDownCompleted || 0) > 0 ||
-              (event.ofcFailCompleted || 0) > 0 ||
-              (event.ebCompleted || 0) > 0;
+              (assignment?.simSold ?? 0) > 0 || 
+              (assignment?.ftthSold ?? 0) > 0 ||
+              (event.leaseCompleted ?? 0) > 0 ||
+              (event.btsDownCompleted ?? 0) > 0 ||
+              (event.routeFailCompleted ?? 0) > 0 ||
+              (event.ftthDownCompleted ?? 0) > 0 ||
+              (event.ofcFailCompleted ?? 0) > 0 ||
+              (event.ebCompleted ?? 0) > 0;
             return hasProgress ? 'in_progress' : 'not_started';
           })(),
-          submittedAt: assignment?.submittedAt || null,
-          reviewedAt: assignment?.reviewedAt || null,
-          rejectionReason: assignment?.rejectionReason || null,
+          submittedAt: assignment?.submittedAt ?? null,
+          reviewedAt: assignment?.reviewedAt ?? null,
+          rejectionReason: assignment?.rejectionReason ?? null,
         };
       });
     }),
@@ -2923,9 +3252,16 @@ export const eventsRouter = createTRPCRouter({
       eventId: z.string().uuid(),
       simSold: z.number().min(0).optional(),
       ftthSold: z.number().min(0).optional(),
+      leaseCompleted: z.number().min(0).optional(),
+      ebCompleted: z.number().min(0).optional(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Submitting progress:", input);
+      
+      const eventCheck = await db.select({ status: events.status }).from(events).where(eq(events.id, input.eventId));
+      if (!eventCheck[0]) throw new Error("Event not found");
+      if (eventCheck[0].status === 'completed' || eventCheck[0].status === 'cancelled') {
+        throw new Error(`Cannot submit progress for ${eventCheck[0].status} task`);
+      }
       
       const existingAssignment = await db.select().from(eventAssignments)
         .where(and(
@@ -2934,13 +3270,91 @@ export const eventsRouter = createTRPCRouter({
         ));
       
       if (existingAssignment[0]) {
+        const assignedTypes = (existingAssignment[0].assignedTaskTypes as string[]) || [];
+        const hasAssignedTypes = assignedTypes.length > 0;
+        
+        if (hasAssignedTypes) {
+          if (input.simSold !== undefined && input.simSold > 0 && !assignedTypes.includes('SIM')) {
+            throw new Error('You are not assigned to SIM tasks');
+          }
+          if (input.ftthSold !== undefined && input.ftthSold > 0 && !assignedTypes.includes('FTTH')) {
+            throw new Error('You are not assigned to FTTH tasks');
+          }
+          if (input.leaseCompleted !== undefined && input.leaseCompleted > 0 && !assignedTypes.includes('LEASE_CIRCUIT')) {
+            throw new Error('You are not assigned to Lease Circuit tasks');
+          }
+          if (input.ebCompleted !== undefined && input.ebCompleted > 0 && !assignedTypes.includes('EB')) {
+            throw new Error('You are not assigned to EB tasks');
+          }
+        }
+        
+        if (input.simSold !== undefined && existingAssignment[0].simTarget > 0 && input.simSold > existingAssignment[0].simTarget) {
+          throw new Error(`SIM sold (${input.simSold}) cannot exceed target (${existingAssignment[0].simTarget})`);
+        }
+        if (input.ftthSold !== undefined && existingAssignment[0].ftthTarget > 0 && input.ftthSold > existingAssignment[0].ftthTarget) {
+          throw new Error(`FTTH sold (${input.ftthSold}) cannot exceed target (${existingAssignment[0].ftthTarget})`);
+        }
+        if (input.leaseCompleted !== undefined && existingAssignment[0].leaseTarget > 0 && input.leaseCompleted > existingAssignment[0].leaseTarget) {
+          throw new Error(`Lease completed (${input.leaseCompleted}) cannot exceed target (${existingAssignment[0].leaseTarget})`);
+        }
+        if (input.ebCompleted !== undefined && existingAssignment[0].ebTarget > 0 && input.ebCompleted > existingAssignment[0].ebTarget) {
+          throw new Error(`EB completed (${input.ebCompleted}) cannot exceed target (${existingAssignment[0].ebTarget})`);
+        }
+        
         const updateData: any = { updatedAt: new Date() };
         if (input.simSold !== undefined) updateData.simSold = input.simSold;
         if (input.ftthSold !== undefined) updateData.ftthSold = input.ftthSold;
+        if (input.leaseCompleted !== undefined) updateData.leaseCompleted = input.leaseCompleted;
+        if (input.ebCompleted !== undefined) updateData.ebCompleted = input.ebCompleted;
         
         await db.update(eventAssignments)
           .set(updateData)
           .where(eq(eventAssignments.id, existingAssignment[0].id));
+        
+        const simValue = input.simSold ?? existingAssignment[0].simSold ?? 0;
+        const ftthValue = input.ftthSold ?? existingAssignment[0].ftthSold ?? 0;
+        
+        const existingSalesEntries = await db.select().from(eventSalesEntries)
+          .where(and(
+            eq(eventSalesEntries.eventId, input.eventId),
+            eq(eventSalesEntries.employeeId, input.employeeId)
+          ))
+          .orderBy(desc(eventSalesEntries.createdAt));
+        
+        if (existingSalesEntries.length === 0 && (simValue > 0 || ftthValue > 0)) {
+          await db.insert(eventSalesEntries).values({
+            eventId: input.eventId,
+            employeeId: input.employeeId,
+            simsSold: simValue,
+            ftthSold: ftthValue,
+            simsActivated: 0,
+            ftthActivated: 0,
+            customerType: 'B2C',
+            remarks: '__auto_generated__',
+          });
+        } else if (existingSalesEntries.length === 1 && existingSalesEntries[0].remarks === '__auto_generated__') {
+          await db.update(eventSalesEntries)
+            .set({
+              simsSold: simValue,
+              ftthSold: ftthValue,
+            })
+            .where(eq(eventSalesEntries.id, existingSalesEntries[0].id));
+        }
+        
+        const progressDetails: Record<string, unknown> = {};
+        if (input.simSold !== undefined) progressDetails.simSold = input.simSold;
+        if (input.ftthSold !== undefined) progressDetails.ftthSold = input.ftthSold;
+        if (input.leaseCompleted !== undefined) progressDetails.leaseCompleted = input.leaseCompleted;
+        if (input.ebCompleted !== undefined) progressDetails.ebCompleted = input.ebCompleted;
+        
+        await db.insert(auditLogs).values({
+          action: 'SUBMIT_TASK_PROGRESS',
+          entityType: 'EVENT',
+          entityId: input.eventId,
+          performedBy: input.employeeId,
+          timestamp: new Date(),
+          details: progressDetails,
+        });
         
         return { success: true, message: 'Progress updated successfully' };
       }
@@ -2973,7 +3387,48 @@ export const eventsRouter = createTRPCRouter({
         ftthTarget: 0,
         simSold: input.simSold || 0,
         ftthSold: input.ftthSold || 0,
+        leaseCompleted: input.leaseCompleted || 0,
+        ebCompleted: input.ebCompleted || 0,
         assignedBy: input.employeeId,
+      });
+      
+      const simVal = input.simSold || 0;
+      const ftthVal = input.ftthSold || 0;
+      if (simVal > 0 || ftthVal > 0) {
+        const existingEntry = await db.select().from(eventSalesEntries)
+          .where(and(
+            eq(eventSalesEntries.eventId, input.eventId),
+            eq(eventSalesEntries.employeeId, input.employeeId)
+          ))
+          .limit(1);
+        
+        if (existingEntry.length === 0) {
+          await db.insert(eventSalesEntries).values({
+            eventId: input.eventId,
+            employeeId: input.employeeId,
+            simsSold: simVal,
+            ftthSold: ftthVal,
+            simsActivated: 0,
+            ftthActivated: 0,
+            customerType: 'B2C',
+            remarks: '__auto_generated__',
+          });
+        }
+      }
+      
+      const newProgressDetails: Record<string, unknown> = {};
+      if (input.simSold) newProgressDetails.simSold = input.simSold;
+      if (input.ftthSold) newProgressDetails.ftthSold = input.ftthSold;
+      if (input.leaseCompleted) newProgressDetails.leaseCompleted = input.leaseCompleted;
+      if (input.ebCompleted) newProgressDetails.ebCompleted = input.ebCompleted;
+      
+      await db.insert(auditLogs).values({
+        action: 'SUBMIT_TASK_PROGRESS',
+        entityType: 'EVENT',
+        entityId: input.eventId,
+        performedBy: input.employeeId,
+        timestamp: new Date(),
+        details: newProgressDetails,
       });
       
       return { success: true, message: 'Progress submitted successfully' };
@@ -2985,7 +3440,6 @@ export const eventsRouter = createTRPCRouter({
       employeeId: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Submitting task for review:", input);
       
       const assignment = await db.select().from(eventAssignments)
         .where(eq(eventAssignments.id, input.assignmentId));
@@ -3020,7 +3474,6 @@ export const eventsRouter = createTRPCRouter({
             event[0].name,
             submitter[0].name
           );
-          console.log("Notification sent to task creator:", event[0].createdBy);
         }
       } catch (notifError) {
         console.error("Failed to send submission notification:", notifError);
@@ -3035,7 +3488,6 @@ export const eventsRouter = createTRPCRouter({
       reviewerId: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Approving task:", input);
       
       const assignment = await db.select().from(eventAssignments)
         .where(eq(eventAssignments.id, input.assignmentId));
@@ -3075,7 +3527,6 @@ export const eventsRouter = createTRPCRouter({
             event[0].name,
             reviewer[0].name
           );
-          console.log("Approval notification sent to:", assignment[0].employeeId);
         }
       } catch (notifError) {
         console.error("Failed to send approval notification:", notifError);
@@ -3091,7 +3542,6 @@ export const eventsRouter = createTRPCRouter({
       reason: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      console.log("Rejecting task:", input);
       
       const assignment = await db.select().from(eventAssignments)
         .where(eq(eventAssignments.id, input.assignmentId));
@@ -3133,12 +3583,30 @@ export const eventsRouter = createTRPCRouter({
             reviewer[0].name,
             input.reason
           );
-          console.log("Rejection notification sent to:", assignment[0].employeeId);
         }
       } catch (notifError) {
         console.error("Failed to send rejection notification:", notifError);
       }
       
       return { success: true, message: 'Task rejected' };
+    }),
+
+  getSalesEntrySummary: publicProcedure
+    .input(z.object({
+      eventIds: z.array(z.string().uuid()),
+    }))
+    .query(async ({ input }) => {
+      if (input.eventIds.length === 0) {
+        return { totalSimsActivated: 0, totalFtthActivated: 0 };
+      }
+      const result = await db.select({
+        totalSimsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)::integer`,
+        totalFtthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)::integer`,
+      }).from(eventSalesEntries)
+        .where(inArray(eventSalesEntries.eventId, input.eventIds));
+      return {
+        totalSimsActivated: Number(result[0]?.totalSimsActivated || 0),
+        totalFtthActivated: Number(result[0]?.totalFtthActivated || 0),
+      };
     }),
 });

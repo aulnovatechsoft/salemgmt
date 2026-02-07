@@ -38,47 +38,55 @@ export default function EventsScreen() {
   
   const events: EventWithOwnership[] = useMemo(() => {
     if (!myEventsData) return [];
-    return myEventsData.map((e: any) => ({
-      id: e.id,
-      name: e.name,
-      location: e.location,
-      circle: e.circle,
-      zone: e.zone,
-      dateRange: {
-        startDate: e.startDate,
-        endDate: e.endDate,
-      },
-      category: e.category,
-      targetSim: e.targetSim,
-      targetFtth: e.targetFtth,
-      assignedTeam: e.assignedTeam || [],
-      allocatedSim: e.allocatedSim,
-      allocatedFtth: e.allocatedFtth,
-      createdBy: e.createdBy,
-      createdAt: e.createdAt,
-      keyInsight: e.keyInsight,
-      status: e.status || 'active',
-      assignedTo: e.assignedTo,
-      simsSold: e.simSold || 0,
-      ftthSold: e.ftthSold || 0,
-      teamMembers: e.teamMembers || [],
-      creatorName: e.creatorName || null,
-      assigneeName: e.assigneeName || null,
-      assigneeDesignation: e.assigneeDesignation || null,
-      targetEb: e.targetEb || 0,
-      targetLease: e.targetLease || 0,
-      targetBtsDown: e.targetBtsDown || 0,
-      targetFtthDown: e.targetFtthDown || 0,
-      targetRouteFail: e.targetRouteFail || 0,
-      targetOfcFail: e.targetOfcFail || 0,
-      ebCompleted: e.ebCompleted || 0,
-      leaseCompleted: e.leaseCompleted || 0,
-      btsDownCompleted: e.btsDownCompleted || 0,
-      ftthDownCompleted: e.ftthDownCompleted || 0,
-      routeFailCompleted: e.routeFailCompleted || 0,
-      ofcFailCompleted: e.ofcFailCompleted || 0,
-      ownershipCategory: e.ownershipCategory || 'subordinate_task',
-    }));
+    return myEventsData.map((e: any) => {
+      const isAssignedToMe = e.ownershipCategory === 'assigned_to_me';
+      const myAssignment = e.myAssignment;
+      const hasPersonalAssignment = isAssignedToMe && myAssignment;
+      
+      return {
+        id: e.id,
+        name: e.name,
+        location: e.location,
+        circle: e.circle,
+        zone: e.zone,
+        dateRange: {
+          startDate: e.startDate,
+          endDate: e.endDate,
+        },
+        category: e.category,
+        targetSim: e.targetSim,
+        targetFtth: e.targetFtth,
+        assignedTeam: e.assignedTeam || [],
+        allocatedSim: e.allocatedSim,
+        allocatedFtth: e.allocatedFtth,
+        createdBy: e.createdBy,
+        createdAt: e.createdAt,
+        keyInsight: e.keyInsight,
+        status: e.status || 'active',
+        assignedTo: e.assignedTo,
+        simsSold: hasPersonalAssignment ? (myAssignment.simSold ?? 0) : (e.simSold ?? 0),
+        ftthSold: hasPersonalAssignment ? (myAssignment.ftthSold ?? 0) : (e.ftthSold ?? 0),
+        mySimTarget: hasPersonalAssignment ? myAssignment.simTarget : null,
+        myFtthTarget: hasPersonalAssignment ? myAssignment.ftthTarget : null,
+        teamMembers: e.teamMembers || [],
+        creatorName: e.creatorName || null,
+        assigneeName: e.assigneeName || null,
+        assigneeDesignation: e.assigneeDesignation || null,
+        targetEb: e.targetEb || 0,
+        targetLease: e.targetLease || 0,
+        targetBtsDown: e.targetBtsDown || 0,
+        targetFtthDown: e.targetFtthDown || 0,
+        targetRouteFail: e.targetRouteFail || 0,
+        targetOfcFail: e.targetOfcFail || 0,
+        ebCompleted: e.ebCompleted || 0,
+        leaseCompleted: e.leaseCompleted || 0,
+        btsDownCompleted: e.btsDownCompleted || 0,
+        ftthDownCompleted: e.ftthDownCompleted || 0,
+        routeFailCompleted: e.routeFailCompleted || 0,
+        ofcFailCompleted: e.ofcFailCompleted || 0,
+        ownershipCategory: e.ownershipCategory || 'subordinate_task',
+      };
+    });
   }, [myEventsData]);
   
   const updateStatusMutation = trpc.events.updateEventStatus.useMutation({
@@ -505,30 +513,46 @@ function EventCard({ event, getDisplayStatus, canEdit, onActivate }: {
         <Text style={styles.categoryText}>{event.category}</Text>
       </View>
 
-      {(event.category?.includes('SIM') || (event.category?.includes('FTTH') && !event.category?.includes('FTTH_DOWN'))) && (
-        <View style={styles.eventTargets}>
-          {event.category?.includes('SIM') && (
-            <View style={styles.targetItem}>
-              <Text style={styles.targetLabel}>SIM Progress</Text>
-              <View style={styles.progressRow}>
-                <Text style={styles.targetValue}>{event.simsSold || 0}</Text>
-                <Text style={styles.targetDivider}>/</Text>
-                <Text style={styles.targetTotal}>{event.allocatedSim || event.targetSim}</Text>
+      {(() => {
+        const isMyTask = event.ownershipCategory === 'assigned_to_me';
+        const mySimTarget = (event as any).mySimTarget;
+        const myFtthTarget = (event as any).myFtthTarget;
+        const showSIM = isMyTask && mySimTarget !== null ? mySimTarget > 0 : event.category?.includes('SIM');
+        const showFTTH = isMyTask && myFtthTarget !== null 
+          ? myFtthTarget > 0 
+          : (event.category?.includes('FTTH') && !event.category?.includes('FTTH_DOWN'));
+        
+        if (!showSIM && !showFTTH) return null;
+        
+        return (
+          <View style={styles.eventTargets}>
+            {showSIM && (
+              <View style={styles.targetItem}>
+                <Text style={styles.targetLabel}>{isMyTask ? 'My SIM' : 'SIM Progress'}</Text>
+                <View style={styles.progressRow}>
+                  <Text style={styles.targetValue}>{event.simsSold ?? 0}</Text>
+                  <Text style={styles.targetDivider}>/</Text>
+                  <Text style={styles.targetTotal}>
+                    {isMyTask && mySimTarget !== null ? mySimTarget : (event.allocatedSim || event.targetSim)}
+                  </Text>
+                </View>
               </View>
-            </View>
-          )}
-          {event.category?.includes('FTTH') && !event.category?.includes('FTTH_DOWN') && (
-            <View style={styles.targetItem}>
-              <Text style={styles.targetLabel}>FTTH Progress</Text>
-              <View style={styles.progressRow}>
-                <Text style={styles.targetValue}>{event.ftthSold || 0}</Text>
-                <Text style={styles.targetDivider}>/</Text>
-                <Text style={styles.targetTotal}>{event.allocatedFtth || event.targetFtth}</Text>
+            )}
+            {showFTTH && (
+              <View style={styles.targetItem}>
+                <Text style={styles.targetLabel}>{isMyTask ? 'My FTTH' : 'FTTH Progress'}</Text>
+                <View style={styles.progressRow}>
+                  <Text style={styles.targetValue}>{event.ftthSold ?? 0}</Text>
+                  <Text style={styles.targetDivider}>/</Text>
+                  <Text style={styles.targetTotal}>
+                    {isMyTask && myFtthTarget !== null ? myFtthTarget : (event.allocatedFtth || event.targetFtth)}
+                  </Text>
+                </View>
               </View>
-            </View>
-          )}
-        </View>
-      )}
+            )}
+          </View>
+        );
+      })()}
 
       {isDraft && canEdit && (
         <View style={styles.quickActions}>

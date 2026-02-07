@@ -447,7 +447,7 @@ export const employeesRouter = createTRPCRouter({
       managerId: z.string().uuid(),
     }))
     .query(async ({ input }) => {
-      console.log("Fetching subordinates for manager:", input.managerId);
+      console.log("Fetching direct reports for manager:", input.managerId);
       
       const managerResult = await db.select().from(employees).where(eq(employees.id, input.managerId));
       
@@ -456,27 +456,29 @@ export const employeesRouter = createTRPCRouter({
       }
       
       const manager = managerResult[0];
+      const managerPersNo = manager.persNo;
       
-      const roleHierarchy: Record<string, number> = {
-        'GM': 6,
-        'CGM': 5,
-        'DGM': 4,
-        'AGM': 3,
-        'SD_JTO': 2,
-        'SALES_STAFF': 1,
-      };
-      
-      const managerLevel = roleHierarchy[manager.role] || 0;
-      
-      const subordinateRoles = Object.entries(roleHierarchy)
-        .filter(([_, level]) => level < managerLevel)
-        .map(([role]) => role);
-      
-      if (subordinateRoles.length === 0) {
+      if (!managerPersNo) {
+        console.log("Manager has no pers_no, returning empty list");
         return [];
       }
       
-      let query = db.select({
+      const directReportPersNos = await db.select({ persNo: employeeMaster.persNo })
+        .from(employeeMaster)
+        .where(eq(employeeMaster.reportingPersNo, managerPersNo));
+      
+      if (directReportPersNos.length === 0) {
+        console.log("No direct reports found for manager:", managerPersNo);
+        return [];
+      }
+      
+      const persNoList = directReportPersNos.map(r => r.persNo).filter(Boolean) as string[];
+      
+      if (persNoList.length === 0) {
+        return [];
+      }
+      
+      const results = await db.select({
         id: employees.id,
         name: employees.name,
         email: employees.email,
@@ -491,34 +493,11 @@ export const employeesRouter = createTRPCRouter({
       }).from(employees).where(
         and(
           eq(employees.isActive, true),
-          inArray(employees.role, subordinateRoles as any)
+          inArray(employees.persNo, persNoList)
         )
       );
       
-      if (manager.role !== 'GM' && manager.role !== 'CGM') {
-        const results = await db.select({
-          id: employees.id,
-          name: employees.name,
-          email: employees.email,
-          phone: employees.phone,
-          role: employees.role,
-          circle: employees.circle,
-          zone: employees.zone,
-          persNo: employees.persNo,
-          designation: employees.designation,
-          isActive: employees.isActive,
-          needsPasswordChange: employees.needsPasswordChange,
-        }).from(employees).where(
-          and(
-            eq(employees.isActive, true),
-            eq(employees.circle, manager.circle),
-            inArray(employees.role, subordinateRoles as any)
-          )
-        );
-        return results;
-      }
-      
-      const results = await query;
+      console.log(`Found ${results.length} direct reports with accounts for manager ${managerPersNo}`);
       return results;
     }),
 
@@ -661,9 +640,9 @@ export const employeesRouter = createTRPCRouter({
           circle: employeeRecord[0].circle,
           zone: employeeRecord[0].zone,
           designation: employeeRecord[0].designation,
-          division: employeeRecord[0].division,
+          division: null,
           empGroup: null,
-          reportingPersNo: employeeRecord[0].managerId,
+          reportingPersNo: null,
           reportingOfficerName: null,
           reportingOfficerDesignation: null,
           buildingName: null,

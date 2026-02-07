@@ -1,6 +1,6 @@
-import { pgTable, text, varchar, integer, timestamp, boolean, jsonb, pgEnum, uuid } from 'drizzle-orm/pg-core';
+import { pgTable, text, varchar, integer, timestamp, boolean, jsonb, pgEnum, uuid, customType } from 'drizzle-orm/pg-core';
 
-export const userRoleEnum = pgEnum('user_role', ['ADMIN', 'GM', 'CGM', 'DGM', 'AGM', 'SD_JTO', 'SALES_STAFF']);
+export const userRoleEnum = pgEnum('user_role', ['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM', 'SD_JTO', 'SALES_STAFF']);
 
 export const circleEnum = pgEnum('bsnl_circle', [
   'ANDAMAN_NICOBAR', 'ANDHRA_PRADESH', 'ASSAM', 'BIHAR', 'CHHATTISGARH',
@@ -225,6 +225,7 @@ export const eventAssignments = pgTable('event_assignments', {
   ofcFailCompleted: integer('ofc_fail_completed').default(0).notNull(),
   ebTarget: integer('eb_target').default(0).notNull(),
   ebCompleted: integer('eb_completed').default(0).notNull(),
+  assignedTaskTypes: jsonb('assigned_task_types').$type<string[]>().default([]),
   submissionStatus: taskSubmissionStatusEnum('submission_status').default('not_started'),
   submittedAt: timestamp('submitted_at'),
   reviewedAt: timestamp('reviewed_at'),
@@ -243,6 +244,8 @@ export const eventSalesEntries = pgTable('event_sales_entries', {
   simsActivated: integer('sims_activated').default(0).notNull(),
   ftthSold: integer('ftth_sold').default(0).notNull(),
   ftthActivated: integer('ftth_activated').default(0).notNull(),
+  leaseSold: integer('lease_sold').default(0).notNull(),
+  ebSold: integer('eb_sold').default(0).notNull(),
   customerType: customerTypeEnum('customer_type').notNull(),
   photos: jsonb('photos').$type<{ uri: string; latitude?: string; longitude?: string; timestamp: string }[]>().default([]),
   gpsLatitude: text('gps_latitude'),
@@ -269,6 +272,19 @@ export const financeCollectionEntries = pgTable('finance_collection_entries', {
   reviewedBy: uuid('reviewed_by').references(() => employees.id),
   reviewedAt: timestamp('reviewed_at'),
   reviewRemarks: text('review_remarks'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const maintenanceEntries = pgTable('maintenance_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  eventId: uuid('event_id').notNull().references(() => events.id),
+  employeeId: uuid('employee_id').notNull().references(() => employees.id),
+  taskType: varchar('task_type', { length: 20 }).notNull(),
+  increment: integer('increment').default(1).notNull(),
+  photos: jsonb('photos').$type<{ uri: string; latitude?: string; longitude?: string; timestamp: string }[]>().default([]),
+  gpsLatitude: text('gps_latitude'),
+  gpsLongitude: text('gps_longitude'),
+  remarks: text('remarks'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -434,4 +450,18 @@ export const outstandingFtthLcAmount = pgTable('outstanding_ftth_lc_amount', {
   outstandingLcAmount: text('outstanding_lc_amount'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const uploadedPhotos = pgTable('uploaded_photos', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  fileName: varchar('file_name', { length: 255 }).notNull(),
+  mimeType: varchar('mime_type', { length: 100 }).notNull(),
+  fileSize: integer('file_size').notNull(),
+  data: text('data').notNull(),
+  uploadedBy: uuid('uploaded_by').references(() => employees.id),
+  entityType: varchar('entity_type', { length: 50 }),
+  entityId: uuid('entity_id'),
+  latitude: text('latitude'),
+  longitude: text('longitude'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
 });

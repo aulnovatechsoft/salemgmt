@@ -1,7 +1,7 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, TextInput, Modal, Alert, ActivityIndicator } from 'react-native';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Modal, Alert, ActivityIndicator, AppState } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, usePathname } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { MapPin, Calendar, Target, Check, X, Plus, Minus, Wrench, Send, RotateCcw, CircleCheck, Hourglass, CircleDot } from 'lucide-react-native';
 import Colors from '@/constants/colors';
@@ -29,45 +29,41 @@ export default function MyTasksScreen() {
   const { employee } = useAuth();
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
-  const [submitModalVisible, setSubmitModalVisible] = useState(false);
   const [maintenanceModalVisible, setMaintenanceModalVisible] = useState(false);
   const [selectedTask, setSelectedTask] = useState<any>(null);
-  const [simSold, setSimSold] = useState('');
-  const [ftthSold, setFtthSold] = useState('');
 
   const { data: myTasks, isLoading, refetch } = trpc.events.getMyAssignedTasks.useQuery(
     { employeeId: employee?.id || '' },
     {
       enabled: !!employee?.id,
-      staleTime: 5000,
+      staleTime: 0,
       refetchOnMount: 'always',
       refetchOnWindowFocus: true,
     }
   );
 
+  const pathname = usePathname();
+  const prevPathRef = useRef(pathname);
+  useEffect(() => {
+    if (pathname === '/my-tasks' && prevPathRef.current !== '/my-tasks') {
+      refetch();
+    }
+    prevPathRef.current = pathname;
+  }, [pathname, refetch]);
+
   const utils = trpc.useUtils();
   
-  const submitMutation = trpc.events.submitMyProgress.useMutation({
-    onSuccess: () => {
-      Alert.alert('Success', 'Progress submitted successfully!');
-      setSubmitModalVisible(false);
-      setSelectedTask(null);
-      setSimSold('');
-      setFtthSold('');
-      utils.events.getMyAssignedTasks.invalidate();
-      utils.events.getMyEvents.invalidate();
-      utils.events.getAll.invalidate();
-    },
-    onError: (error: any) => {
-      Alert.alert('Error', error.message || 'Failed to submit progress');
-    },
-  });
-
+  const invalidateAllQueries = useCallback(async () => {
+    await Promise.all([
+      utils.events.getMyAssignedTasks.invalidate(),
+      utils.events.getMyEvents.invalidate(),
+      utils.events.getAll.invalidate(),
+    ]);
+  }, [utils]);
+  
   const maintenanceMutation = trpc.events.updateTaskProgress.useMutation({
-    onSuccess: () => {
-      utils.events.getMyAssignedTasks.invalidate();
-      utils.events.getMyEvents.invalidate();
-      utils.events.getAll.invalidate();
+    onSuccess: async () => {
+      await invalidateAllQueries();
     },
     onError: (error: any) => {
       Alert.alert('Error', error.message || 'Failed to update maintenance progress');
@@ -75,11 +71,9 @@ export default function MyTasksScreen() {
   });
 
   const submitForReviewMutation = trpc.events.submitTaskForReview.useMutation({
-    onSuccess: () => {
+    onSuccess: async () => {
+      await invalidateAllQueries();
       Alert.alert('Success', 'Task submitted for review!');
-      utils.events.getMyAssignedTasks.invalidate();
-      utils.events.getMyEvents.invalidate();
-      utils.events.getAll.invalidate();
     },
     onError: (error: any) => {
       Alert.alert('Error', error.message || 'Failed to submit task');
@@ -117,13 +111,6 @@ export default function MyTasksScreen() {
     setRefreshing(false);
   }, [refetch]);
 
-  const openSubmitModal = (task: any) => {
-    setSelectedTask(task);
-    setSimSold(task.myProgress.simSold.toString());
-    setFtthSold(task.myProgress.ftthSold.toString());
-    setSubmitModalVisible(true);
-  };
-
   const openMaintenanceModal = (task: any) => {
     setSelectedTask(task);
     setMaintenanceModalVisible(true);
@@ -147,26 +134,6 @@ export default function MyTasksScreen() {
       increment: -1,
       updatedBy: employee.id,
     });
-  };
-
-  const handleSubmit = () => {
-    if (!selectedTask || !employee?.id) return;
-    
-    submitMutation.mutate({
-      employeeId: employee.id,
-      eventId: selectedTask.id,
-      simSold: parseInt(simSold) || 0,
-      ftthSold: parseInt(ftthSold) || 0,
-    });
-  };
-
-  const incrementValue = (setter: React.Dispatch<React.SetStateAction<string>>, current: string) => {
-    setter((parseInt(current) || 0) + 1 + '');
-  };
-
-  const decrementValue = (setter: React.Dispatch<React.SetStateAction<string>>, current: string) => {
-    const val = parseInt(current) || 0;
-    setter(Math.max(0, val - 1) + '');
   };
 
   const getRoleBadge = (role: string) => {
@@ -195,19 +162,19 @@ export default function MyTasksScreen() {
     const canSubmit = item.assignmentId && 
       (item.submissionStatus === 'in_progress' || item.submissionStatus === 'rejected' || item.submissionStatus === 'not_started');
 
-    // Check if sales targets are fully achieved
+    // Check if S&M targets are fully achieved (SIM, FTTH, LC, EB all go through Submit Sales Entry)
     const salesTargetsAchieved = 
       (!item.categories.hasSIM || item.myProgress.simSold >= item.myTargets.sim) &&
-      (!item.categories.hasFTTH || item.myProgress.ftthSold >= item.myTargets.ftth);
-    
-    // Check if maintenance targets are fully achieved  
-    const maintenanceTargetsAchieved =
+      (!item.categories.hasFTTH || item.myProgress.ftthSold >= item.myTargets.ftth) &&
       (!item.categories.hasLease || item.maintenanceProgress.lease >= item.maintenanceProgress.leaseTarget) &&
+      (!item.categories.hasEb || item.maintenanceProgress.eb >= item.maintenanceProgress.ebTarget);
+    
+    // Check if O&M targets are fully achieved (BTS_DOWN, ROUTE_FAIL, FTTH_DOWN, OFC_FAIL)
+    const maintenanceTargetsAchieved =
       (!item.categories.hasBtsDown || item.maintenanceProgress.btsDown >= item.maintenanceProgress.btsDownTarget) &&
       (!item.categories.hasRouteFail || item.maintenanceProgress.routeFail >= item.maintenanceProgress.routeFailTarget) &&
       (!item.categories.hasFtthDown || item.maintenanceProgress.ftthDown >= item.maintenanceProgress.ftthDownTarget) &&
-      (!item.categories.hasOfcFail || item.maintenanceProgress.ofcFail >= item.maintenanceProgress.ofcFailTarget) &&
-      (!item.categories.hasEb || item.maintenanceProgress.eb >= item.maintenanceProgress.ebTarget);
+      (!item.categories.hasOfcFail || item.maintenanceProgress.ofcFail >= item.maintenanceProgress.ofcFailTarget);
     
     // All targets achieved when both sales and maintenance are done
     const allTargetsAchieved = hasTargets && salesTargetsAchieved && maintenanceTargetsAchieved;
@@ -357,7 +324,7 @@ export default function MyTasksScreen() {
           )}
         </View>
 
-        {!isCompleted && !isAlreadySubmittedOrApproved && (item.categories.hasSIM || item.categories.hasFTTH) && (
+        {!isCompleted && !isAlreadySubmittedOrApproved && (item.categories.hasSIM || item.categories.hasFTTH || item.categories.hasLease || item.categories.hasEb) && (
           salesTargetsAchieved ? (
             <View style={[styles.submitButton, styles.disabledButton]}>
               <Check size={16} color="#fff" />
@@ -366,30 +333,37 @@ export default function MyTasksScreen() {
           ) : (
             <TouchableOpacity 
               style={styles.submitButton}
-              onPress={() => openSubmitModal(item)}
+              onPress={() => router.push(`/event-sales?eventId=${item.id}`)}
             >
               <Target size={16} color="#fff" />
-              <Text style={styles.submitButtonText}>Submit Sales Progress</Text>
+              <Text style={styles.submitButtonText}>Submit Sales Entry</Text>
             </TouchableOpacity>
           )
         )}
 
-        {!isCompleted && !isAlreadySubmittedOrApproved && (item.categories.hasLease || item.categories.hasBtsDown || item.categories.hasRouteFail || 
-          item.categories.hasFtthDown || item.categories.hasOfcFail || item.categories.hasEb) && (
-          maintenanceTargetsAchieved ? (
-            <View style={[styles.submitButton, { backgroundColor: '#4CAF50' }]}>
-              <Check size={16} color="#fff" />
-              <Text style={styles.submitButtonText}>Maintenance Complete</Text>
-            </View>
-          ) : (
-            <TouchableOpacity 
-              style={[styles.submitButton, { backgroundColor: '#9C27B0' }]}
-              onPress={() => openMaintenanceModal(item)}
-            >
-              <Wrench size={16} color="#fff" />
-              <Text style={styles.submitButtonText}>Complete Maintenance</Text>
-            </TouchableOpacity>
-          )
+        {!isCompleted && !isAlreadySubmittedOrApproved && (item.categories.hasBtsDown || item.categories.hasRouteFail || 
+          item.categories.hasFtthDown || item.categories.hasOfcFail) && (
+          (() => {
+            const omTargetsAchieved =
+              (!item.categories.hasBtsDown || item.maintenanceProgress.btsDown >= item.maintenanceProgress.btsDownTarget) &&
+              (!item.categories.hasRouteFail || item.maintenanceProgress.routeFail >= item.maintenanceProgress.routeFailTarget) &&
+              (!item.categories.hasFtthDown || item.maintenanceProgress.ftthDown >= item.maintenanceProgress.ftthDownTarget) &&
+              (!item.categories.hasOfcFail || item.maintenanceProgress.ofcFail >= item.maintenanceProgress.ofcFailTarget);
+            return omTargetsAchieved ? (
+              <View style={[styles.submitButton, { backgroundColor: '#4CAF50' }]}>
+                <Check size={16} color="#fff" />
+                <Text style={styles.submitButtonText}>Maintenance Complete</Text>
+              </View>
+            ) : (
+              <TouchableOpacity 
+                style={[styles.submitButton, { backgroundColor: '#9C27B0' }]}
+                onPress={() => openMaintenanceModal(item)}
+              >
+                <Wrench size={16} color="#fff" />
+                <Text style={styles.submitButtonText}>Complete Maintenance</Text>
+              </TouchableOpacity>
+            );
+          })()
         )}
         
         {canSubmit && !isCompleted && (
@@ -461,98 +435,7 @@ export default function MyTasksScreen() {
         />
       )}
 
-      <Modal
-        visible={submitModalVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setSubmitModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Submit Sales Progress</Text>
-              <TouchableOpacity onPress={() => setSubmitModalVisible(false)}>
-                <X size={24} color={Colors.light.text} />
-              </TouchableOpacity>
-            </View>
-
-            {selectedTask && (
-              <>
-                <Text style={styles.modalTaskName}>{selectedTask.name}</Text>
-                
-                {selectedTask.categories.hasSIM && selectedTask.myTargets.sim > 0 && (
-                  <View style={styles.inputGroup}>
-                    <Text style={styles.inputLabel}>SIM Sold (Target: {selectedTask.myTargets.sim})</Text>
-                    <View style={styles.counterRow}>
-                      <TouchableOpacity 
-                        style={styles.counterButton}
-                        onPress={() => decrementValue(setSimSold, simSold)}
-                      >
-                        <Minus size={20} color="#fff" />
-                      </TouchableOpacity>
-                      <TextInput
-                        style={styles.counterInput}
-                        value={simSold}
-                        onChangeText={setSimSold}
-                        keyboardType="numeric"
-                      />
-                      <TouchableOpacity 
-                        style={styles.counterButton}
-                        onPress={() => incrementValue(setSimSold, simSold)}
-                      >
-                        <Plus size={20} color="#fff" />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                )}
-
-                {selectedTask.categories.hasFTTH && selectedTask.myTargets.ftth > 0 && (
-                  <View style={styles.inputGroup}>
-                    <Text style={styles.inputLabel}>FTTH Sold (Target: {selectedTask.myTargets.ftth})</Text>
-                    <View style={styles.counterRow}>
-                      <TouchableOpacity 
-                        style={styles.counterButton}
-                        onPress={() => decrementValue(setFtthSold, ftthSold)}
-                      >
-                        <Minus size={20} color="#fff" />
-                      </TouchableOpacity>
-                      <TextInput
-                        style={styles.counterInput}
-                        value={ftthSold}
-                        onChangeText={setFtthSold}
-                        keyboardType="numeric"
-                      />
-                      <TouchableOpacity 
-                        style={styles.counterButton}
-                        onPress={() => incrementValue(setFtthSold, ftthSold)}
-                      >
-                        <Plus size={20} color="#fff" />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                )}
-
-                <TouchableOpacity
-                  style={[styles.submitModalButton, submitMutation.isPending && styles.disabledButton]}
-                  onPress={handleSubmit}
-                  disabled={submitMutation.isPending}
-                >
-                  {submitMutation.isPending ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <>
-                      <Check size={20} color="#fff" />
-                      <Text style={styles.submitModalButtonText}>Submit Progress</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        </View>
-      </Modal>
-
-      {/* Maintenance Completion Modal */}
+      {/* Maintenance Completion Modal (O&M only) */}
       <Modal
         visible={maintenanceModalVisible}
         transparent
@@ -572,40 +455,12 @@ export default function MyTasksScreen() {
               <>
                 <Text style={styles.modalTaskName}>{selectedTask.name}</Text>
                 <Text style={styles.maintenanceHelpText}>Tap the + button to mark one task as completed, or - to undo.</Text>
-                
-                {selectedTask.categories.hasLease && selectedTask.myTargets.lease > 0 && (
-                  <View style={styles.maintenanceRow}>
-                    <View style={styles.maintenanceInfo}>
-                      <View style={[styles.maintenanceIcon, { backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>
-                        <Text style={styles.maintenanceIconText}>L</Text>
-                      </View>
-                      <View>
-                        <Text style={styles.maintenanceLabel}>Lease Circuit</Text>
-                        <Text style={styles.maintenanceProgress}>
-                          {selectedTask.maintenanceProgress?.lease || 0} / {selectedTask.maintenanceProgress?.leaseTarget || selectedTask.myTargets.lease}
-                        </Text>
-                      </View>
-                    </View>
-                    <View style={styles.maintenanceButtons}>
-                      <TouchableOpacity 
-                        style={[styles.maintenanceBtn, { backgroundColor: '#F44336' }]}
-                        onPress={() => handleMaintenanceUndo('LEASE')}
-                        disabled={maintenanceMutation.isPending}
-                      >
-                        <Minus size={18} color="#fff" />
-                      </TouchableOpacity>
-                      <TouchableOpacity 
-                        style={[styles.maintenanceBtn, { backgroundColor: '#4CAF50' }]}
-                        onPress={() => handleMaintenanceComplete('LEASE')}
-                        disabled={maintenanceMutation.isPending}
-                      >
-                        <Plus size={18} color="#fff" />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                )}
 
-                {selectedTask.categories.hasBtsDown && selectedTask.myTargets.btsDown > 0 && (
+                {selectedTask.categories.hasBtsDown && selectedTask.myTargets.btsDown > 0 && (() => {
+                  const progress = selectedTask.maintenanceProgress?.btsDown || 0;
+                  const target = selectedTask.maintenanceProgress?.btsDownTarget || selectedTask.myTargets.btsDown;
+                  const atTarget = progress >= target;
+                  return (
                   <View style={styles.maintenanceRow}>
                     <View style={styles.maintenanceInfo}>
                       <View style={[styles.maintenanceIcon, { backgroundColor: CATEGORY_CONFIG.BTS_DOWN.color }]}>
@@ -613,31 +468,36 @@ export default function MyTasksScreen() {
                       </View>
                       <View>
                         <Text style={styles.maintenanceLabel}>BTS Down</Text>
-                        <Text style={styles.maintenanceProgress}>
-                          {selectedTask.maintenanceProgress?.btsDown || 0} / {selectedTask.maintenanceProgress?.btsDownTarget || selectedTask.myTargets.btsDown}
+                        <Text style={[styles.maintenanceProgress, atTarget && { color: '#2E7D32', fontWeight: '700' }]}>
+                          {progress} / {target}{atTarget ? ' ✓' : ''}
                         </Text>
                       </View>
                     </View>
                     <View style={styles.maintenanceButtons}>
                       <TouchableOpacity 
-                        style={[styles.maintenanceBtn, { backgroundColor: '#F44336' }]}
+                        style={[styles.maintenanceBtn, { backgroundColor: progress <= 0 ? '#ccc' : '#F44336' }]}
                         onPress={() => handleMaintenanceUndo('BTS_DOWN')}
-                        disabled={maintenanceMutation.isPending}
+                        disabled={maintenanceMutation.isPending || progress <= 0}
                       >
                         <Minus size={18} color="#fff" />
                       </TouchableOpacity>
                       <TouchableOpacity 
-                        style={[styles.maintenanceBtn, { backgroundColor: '#4CAF50' }]}
+                        style={[styles.maintenanceBtn, { backgroundColor: atTarget ? '#ccc' : '#4CAF50' }]}
                         onPress={() => handleMaintenanceComplete('BTS_DOWN')}
-                        disabled={maintenanceMutation.isPending}
+                        disabled={maintenanceMutation.isPending || atTarget}
                       >
                         <Plus size={18} color="#fff" />
                       </TouchableOpacity>
                     </View>
                   </View>
-                )}
+                  );
+                })()}
 
-                {selectedTask.categories.hasRouteFail && selectedTask.myTargets.routeFail > 0 && (
+                {selectedTask.categories.hasRouteFail && selectedTask.myTargets.routeFail > 0 && (() => {
+                  const progress = selectedTask.maintenanceProgress?.routeFail || 0;
+                  const target = selectedTask.maintenanceProgress?.routeFailTarget || selectedTask.myTargets.routeFail;
+                  const atTarget = progress >= target;
+                  return (
                   <View style={styles.maintenanceRow}>
                     <View style={styles.maintenanceInfo}>
                       <View style={[styles.maintenanceIcon, { backgroundColor: CATEGORY_CONFIG.ROUTE_FAIL.color }]}>
@@ -645,31 +505,36 @@ export default function MyTasksScreen() {
                       </View>
                       <View>
                         <Text style={styles.maintenanceLabel}>Route Fail</Text>
-                        <Text style={styles.maintenanceProgress}>
-                          {selectedTask.maintenanceProgress?.routeFail || 0} / {selectedTask.maintenanceProgress?.routeFailTarget || selectedTask.myTargets.routeFail}
+                        <Text style={[styles.maintenanceProgress, atTarget && { color: '#2E7D32', fontWeight: '700' }]}>
+                          {progress} / {target}{atTarget ? ' ✓' : ''}
                         </Text>
                       </View>
                     </View>
                     <View style={styles.maintenanceButtons}>
                       <TouchableOpacity 
-                        style={[styles.maintenanceBtn, { backgroundColor: '#F44336' }]}
+                        style={[styles.maintenanceBtn, { backgroundColor: progress <= 0 ? '#ccc' : '#F44336' }]}
                         onPress={() => handleMaintenanceUndo('ROUTE_FAIL')}
-                        disabled={maintenanceMutation.isPending}
+                        disabled={maintenanceMutation.isPending || progress <= 0}
                       >
                         <Minus size={18} color="#fff" />
                       </TouchableOpacity>
                       <TouchableOpacity 
-                        style={[styles.maintenanceBtn, { backgroundColor: '#4CAF50' }]}
+                        style={[styles.maintenanceBtn, { backgroundColor: atTarget ? '#ccc' : '#4CAF50' }]}
                         onPress={() => handleMaintenanceComplete('ROUTE_FAIL')}
-                        disabled={maintenanceMutation.isPending}
+                        disabled={maintenanceMutation.isPending || atTarget}
                       >
                         <Plus size={18} color="#fff" />
                       </TouchableOpacity>
                     </View>
                   </View>
-                )}
+                  );
+                })()}
 
-                {selectedTask.categories.hasFtthDown && selectedTask.myTargets.ftthDown > 0 && (
+                {selectedTask.categories.hasFtthDown && selectedTask.myTargets.ftthDown > 0 && (() => {
+                  const progress = selectedTask.maintenanceProgress?.ftthDown || 0;
+                  const target = selectedTask.maintenanceProgress?.ftthDownTarget || selectedTask.myTargets.ftthDown;
+                  const atTarget = progress >= target;
+                  return (
                   <View style={styles.maintenanceRow}>
                     <View style={styles.maintenanceInfo}>
                       <View style={[styles.maintenanceIcon, { backgroundColor: CATEGORY_CONFIG.FTTH_DOWN.color }]}>
@@ -677,31 +542,36 @@ export default function MyTasksScreen() {
                       </View>
                       <View>
                         <Text style={styles.maintenanceLabel}>FTTH Down</Text>
-                        <Text style={styles.maintenanceProgress}>
-                          {selectedTask.maintenanceProgress?.ftthDown || 0} / {selectedTask.maintenanceProgress?.ftthDownTarget || selectedTask.myTargets.ftthDown}
+                        <Text style={[styles.maintenanceProgress, atTarget && { color: '#2E7D32', fontWeight: '700' }]}>
+                          {progress} / {target}{atTarget ? ' ✓' : ''}
                         </Text>
                       </View>
                     </View>
                     <View style={styles.maintenanceButtons}>
                       <TouchableOpacity 
-                        style={[styles.maintenanceBtn, { backgroundColor: '#F44336' }]}
+                        style={[styles.maintenanceBtn, { backgroundColor: progress <= 0 ? '#ccc' : '#F44336' }]}
                         onPress={() => handleMaintenanceUndo('FTTH_DOWN')}
-                        disabled={maintenanceMutation.isPending}
+                        disabled={maintenanceMutation.isPending || progress <= 0}
                       >
                         <Minus size={18} color="#fff" />
                       </TouchableOpacity>
                       <TouchableOpacity 
-                        style={[styles.maintenanceBtn, { backgroundColor: '#4CAF50' }]}
+                        style={[styles.maintenanceBtn, { backgroundColor: atTarget ? '#ccc' : '#4CAF50' }]}
                         onPress={() => handleMaintenanceComplete('FTTH_DOWN')}
-                        disabled={maintenanceMutation.isPending}
+                        disabled={maintenanceMutation.isPending || atTarget}
                       >
                         <Plus size={18} color="#fff" />
                       </TouchableOpacity>
                     </View>
                   </View>
-                )}
+                  );
+                })()}
 
-                {selectedTask.categories.hasOfcFail && selectedTask.myTargets.ofcFail > 0 && (
+                {selectedTask.categories.hasOfcFail && selectedTask.myTargets.ofcFail > 0 && (() => {
+                  const progress = selectedTask.maintenanceProgress?.ofcFail || 0;
+                  const target = selectedTask.maintenanceProgress?.ofcFailTarget || selectedTask.myTargets.ofcFail;
+                  const atTarget = progress >= target;
+                  return (
                   <View style={styles.maintenanceRow}>
                     <View style={styles.maintenanceInfo}>
                       <View style={[styles.maintenanceIcon, { backgroundColor: CATEGORY_CONFIG.OFC_FAIL.color }]}>
@@ -709,61 +579,30 @@ export default function MyTasksScreen() {
                       </View>
                       <View>
                         <Text style={styles.maintenanceLabel}>OFC Fail</Text>
-                        <Text style={styles.maintenanceProgress}>
-                          {selectedTask.maintenanceProgress?.ofcFail || 0} / {selectedTask.maintenanceProgress?.ofcFailTarget || selectedTask.myTargets.ofcFail}
+                        <Text style={[styles.maintenanceProgress, atTarget && { color: '#2E7D32', fontWeight: '700' }]}>
+                          {progress} / {target}{atTarget ? ' ✓' : ''}
                         </Text>
                       </View>
                     </View>
                     <View style={styles.maintenanceButtons}>
                       <TouchableOpacity 
-                        style={[styles.maintenanceBtn, { backgroundColor: '#F44336' }]}
+                        style={[styles.maintenanceBtn, { backgroundColor: progress <= 0 ? '#ccc' : '#F44336' }]}
                         onPress={() => handleMaintenanceUndo('OFC_FAIL')}
-                        disabled={maintenanceMutation.isPending}
+                        disabled={maintenanceMutation.isPending || progress <= 0}
                       >
                         <Minus size={18} color="#fff" />
                       </TouchableOpacity>
                       <TouchableOpacity 
-                        style={[styles.maintenanceBtn, { backgroundColor: '#4CAF50' }]}
+                        style={[styles.maintenanceBtn, { backgroundColor: atTarget ? '#ccc' : '#4CAF50' }]}
                         onPress={() => handleMaintenanceComplete('OFC_FAIL')}
-                        disabled={maintenanceMutation.isPending}
+                        disabled={maintenanceMutation.isPending || atTarget}
                       >
                         <Plus size={18} color="#fff" />
                       </TouchableOpacity>
                     </View>
                   </View>
-                )}
-
-                {selectedTask.categories.hasEb && selectedTask.myTargets.eb > 0 && (
-                  <View style={styles.maintenanceRow}>
-                    <View style={styles.maintenanceInfo}>
-                      <View style={[styles.maintenanceIcon, { backgroundColor: CATEGORY_CONFIG.EB.color }]}>
-                        <Text style={styles.maintenanceIconText}>E</Text>
-                      </View>
-                      <View>
-                        <Text style={styles.maintenanceLabel}>EB</Text>
-                        <Text style={styles.maintenanceProgress}>
-                          {selectedTask.maintenanceProgress?.eb || 0} / {selectedTask.maintenanceProgress?.ebTarget || selectedTask.myTargets.eb}
-                        </Text>
-                      </View>
-                    </View>
-                    <View style={styles.maintenanceButtons}>
-                      <TouchableOpacity 
-                        style={[styles.maintenanceBtn, { backgroundColor: '#F44336' }]}
-                        onPress={() => handleMaintenanceUndo('EB')}
-                        disabled={maintenanceMutation.isPending}
-                      >
-                        <Minus size={18} color="#fff" />
-                      </TouchableOpacity>
-                      <TouchableOpacity 
-                        style={[styles.maintenanceBtn, { backgroundColor: '#4CAF50' }]}
-                        onPress={() => handleMaintenanceComplete('EB')}
-                        disabled={maintenanceMutation.isPending}
-                      >
-                        <Plus size={18} color="#fff" />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                )}
+                  );
+                })()}
 
                 <TouchableOpacity
                   style={styles.closeModalButton}
