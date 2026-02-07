@@ -1,0 +1,45 @@
+name: Restart Application on Server
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+         # keep the folder structure (build/ and dist/ appear on server)
+
+      - name: Restart PM2 on server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ vars.SERVER_IP }}
+          username: ${{ vars.SERVER_USERNAME }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: 22
+          script: |
+            cd ${{ vars.SERVER_DEPLOY_PATH }}
+            cd build
+            export PATH="$HOME/.bun/bin:$PATH"
+
+            echo "♻️ Restarting application..."
+
+            pm2 restart salesmgmt-backend ||  pm2 start server.js \
+              --name salesmgmt-backend \
+              --interpreter bun \
+              -- --env-file .env
+
+            # Alternative (zero-downtime reload if already running):
+            # pm2 reload salesmgmt-backend -- --env-file .env || pm2 start ...
+
+            pm2 save
+
+            echo "Web Application started successfully !"
+
+      - name: Deployment Status
+        if: always()
+        run: |
+          echo "Deployment status: ${{ job.status }}"  
