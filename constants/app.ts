@@ -1,6 +1,7 @@
 import { UserRole, Circle, EventCategory, IssueType } from '@/types';
 
 export const USER_ROLES: { label: string; value: UserRole }[] = [
+  { label: 'CMD (Chairman)', value: 'CMD' },
   { label: 'System Admin', value: 'ADMIN' },
   { label: 'GM (Multi-Circle)', value: 'GM' },
   { label: 'CGM (Circle)', value: 'CGM' },
@@ -67,6 +68,7 @@ export const CUSTOMER_TYPES = [
 
 export const getRoleHierarchy = (role: UserRole): number => {
   const hierarchy: Record<UserRole, number> = {
+    CMD: 11,
     ADMIN: 10,
     GM: 6,
     CGM: 5,
@@ -79,23 +81,23 @@ export const getRoleHierarchy = (role: UserRole): number => {
 };
 
 export const isAdminRole = (role: UserRole): boolean => {
-  return role === 'ADMIN';
+  return role === 'ADMIN' || role === 'CMD';
 };
 
 export const canAccessAdminPanel = (role: UserRole): boolean => {
-  return ['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(role);
+  return ['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(role);
 };
 
 export const canUploadCSV = (role: UserRole): boolean => {
-  return role === 'ADMIN';
+  return role === 'ADMIN' || role === 'CMD';
 };
 
 export const canCreateEvents = (role: UserRole): boolean => {
-  return ['AGM', 'DGM', 'CGM', 'GM'].includes(role);
+  return ['CMD', 'AGM', 'DGM', 'CGM', 'GM'].includes(role);
 };
 
 export const canViewAllCircles = (role: UserRole): boolean => {
-  return ['GM'].includes(role);
+  return ['CMD', 'GM'].includes(role);
 };
 
 export const canApprove = (role: UserRole): boolean => {

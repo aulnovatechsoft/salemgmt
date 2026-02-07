@@ -42,12 +42,12 @@ const STATUS_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
 const CATEGORY_CONFIG: Record<string, { label: string; color: string; bg: string; icon: string; type: 'sales' | 'maintenance' | 'finance' }> = {
   SIM: { label: 'SIM Sales', color: '#1565C0', bg: '#E3F2FD', icon: 'sim', type: 'sales' },
   FTTH: { label: 'FTTH Sales', color: '#2E7D32', bg: '#E8F5E9', icon: 'wifi', type: 'sales' },
-  LEASE_CIRCUIT: { label: 'Lease Circuit', color: '#EF6C00', bg: '#FFF3E0', icon: 'cable', type: 'maintenance' },
+  LEASE_CIRCUIT: { label: 'Lease Circuit', color: '#EF6C00', bg: '#FFF3E0', icon: 'cable', type: 'sales' },
   BTS_DOWN: { label: 'BTS Down', color: '#C62828', bg: '#FFEBEE', icon: 'tower', type: 'maintenance' },
   FTTH_DOWN: { label: 'FTTH Down', color: '#7B1FA2', bg: '#F3E5F5', icon: 'signal', type: 'maintenance' },
   ROUTE_FAIL: { label: 'Route Fail', color: '#00796B', bg: '#E0F2F1', icon: 'route', type: 'maintenance' },
   OFC_FAIL: { label: 'OFC Fail', color: '#546E7A', bg: '#ECEFF1', icon: 'fiber', type: 'maintenance' },
-  EB: { label: 'EB Connections', color: '#FF5722', bg: '#FBE9E7', icon: 'zap', type: 'maintenance' },
+  EB: { label: 'EB Connections', color: '#FF5722', bg: '#FBE9E7', icon: 'zap', type: 'sales' },
   FIN_LC: { label: 'LC Collection', color: '#00838F', bg: '#E0F7FA', icon: 'rupee', type: 'finance' },
   FIN_LL_FTTH: { label: 'LL/FTTH Collection', color: '#00695C', bg: '#E0F2F1', icon: 'rupee', type: 'finance' },
   FIN_TOWER: { label: 'Tower Collection', color: '#4527A0', bg: '#EDE7F6', icon: 'rupee', type: 'finance' },
@@ -329,6 +329,10 @@ export default function EventDetailScreen() {
   const [editingMember, setEditingMember] = useState<{ employeeId: string; name: string } | null>(null);
   const [editMemberSimTarget, setEditMemberSimTarget] = useState('');
   const [editMemberFtthTarget, setEditMemberFtthTarget] = useState('');
+  const [leaseTarget, setLeaseTarget] = useState('');
+  const [ebTarget, setEbTarget] = useState('');
+  const [editMemberLeaseTarget, setEditMemberLeaseTarget] = useState('');
+  const [editMemberEbTarget, setEditMemberEbTarget] = useState('');
   
   const trpcUtils = trpc.useUtils();
   
@@ -340,29 +344,43 @@ export default function EventDetailScreen() {
   
   // Calculate validation status for target distribution
   const getDistributionValidation = () => {
-    if (!eventData || !resourceStatus) return { simValid: true, ftthValid: true, simRemaining: 0, ftthRemaining: 0 };
+    if (!eventData || !resourceStatus) return { simValid: true, ftthValid: true, leaseValid: true, ebValid: true, simRemaining: 0, ftthRemaining: 0, leaseRemaining: 0, ebRemaining: 0 };
     
     const newSimTarget = parseInt(editMemberSimTarget) || 0;
     const newFtthTarget = parseInt(editMemberFtthTarget) || 0;
+    const newLeaseTarget = parseInt(editMemberLeaseTarget) || 0;
+    const newEbTarget = parseInt(editMemberEbTarget) || 0;
     
-    // Calculate what's available for this member (current remaining + their current target)
-    const currentMemberSimTarget = editingMember 
-      ? (eventData.teamWithAllocations?.find((m: any) => m.employeeId === editingMember.employeeId)?.simTarget || 0)
-      : 0;
-    const currentMemberFtthTarget = editingMember 
-      ? (eventData.teamWithAllocations?.find((m: any) => m.employeeId === editingMember.employeeId)?.ftthTarget || 0)
-      : 0;
+    const currentMember = editingMember 
+      ? eventData.teamWithAllocations?.find((m: any) => m.employeeId === editingMember.employeeId)
+      : null;
+    
+    const currentMemberSimTarget = currentMember?.simTarget || 0;
+    const currentMemberFtthTarget = currentMember?.ftthTarget || 0;
+    const currentMemberLeaseTarget = currentMember?.leaseTarget || 0;
+    const currentMemberEbTarget = currentMember?.ebTarget || 0;
     
     const simAvailable = resourceStatus.remaining.simToDistribute + currentMemberSimTarget;
     const ftthAvailable = resourceStatus.remaining.ftthToDistribute + currentMemberFtthTarget;
     
+    const totalLeaseDistributed = (eventData.teamWithAllocations || []).reduce((sum: number, m: any) => sum + (m.leaseTarget || 0), 0);
+    const totalEbDistributed = (eventData.teamWithAllocations || []).reduce((sum: number, m: any) => sum + (m.ebTarget || 0), 0);
+    const leaseAvailable = (eventData.targetLease || 0) - totalLeaseDistributed + currentMemberLeaseTarget;
+    const ebAvailable = (eventData.targetEb || 0) - totalEbDistributed + currentMemberEbTarget;
+    
     return {
       simValid: newSimTarget <= simAvailable,
       ftthValid: newFtthTarget <= ftthAvailable,
+      leaseValid: newLeaseTarget <= leaseAvailable,
+      ebValid: newEbTarget <= ebAvailable,
       simRemaining: simAvailable - newSimTarget,
       ftthRemaining: ftthAvailable - newFtthTarget,
+      leaseRemaining: leaseAvailable - newLeaseTarget,
+      ebRemaining: ebAvailable - newEbTarget,
       simAvailable,
       ftthAvailable,
+      leaseAvailable,
+      ebAvailable,
     };
   };
   
@@ -590,6 +608,16 @@ export default function EventDetailScreen() {
     },
   });
 
+  const submitForReviewMutation = trpc.events.submitTaskForReview.useMutation({
+    onSuccess: () => {
+      Alert.alert('Success', 'Task submitted for review!');
+      refetch();
+    },
+    onError: (error) => {
+      Alert.alert('Error', error.message);
+    },
+  });
+
   const [rejectReason, setRejectReason] = useState('');
   const [rejectModalVisible, setRejectModalVisible] = useState(false);
   const [rejectingAssignmentId, setRejectingAssignmentId] = useState<string | null>(null);
@@ -669,6 +697,8 @@ export default function EventDetailScreen() {
     setSelectedMemberId('');
     setSimTarget('');
     setFtthTarget('');
+    setLeaseTarget('');
+    setEbTarget('');
   };
 
   const resetSubtaskForm = () => {
@@ -707,6 +737,8 @@ export default function EventDetailScreen() {
     setEditingMember({ employeeId: member.employeeId, name: member.employee?.name || 'Unknown' });
     setEditMemberSimTarget(member.simTarget.toString());
     setEditMemberFtthTarget(member.ftthTarget.toString());
+    setEditMemberLeaseTarget((member.leaseTarget || 0).toString());
+    setEditMemberEbTarget((member.ebTarget || 0).toString());
     setShowEditTargetModal(true);
   };
 
@@ -747,6 +779,8 @@ export default function EventDetailScreen() {
       employeeId: selectedMemberId,
       simTarget: parseInt(simTarget) || 0,
       ftthTarget: parseInt(ftthTarget) || 0,
+      leaseTarget: parseInt(leaseTarget) || 0,
+      ebTarget: parseInt(ebTarget) || 0,
       assignedBy: employee.id,
     });
   };
@@ -890,8 +924,9 @@ export default function EventDetailScreen() {
     
     const simTarget = Math.floor(parseInt(editMemberSimTarget) || 0);
     const ftthTarget = Math.floor(parseInt(editMemberFtthTarget) || 0);
+    const leaseTargetVal = Math.floor(parseInt(editMemberLeaseTarget) || 0);
+    const ebTargetVal = Math.floor(parseInt(editMemberEbTarget) || 0);
     
-    // Validate before submitting
     const validation = getDistributionValidation();
     if (!validation.simValid) {
       Alert.alert('Over Allocation', `Cannot assign ${simTarget} SIMs. Only ${validation.simAvailable} available for distribution.`);
@@ -901,12 +936,22 @@ export default function EventDetailScreen() {
       Alert.alert('Over Allocation', `Cannot assign ${ftthTarget} FTTH. Only ${validation.ftthAvailable} available for distribution.`);
       return;
     }
+    if (!validation.leaseValid) {
+      Alert.alert('Over Allocation', `Cannot assign ${leaseTargetVal} Lease Circuit. Only ${validation.leaseAvailable} available for distribution.`);
+      return;
+    }
+    if (!validation.ebValid) {
+      Alert.alert('Over Allocation', `Cannot assign ${ebTargetVal} EB. Only ${validation.ebAvailable} available for distribution.`);
+      return;
+    }
     
     updateTargetsMutation.mutate({
       eventId: id || '',
       employeeId: editingMember.employeeId,
       simTarget,
       ftthTarget,
+      leaseTarget: leaseTargetVal,
+      ebTarget: ebTargetVal,
       updatedBy: employee.id,
     });
   };
@@ -1355,106 +1400,62 @@ export default function EventDetailScreen() {
             </View>
           )}
           
-          {/* Lease Circuit Maintenance Card */}
-          {hasCategory('LEASE_CIRCUIT') && eventData.targetLease > 0 && (() => {
-            const slaDisplay = getSlaTimeDisplay(eventData.slaStatus?.lease);
-            const completionPct = Math.round(((eventData.leaseCompleted || 0) / eventData.targetLease) * 100);
-            return (
-              <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>
-                <View style={styles.categoryCardHeader}>
-                  <View style={styles.categoryTitleRow}>
-                    <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.bg }]}>
-                      <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>LC</Text>
-                    </View>
-                    <View style={styles.categoryTitleInfo}>
-                      <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.LEASE_CIRCUIT.label}</Text>
-                      <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
-                    </View>
+          {/* Lease Circuit Sales Category Card */}
+          {hasCategory('LEASE_CIRCUIT') && eventData.targetLease > 0 && (
+            <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>
+              <View style={styles.categoryCardHeader}>
+                <View style={styles.categoryTitleRow}>
+                  <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.bg }]}>
+                    <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>LC</Text>
                   </View>
-                  <View style={[styles.statusBadgeMini, { backgroundColor: slaDisplay.urgencyBg }]}>
-                    <Text style={[styles.statusBadgeMiniText, { color: slaDisplay.urgencyColor }]}>{slaDisplay.urgencyLabel}</Text>
+                  <View style={styles.categoryTitleInfo}>
+                    <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.LEASE_CIRCUIT.label}</Text>
+                    <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
                   </View>
                 </View>
-                
-                <View style={styles.maintenanceStats}>
-                  <View style={styles.maintenanceStatItem}>
-                    <Text style={styles.maintenanceStatLabel}>Target</Text>
-                    <Text style={styles.maintenanceStatValue}>{eventData.targetLease}</Text>
-                  </View>
-                  <View style={styles.maintenanceStatItem}>
-                    <Text style={styles.maintenanceStatLabel}>Completed</Text>
-                    <Text style={[styles.maintenanceStatValue, { color: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>{eventData.leaseCompleted || 0}</Text>
-                  </View>
-                  <View style={styles.maintenanceStatItem}>
-                    <Text style={styles.maintenanceStatLabel}>Remaining</Text>
-                    <Text style={styles.maintenanceStatValue}>{eventData.targetLease - (eventData.leaseCompleted || 0)}</Text>
-                  </View>
-                  <View style={styles.maintenanceStatItem}>
-                    <Text style={styles.maintenanceStatLabel}>Time Left</Text>
-                    <Text style={styles.maintenanceStatValue}>{slaDisplay.timeLeft}</Text>
-                  </View>
+                <View style={styles.categoryTargetBadge}>
+                  <Text style={styles.categoryTargetText}>{eventData.leaseCompleted || 0} / {eventData.targetLease}</Text>
                 </View>
-                
-                {renderSlaBadge(eventData.slaStatus?.lease, styles)}
-                
-                <View style={styles.categoryProgressBar}>
-                  <View style={[styles.categoryProgressFill, { width: `${completionPct}%`, backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]} />
-                </View>
-                
-                {/* Team Members for Lease Circuit with per-member progress */}
-                {eventData.teamWithAllocations && eventData.teamWithAllocations.length > 0 && (
-                  <View style={styles.categoryAssignees}>
-                    <Text style={styles.assigneesLabel}>Assigned Team ({eventData.teamWithAllocations.length})</Text>
-                    {eventData.teamWithAllocations.map((member: any, idx: number) => {
-                      const memberTarget = member.leaseTarget || getDistributedTarget(eventData.targetLease, eventData.teamWithAllocations.length, idx);
-                      const memberCompleted = member.leaseCompleted || 0;
-                      const isSelf = member.employeeId === employee?.id;
-                      const canUpdateMember = canManageTeam || isSelf;
-                      return (
-                        <View key={member.id} style={styles.assigneeRow}>
-                          <View style={styles.assigneeInfo}>
-                            <View style={[styles.assigneeAvatar, { backgroundColor: getAvatarColor(member.employee?.name || 'U') }]}>
-                              <Text style={[styles.assigneeAvatarText, { color: '#fff' }]}>
-                                {(member.employee?.name || 'U').split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase()}
-                              </Text>
-                            </View>
-                            <View style={styles.assigneeDetails}>
-                              <Text style={styles.assigneeName}>{member.employee?.name || 'Unknown'}{isSelf ? ' (You)' : ''}</Text>
-                              <Text style={styles.assigneeRole}>{member.employee?.designation || member.employee?.role}{member.employee?.persNo ? ` | ${member.employee.persNo}` : ''}</Text>
-                            </View>
-                          </View>
-                          <View style={styles.memberProgressContainer}>
-                            <Text style={[styles.memberProgressText, { color: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>{memberCompleted}/{memberTarget}</Text>
-                            {canUpdateMember && dbStatus === 'active' && (
-                              <View style={styles.memberActionButtons}>
-                                {memberCompleted > 0 && (
-                                  <TouchableOpacity 
-                                    style={[styles.memberActionBtn, { borderColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]} 
-                                    onPress={() => handleMemberTaskComplete(member.employeeId, 'LEASE', -1)}
-                                  >
-                                    <Text style={[styles.memberActionBtnText, { color: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>-1</Text>
-                                  </TouchableOpacity>
-                                )}
-                                {memberCompleted < memberTarget && (
-                                  <TouchableOpacity 
-                                    style={[styles.memberActionBtnPrimary, { backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color, opacity: pendingMemberTask === `${member.employeeId}-LEASE` ? 0.6 : 1 }]} 
-                                    onPress={() => handleMemberTaskComplete(member.employeeId, 'LEASE', 1)}
-                                    disabled={pendingMemberTask === `${member.employeeId}-LEASE`}
-                                  >
-                                    <Text style={styles.memberActionBtnPrimaryText}>{pendingMemberTask === `${member.employeeId}-LEASE` ? 'Updating...' : 'Mark +1'}</Text>
-                                  </TouchableOpacity>
-                                )}
-                              </View>
-                            )}
-                          </View>
+              </View>
+              
+              <View style={styles.categoryProgressBar}>
+                <View style={[styles.categoryProgressFill, { width: `${Math.min(((eventData.leaseCompleted || 0) / Math.max(eventData.targetLease, 1)) * 100, 100)}%`, backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]} />
+              </View>
+              
+              <View style={styles.categoryAssignees}>
+                <Text style={styles.assigneesLabel}>Assigned Team:</Text>
+                {eventData.teamWithAllocations?.filter((m: any) => m.leaseTarget > 0).length > 0 ? (
+                  eventData.teamWithAllocations?.filter((m: any) => m.leaseTarget > 0).map((member: any) => {
+                    const memberCompleted = member.leaseCompleted || 0;
+                    const isSelf = member.employeeId === employee?.id;
+                    return (
+                    <View key={member.id} style={styles.assigneeRow}>
+                      <View style={styles.assigneeInfo}>
+                        <View style={[styles.assigneeAvatar, { backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.bg }]}>
+                          <Text style={[styles.assigneeAvatarText, { color: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>
+                            {(member.employee?.name || 'U').charAt(0)}
+                          </Text>
                         </View>
-                      );
-                    })}
-                  </View>
+                        <View style={styles.assigneeDetails}>
+                          <Text style={styles.assigneeName}>{member.employee?.name || 'Unknown'}{isSelf ? ' (You)' : ''}</Text>
+                          <Text style={styles.assigneeRole}>{member.employee?.designation} | {member.employee?.persNo}</Text>
+                        </View>
+                      </View>
+                      <View style={styles.assigneeProgress}>
+                        <Text style={styles.assigneeProgressText}>{memberCompleted} / {member.leaseTarget}</Text>
+                        <View style={styles.assigneeMiniBar}>
+                          <View style={[styles.assigneeMiniBarFill, { width: `${member.leaseTarget > 0 ? Math.min((memberCompleted / member.leaseTarget) * 100, 100) : 0}%`, backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]} />
+                        </View>
+                      </View>
+                    </View>
+                    );
+                  })
+                ) : (
+                  <Text style={styles.noAssigneesText}>No team members assigned to Lease Circuit</Text>
                 )}
               </View>
-            );
-          })()}
+            </View>
+          )}
           
           {/* BTS Down Maintenance Card */}
           {hasCategory('BTS_DOWN') && eventData.targetBtsDown > 0 && (() => {
@@ -1510,7 +1511,7 @@ export default function EventDetailScreen() {
                       const memberTarget = member.btsDownTarget || getDistributedTarget(eventData.targetBtsDown, eventData.teamWithAllocations.length, idx);
                       const memberCompleted = member.btsDownCompleted || 0;
                       const isSelf = member.employeeId === employee?.id;
-                      const canUpdateMember = canManageTeam || isSelf;
+                      const canUpdateMember = canManageTeam || isSelf; // O&M: managers and self can update
                       return (
                         <View key={member.id} style={styles.assigneeRow}>
                           <View style={styles.assigneeInfo}>
@@ -1860,106 +1861,62 @@ export default function EventDetailScreen() {
             );
           })()}
           
-          {/* EB Connections Maintenance Card */}
-          {eventData.targetEb > 0 && (() => {
-            const slaDisplay = getSlaTimeDisplay(eventData.slaStatus?.eb);
-            const completionPct = Math.round(((eventData.ebCompleted || 0) / eventData.targetEb) * 100);
-            return (
-              <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.EB.color }]}>
-                <View style={styles.categoryCardHeader}>
-                  <View style={styles.categoryTitleRow}>
-                    <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.EB.bg }]}>
-                      <Zap size={16} color={CATEGORY_CONFIG.EB.color} />
-                    </View>
-                    <View style={styles.categoryTitleInfo}>
-                      <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.EB.label}</Text>
-                      <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
-                    </View>
+          {/* EB Connections Sales Category Card */}
+          {eventData.targetEb > 0 && (
+            <View style={[styles.categoryCard, { borderLeftColor: CATEGORY_CONFIG.EB.color }]}>
+              <View style={styles.categoryCardHeader}>
+                <View style={styles.categoryTitleRow}>
+                  <View style={[styles.categoryIconCircle, { backgroundColor: CATEGORY_CONFIG.EB.bg }]}>
+                    <Text style={[styles.categoryIconText, { color: CATEGORY_CONFIG.EB.color }]}>EB</Text>
                   </View>
-                  <View style={[styles.statusBadgeMini, { backgroundColor: slaDisplay.urgencyBg }]}>
-                    <Text style={[styles.statusBadgeMiniText, { color: slaDisplay.urgencyColor }]}>{slaDisplay.urgencyLabel}</Text>
+                  <View style={styles.categoryTitleInfo}>
+                    <Text style={styles.categoryCardTitle}>{CATEGORY_CONFIG.EB.label}</Text>
+                    <Text style={styles.categoryDueDate}>Due: {new Date(eventData.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
                   </View>
                 </View>
-                
-                <View style={styles.maintenanceStats}>
-                  <View style={styles.maintenanceStatItem}>
-                    <Text style={styles.maintenanceStatLabel}>Target</Text>
-                    <Text style={styles.maintenanceStatValue}>{eventData.targetEb}</Text>
-                  </View>
-                  <View style={styles.maintenanceStatItem}>
-                    <Text style={styles.maintenanceStatLabel}>Completed</Text>
-                    <Text style={[styles.maintenanceStatValue, { color: CATEGORY_CONFIG.EB.color }]}>{eventData.ebCompleted || 0}</Text>
-                  </View>
-                  <View style={styles.maintenanceStatItem}>
-                    <Text style={styles.maintenanceStatLabel}>Remaining</Text>
-                    <Text style={styles.maintenanceStatValue}>{eventData.targetEb - (eventData.ebCompleted || 0)}</Text>
-                  </View>
-                  <View style={styles.maintenanceStatItem}>
-                    <Text style={styles.maintenanceStatLabel}>Time Left</Text>
-                    <Text style={styles.maintenanceStatValue}>{slaDisplay.timeLeft}</Text>
-                  </View>
+                <View style={styles.categoryTargetBadge}>
+                  <Text style={styles.categoryTargetText}>{eventData.ebCompleted || 0} / {eventData.targetEb}</Text>
                 </View>
-                
-                {renderSlaBadge(eventData.slaStatus?.eb, styles)}
-                
-                <View style={styles.categoryProgressBar}>
-                  <View style={[styles.categoryProgressFill, { width: `${completionPct}%`, backgroundColor: CATEGORY_CONFIG.EB.color }]} />
-                </View>
-                
-                {/* Team Members for EB with per-member progress */}
-                {eventData.teamWithAllocations && eventData.teamWithAllocations.length > 0 && (
-                  <View style={styles.categoryAssignees}>
-                    <Text style={styles.assigneesLabel}>Assigned Team ({eventData.teamWithAllocations.length})</Text>
-                    {eventData.teamWithAllocations.map((member: any, idx: number) => {
-                      const memberTarget = member.ebTarget || getDistributedTarget(eventData.targetEb, eventData.teamWithAllocations.length, idx);
-                      const memberCompleted = member.ebCompleted || 0;
-                      const isSelf = member.employeeId === employee?.id;
-                      const canUpdateMember = canManageTeam || isSelf;
-                      return (
-                        <View key={member.id} style={styles.assigneeRow}>
-                          <View style={styles.assigneeInfo}>
-                            <View style={[styles.assigneeAvatar, { backgroundColor: getAvatarColor(member.employee?.name || 'U') }]}>
-                              <Text style={[styles.assigneeAvatarText, { color: '#fff' }]}>
-                                {(member.employee?.name || 'U').split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase()}
-                              </Text>
-                            </View>
-                            <View style={styles.assigneeDetails}>
-                              <Text style={styles.assigneeName}>{member.employee?.name || 'Unknown'}{isSelf ? ' (You)' : ''}</Text>
-                              <Text style={styles.assigneeRole}>{member.employee?.designation || member.employee?.role}{member.employee?.persNo ? ` | ${member.employee.persNo}` : ''}</Text>
-                            </View>
-                          </View>
-                          <View style={styles.memberProgressContainer}>
-                            <Text style={[styles.memberProgressText, { color: CATEGORY_CONFIG.EB.color }]}>{memberCompleted}/{memberTarget}</Text>
-                            {canUpdateMember && dbStatus === 'active' && (
-                              <View style={styles.memberActionButtons}>
-                                {memberCompleted > 0 && (
-                                  <TouchableOpacity 
-                                    style={[styles.memberActionBtn, { borderColor: CATEGORY_CONFIG.EB.color }]} 
-                                    onPress={() => handleMemberTaskComplete(member.employeeId, 'EB', -1)}
-                                  >
-                                    <Text style={[styles.memberActionBtnText, { color: CATEGORY_CONFIG.EB.color }]}>-1</Text>
-                                  </TouchableOpacity>
-                                )}
-                                {memberCompleted < memberTarget && (
-                                  <TouchableOpacity 
-                                    style={[styles.memberActionBtnPrimary, { backgroundColor: CATEGORY_CONFIG.EB.color, opacity: pendingMemberTask === `${member.employeeId}-EB` ? 0.6 : 1 }]} 
-                                    onPress={() => handleMemberTaskComplete(member.employeeId, 'EB', 1)}
-                                    disabled={pendingMemberTask === `${member.employeeId}-EB`}
-                                  >
-                                    <Text style={styles.memberActionBtnPrimaryText}>{pendingMemberTask === `${member.employeeId}-EB` ? 'Updating...' : 'Mark +1'}</Text>
-                                  </TouchableOpacity>
-                                )}
-                              </View>
-                            )}
-                          </View>
+              </View>
+              
+              <View style={styles.categoryProgressBar}>
+                <View style={[styles.categoryProgressFill, { width: `${Math.min(((eventData.ebCompleted || 0) / Math.max(eventData.targetEb, 1)) * 100, 100)}%`, backgroundColor: CATEGORY_CONFIG.EB.color }]} />
+              </View>
+              
+              <View style={styles.categoryAssignees}>
+                <Text style={styles.assigneesLabel}>Assigned Team:</Text>
+                {eventData.teamWithAllocations?.filter((m: any) => m.ebTarget > 0).length > 0 ? (
+                  eventData.teamWithAllocations?.filter((m: any) => m.ebTarget > 0).map((member: any) => {
+                    const memberCompleted = member.ebCompleted || 0;
+                    const isSelf = member.employeeId === employee?.id;
+                    return (
+                    <View key={member.id} style={styles.assigneeRow}>
+                      <View style={styles.assigneeInfo}>
+                        <View style={[styles.assigneeAvatar, { backgroundColor: CATEGORY_CONFIG.EB.bg }]}>
+                          <Text style={[styles.assigneeAvatarText, { color: CATEGORY_CONFIG.EB.color }]}>
+                            {(member.employee?.name || 'U').charAt(0)}
+                          </Text>
                         </View>
-                      );
-                    })}
-                  </View>
+                        <View style={styles.assigneeDetails}>
+                          <Text style={styles.assigneeName}>{member.employee?.name || 'Unknown'}{isSelf ? ' (You)' : ''}</Text>
+                          <Text style={styles.assigneeRole}>{member.employee?.designation} | {member.employee?.persNo}</Text>
+                        </View>
+                      </View>
+                      <View style={styles.assigneeProgress}>
+                        <Text style={styles.assigneeProgressText}>{memberCompleted} / {member.ebTarget}</Text>
+                        <View style={styles.assigneeMiniBar}>
+                          <View style={[styles.assigneeMiniBarFill, { width: `${member.ebTarget > 0 ? Math.min((memberCompleted / member.ebTarget) * 100, 100) : 0}%`, backgroundColor: CATEGORY_CONFIG.EB.color }]} />
+                        </View>
+                      </View>
+                    </View>
+                    );
+                  })
+                ) : (
+                  <Text style={styles.noAssigneesText}>No team members assigned to EB Connections</Text>
                 )}
               </View>
-            );
-          })()}
+            </View>
+          )}
           
           {/* ===== FINANCE CATEGORY CARDS ===== */}
           
@@ -2108,6 +2065,7 @@ export default function EventDetailScreen() {
               {activityLogs.slice(0, 5).map((log, idx) => {
                 const getActivityIcon = (action: string) => {
                   if (action.includes('TASK_PROGRESS')) return { icon: 'check', color: '#2E7D32', bg: '#E8F5E9' };
+                  if (action === 'SUBMIT_EVENT_SALES') return { icon: 'sales', color: '#00796B', bg: '#E0F2F1' };
                   if (action.includes('ASSIGN')) return { icon: 'user', color: '#1565C0', bg: '#E3F2FD' };
                   if (action.includes('STATUS')) return { icon: 'flag', color: '#EF6C00', bg: '#FFF3E0' };
                   if (action.includes('CREATE')) return { icon: 'plus', color: '#7B1FA2', bg: '#F3E5F5' };
@@ -2119,6 +2077,23 @@ export default function EventDetailScreen() {
                 const getActivityText = () => {
                   if (log.action === 'UPDATE_TASK_PROGRESS' && details) {
                     return `Completed ${details.increment || 1} ${details.taskType?.replace('_', ' ') || 'task'}`;
+                  }
+                  if (log.action === 'SUBMIT_TASK_PROGRESS' && details) {
+                    const parts: string[] = [];
+                    const d = details as any;
+                    if (d.simSold) parts.push(`SIM: ${d.simSold}`);
+                    if (d.ftthSold) parts.push(`FTTH: ${d.ftthSold}`);
+                    if (d.leaseCompleted) parts.push(`Lease: ${d.leaseCompleted}`);
+                    if (d.ebCompleted) parts.push(`EB: ${d.ebCompleted}`);
+                    return parts.length > 0 ? `submitted progress (${parts.join(', ')})` : 'submitted progress';
+                  }
+                  if (log.action === 'SUBMIT_EVENT_SALES' && details) {
+                    const parts: string[] = [];
+                    const d = details as any;
+                    if (d.simsSold) parts.push(`SIM: ${d.simsSold} sold${d.simsActivated ? `, ${d.simsActivated} activated` : ''}`);
+                    if (d.ftthSold) parts.push(`FTTH: ${d.ftthSold} sold${d.ftthActivated ? `, ${d.ftthActivated} activated` : ''}`);
+                    if (d.customerType) parts.push(d.customerType);
+                    return parts.length > 0 ? `submitted sales entry (${parts.join(', ')})` : 'submitted sales entry';
                   }
                   if (log.action === 'UPDATE_EVENT_STATUS' && details) {
                     return `Status changed to ${details.status}`;
@@ -2132,7 +2107,11 @@ export default function EventDetailScreen() {
                 return (
                   <View key={log.id || idx} style={styles.activityItem}>
                     <View style={[styles.activityIcon, { backgroundColor: iconInfo.bg }]}>
-                      <CheckCircle size={12} color={iconInfo.color} />
+                      {iconInfo.icon === 'sales' ? <Zap size={12} color={iconInfo.color} /> :
+                       iconInfo.icon === 'user' ? <User size={12} color={iconInfo.color} /> :
+                       iconInfo.icon === 'flag' ? <Flag size={12} color={iconInfo.color} /> :
+                       iconInfo.icon === 'plus' ? <Plus size={12} color={iconInfo.color} /> :
+                       <CheckCircle size={12} color={iconInfo.color} />}
                     </View>
                     <View style={styles.activityContent}>
                       <Text style={styles.activityText}>
@@ -2161,8 +2140,8 @@ export default function EventDetailScreen() {
           </View>
         )}
 
-        {/* Pending Reviews Section - For Managers */}
-        {canManageTeam && eventData.teamWithAllocations?.some((m: any) => m.submissionStatus === 'submitted') && (
+        {/* Pending Reviews Section - Only for Event Creator */}
+        {isEventCreator && eventData.teamWithAllocations?.some((m: any) => m.submissionStatus === 'submitted') && (
           <View style={[styles.sectionCard, { borderLeftColor: '#1565C0', borderLeftWidth: 4 }]}>
             <View style={styles.sectionHeader}>
               <View style={styles.sectionTitleRow}>
@@ -2377,16 +2356,26 @@ export default function EventDetailScreen() {
           </TouchableOpacity>
         )}
 
-        {(isTeamMember || canManageTeam) && dbStatus === 'active' && (hasCategory('SIM') || hasCategory('FTTH')) && (() => {
-          // Find current user's allocation
+        {(isTeamMember || canManageTeam) && dbStatus === 'active' && (hasCategory('SIM') || hasCategory('FTTH') || hasCategory('LEASE_CIRCUIT') || hasCategory('EB')) && (() => {
           const myAllocation = eventData.teamWithAllocations?.find((t: any) => t.employeeId === employee?.id);
-          const hasSim = hasCategory('SIM');
-          const hasFtth = hasCategory('FTTH');
+          const myAssignedTypes: string[] = (myAllocation as any)?.assignedTaskTypes || [];
+          const hasSpecificAssignment = myAssignedTypes.length > 0;
+
+          const hasSim = hasCategory('SIM') && (!hasSpecificAssignment || myAssignedTypes.includes('SIM'));
+          const hasFtth = hasCategory('FTTH') && (!hasSpecificAssignment || myAssignedTypes.includes('FTTH'));
+          const hasLease = hasCategory('LEASE_CIRCUIT') && (!hasSpecificAssignment || myAssignedTypes.includes('LEASE_CIRCUIT'));
+          const hasEb = hasCategory('EB') && (!hasSpecificAssignment || myAssignedTypes.includes('EB'));
+
+          if (!hasSim && !hasFtth && !hasLease && !hasEb && !canManageTeam) return null;
           
-          // Check if targets are fully achieved
           const simAchieved = !hasSim || (myAllocation && (myAllocation.actualSimSold || 0) >= (myAllocation.simTarget || 0) && myAllocation.simTarget > 0);
           const ftthAchieved = !hasFtth || (myAllocation && (myAllocation.actualFtthSold || 0) >= (myAllocation.ftthTarget || 0) && myAllocation.ftthTarget > 0);
-          const allTargetsAchieved = simAchieved && ftthAchieved && myAllocation && ((myAllocation.simTarget || 0) > 0 || (myAllocation.ftthTarget || 0) > 0);
+          const leaseAchieved = !hasLease || (myAllocation && (myAllocation.leaseCompleted || 0) >= (myAllocation.leaseTarget || 0) && myAllocation.leaseTarget > 0);
+          const ebAchieved = !hasEb || (myAllocation && (myAllocation.ebCompleted || 0) >= (myAllocation.ebTarget || 0) && myAllocation.ebTarget > 0);
+          const allTargetsAchieved = simAchieved && ftthAchieved && leaseAchieved && ebAchieved && myAllocation && (
+            (myAllocation.simTarget || 0) > 0 || (myAllocation.ftthTarget || 0) > 0 || 
+            (myAllocation.leaseTarget || 0) > 0 || (myAllocation.ebTarget || 0) > 0
+          );
           
           if (allTargetsAchieved) {
             return (
@@ -2408,13 +2397,76 @@ export default function EventDetailScreen() {
           );
         })()}
 
-        {eventData.salesEntries?.length > 0 && (hasCategory('SIM') || hasCategory('FTTH')) && (
+        {/* Submit for Review button - for team members who have an assignment */}
+        {isTeamMember && !isEventCreator && dbStatus === 'active' && (() => {
+          const myAllocation = eventData.teamWithAllocations?.find((t: any) => t.employeeId === employee?.id);
+          if (!myAllocation) return null;
+          const status = myAllocation.submissionStatus;
+          const canSubmitForReview = status === 'in_progress' || status === 'rejected' || status === 'not_started';
+          if (!canSubmitForReview) return null;
+          return (
+            <TouchableOpacity 
+              style={[styles.submitSalesButton, { backgroundColor: '#1565C0' }]}
+              onPress={() => {
+                Alert.alert(
+                  'Submit for Review',
+                  'Are you sure you want to submit this task for review by the task creator?',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Submit', onPress: () => submitForReviewMutation.mutate({ assignmentId: myAllocation.id, employeeId: employee?.id || '' }) }
+                  ]
+                );
+              }}
+            >
+              <Send size={20} color="#fff" />
+              <Text style={styles.submitSalesText}>Submit for Review</Text>
+            </TouchableOpacity>
+          );
+        })()}
+
+        {/* Show submission status for team members */}
+        {isTeamMember && !isEventCreator && (() => {
+          const myAllocation = eventData.teamWithAllocations?.find((t: any) => t.employeeId === employee?.id);
+          if (!myAllocation) return null;
+          const status = myAllocation.submissionStatus;
+          if (status === 'submitted') {
+            return (
+              <View style={[styles.targetsAchievedBadge, { backgroundColor: '#E3F2FD', borderColor: '#1565C0' }]}>
+                <Send size={16} color="#1565C0" />
+                <Text style={[styles.targetsAchievedText, { color: '#1565C0' }]}>Submitted for Review</Text>
+              </View>
+            );
+          }
+          if (status === 'approved') {
+            return (
+              <View style={[styles.targetsAchievedBadge, { backgroundColor: '#E8F5E9', borderColor: '#2E7D32' }]}>
+                <Check size={16} color="#2E7D32" />
+                <Text style={[styles.targetsAchievedText, { color: '#2E7D32' }]}>Task Approved</Text>
+              </View>
+            );
+          }
+          if (status === 'rejected' && myAllocation.rejectionReason) {
+            return (
+              <View style={{ backgroundColor: '#FFEBEE', borderRadius: 12, padding: 12, marginHorizontal: 16, marginTop: 8, borderLeftWidth: 4, borderLeftColor: '#C62828' }}>
+                <Text style={{ color: '#C62828', fontWeight: '600', fontSize: 13 }}>Rejection Reason:</Text>
+                <Text style={{ color: '#424242', fontSize: 13, marginTop: 4 }}>{myAllocation.rejectionReason}</Text>
+              </View>
+            );
+          }
+          return null;
+        })()}
+
+        {eventData.salesEntries?.length > 0 && (hasCategory('SIM') || hasCategory('FTTH') || hasCategory('LEASE_CIRCUIT') || hasCategory('EB')) && (
           <View style={styles.salesSection}>
             <Text style={styles.sectionTitle}>Recent Sales Entries</Text>
             {eventData.salesEntries.slice(0, 5).map((entry: any) => {
               const entryMember = eventData.teamWithAllocations?.find((t: any) => t.employeeId === entry.employeeId);
-              const hasSim = hasCategory('SIM');
-              const hasFtth = hasCategory('FTTH');
+              const memberTypes: string[] = entryMember?.assignedTaskTypes || [];
+              const hasSpecific = memberTypes.length > 0;
+              const showSim = hasCategory('SIM') && (!hasSpecific || memberTypes.includes('SIM'));
+              const showFtth = hasCategory('FTTH') && (!hasSpecific || memberTypes.includes('FTTH'));
+              const showLease = hasCategory('LEASE_CIRCUIT') && (!hasSpecific || memberTypes.includes('LEASE_CIRCUIT'));
+              const showEb = hasCategory('EB') && (!hasSpecific || memberTypes.includes('EB'));
               return (
                 <View key={entry.id} style={styles.salesEntry}>
                   <View style={styles.salesEntryHeader}>
@@ -2434,16 +2486,28 @@ export default function EventDetailScreen() {
                     </Text>
                   </View>
                   <View style={styles.salesEntryStats}>
-                    {hasSim && (
+                    {showSim && (
                       <View style={styles.salesStat}>
                         <Text style={styles.salesStatLabel}>SIM</Text>
                         <Text style={styles.salesStatValue}>{entry.simsSold}</Text>
                       </View>
                     )}
-                    {hasFtth && (
+                    {showFtth && (
                       <View style={styles.salesStat}>
                         <Text style={styles.salesStatLabel}>FTTH</Text>
                         <Text style={styles.salesStatValue}>{entry.ftthSold}</Text>
+                      </View>
+                    )}
+                    {showLease && (
+                      <View style={styles.salesStat}>
+                        <Text style={styles.salesStatLabel}>LC</Text>
+                        <Text style={styles.salesStatValue}>{entry.leaseSold || 0}</Text>
+                      </View>
+                    )}
+                    {showEb && (
+                      <View style={styles.salesStat}>
+                        <Text style={styles.salesStatLabel}>EB</Text>
+                        <Text style={styles.salesStatValue}>{entry.ebSold || 0}</Text>
                       </View>
                     )}
                     {entry.gpsLatitude && (
@@ -2571,6 +2635,8 @@ export default function EventDetailScreen() {
                 <View style={styles.resourceHint}>
                   <Text style={styles.resourceHintText}>
                     Available: SIM {resourceStatus.remaining.simToDistribute} | FTTH {resourceStatus.remaining.ftthToDistribute}
+                    {hasCategory('LEASE_CIRCUIT') && eventData?.targetLease > 0 ? ` | LC ${(eventData.targetLease || 0) - ((eventData.teamWithAllocations || []).reduce((s: number, m: any) => s + (m.leaseTarget || 0), 0))}` : ''}
+                    {hasCategory('EB') && eventData?.targetEb > 0 ? ` | EB ${(eventData.targetEb || 0) - ((eventData.teamWithAllocations || []).reduce((s: number, m: any) => s + (m.ebTarget || 0), 0))}` : ''}
                   </Text>
                 </View>
               )}
@@ -2580,6 +2646,20 @@ export default function EventDetailScreen() {
               
               <Text style={styles.inputLabel}>FTTH Target</Text>
               <TextInput style={styles.input} placeholder="Enter FTTH target" value={ftthTarget} onChangeText={setFtthTarget} keyboardType="number-pad" />
+              
+              {hasCategory('LEASE_CIRCUIT') && eventData?.targetLease > 0 && (
+                <>
+                  <Text style={styles.inputLabel}>Lease Circuit Target</Text>
+                  <TextInput style={styles.input} placeholder="Enter Lease Circuit target" value={leaseTarget} onChangeText={setLeaseTarget} keyboardType="number-pad" />
+                </>
+              )}
+              
+              {hasCategory('EB') && eventData?.targetEb > 0 && (
+                <>
+                  <Text style={styles.inputLabel}>EB Target</Text>
+                  <TextInput style={styles.input} placeholder="Enter EB target" value={ebTarget} onChangeText={setEbTarget} keyboardType="number-pad" />
+                </>
+              )}
             </ScrollView>
             
             <View style={styles.modalFooter}>
@@ -2754,6 +2834,18 @@ export default function EventDetailScreen() {
                             <Text style={styles.editMemberTargetValue}>{member.ftthTarget || 0}</Text>
                           </View>
                         )}
+                        {eventData?.category?.includes('LEASE_CIRCUIT') && (
+                          <View style={styles.editMemberTargetBadge}>
+                            <Text style={styles.editMemberTargetLabel}>LC</Text>
+                            <Text style={styles.editMemberTargetValue}>{member.leaseTarget || 0}</Text>
+                          </View>
+                        )}
+                        {eventData?.category?.includes('EB') && !eventData?.category?.includes('EB_') && (
+                          <View style={styles.editMemberTargetBadge}>
+                            <Text style={styles.editMemberTargetLabel}>EB</Text>
+                            <Text style={styles.editMemberTargetValue}>{member.ebTarget || 0}</Text>
+                          </View>
+                        )}
                       </View>
                     </View>
                   ))}
@@ -2922,22 +3014,25 @@ export default function EventDetailScreen() {
               </TouchableOpacity>
             </View>
             
-            <View style={styles.modalBody}>
+            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={true}>
               {(() => {
                 const validation = getDistributionValidation();
                 const totalSim = resourceStatus?.target?.sim || eventData?.targetSim || 0;
                 const totalFtth = resourceStatus?.target?.ftth || eventData?.targetFtth || 0;
+                const totalLease = eventData?.targetLease || 0;
+                const totalEb = eventData?.targetEb || 0;
+                const hasAnyInvalid = !validation.simValid || !validation.ftthValid || !validation.leaseValid || !validation.ebValid;
                 return (
                   <>
-                    <View style={[styles.resourceHint, { backgroundColor: (!validation.simValid || !validation.ftthValid) ? '#FEE2E2' : '#ECFDF5' }]}>
-                      <Text style={[styles.resourceHintText, { color: (!validation.simValid || !validation.ftthValid) ? '#DC2626' : '#059669' }]}>
-                        {validation.simValid && validation.ftthValid 
-                          ? `Remaining: SIM ${validation.simRemaining} | FTTH ${validation.ftthRemaining}`
-                          : `Over allocation! SIM: ${validation.simRemaining < 0 ? validation.simRemaining : 'OK'} | FTTH: ${validation.ftthRemaining < 0 ? validation.ftthRemaining : 'OK'}`
+                    <View style={[styles.resourceHint, { backgroundColor: hasAnyInvalid ? '#FEE2E2' : '#ECFDF5' }]}>
+                      <Text style={[styles.resourceHintText, { color: hasAnyInvalid ? '#DC2626' : '#059669' }]}>
+                        {!hasAnyInvalid
+                          ? `Remaining: SIM ${validation.simRemaining} | FTTH ${validation.ftthRemaining}${hasCategory('LEASE_CIRCUIT') && totalLease > 0 ? ` | LC ${validation.leaseRemaining}` : ''}${hasCategory('EB') && totalEb > 0 ? ` | EB ${validation.ebRemaining}` : ''}`
+                          : `Over allocation! SIM: ${validation.simRemaining < 0 ? validation.simRemaining : 'OK'} | FTTH: ${validation.ftthRemaining < 0 ? validation.ftthRemaining : 'OK'}${hasCategory('LEASE_CIRCUIT') && totalLease > 0 ? ` | LC: ${validation.leaseRemaining < 0 ? validation.leaseRemaining : 'OK'}` : ''}${hasCategory('EB') && totalEb > 0 ? ` | EB: ${validation.ebRemaining < 0 ? validation.ebRemaining : 'OK'}` : ''}`
                         }
                       </Text>
                       <Text style={[styles.resourceHintText, { fontSize: 11, marginTop: 2 }]}>
-                        Total Target: SIM {totalSim} | FTTH {totalFtth}
+                        Total Target: SIM {totalSim} | FTTH {totalFtth}{hasCategory('LEASE_CIRCUIT') && totalLease > 0 ? ` | LC ${totalLease}` : ''}{hasCategory('EB') && totalEb > 0 ? ` | EB ${totalEb}` : ''}
                       </Text>
                     </View>
                     
@@ -2972,10 +3067,36 @@ export default function EventDetailScreen() {
                       keyboardType="number-pad" 
                       placeholder="Enter whole number only"
                     />
+                    
+                    {hasCategory('LEASE_CIRCUIT') && totalLease > 0 && (
+                      <>
+                        <Text style={styles.inputLabel}>Lease Circuit Target</Text>
+                        <TextInput 
+                          style={[styles.input, !validation.leaseValid && { borderColor: '#DC2626', borderWidth: 2 }]} 
+                          value={editMemberLeaseTarget} 
+                          onChangeText={(v) => handleIntegerInput(v, setEditMemberLeaseTarget)} 
+                          keyboardType="number-pad" 
+                          placeholder="Enter whole number only"
+                        />
+                      </>
+                    )}
+                    
+                    {hasCategory('EB') && totalEb > 0 && (
+                      <>
+                        <Text style={styles.inputLabel}>EB Target</Text>
+                        <TextInput 
+                          style={[styles.input, !validation.ebValid && { borderColor: '#DC2626', borderWidth: 2 }]} 
+                          value={editMemberEbTarget} 
+                          onChangeText={(v) => handleIntegerInput(v, setEditMemberEbTarget)} 
+                          keyboardType="number-pad" 
+                          placeholder="Enter whole number only"
+                        />
+                      </>
+                    )}
                   </>
                 );
               })()}
-            </View>
+            </ScrollView>
             
             <View style={styles.modalFooter}>
               <TouchableOpacity style={styles.cancelButton} onPress={() => setShowEditTargetModal(false)}>

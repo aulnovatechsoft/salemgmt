@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Alert, Platform, Image } from 'react-native';
+import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Alert, Platform, Image, ActivityIndicator } from 'react-native';
 import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
@@ -9,6 +9,7 @@ import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
 import { CUSTOMER_TYPES } from '@/constants/app';
 import { GeoTaggedPhoto } from '@/types';
+import { uploadPhotos } from '@/lib/photoUpload';
 
 export default function EventSalesScreen() {
   const router = useRouter();
@@ -20,12 +21,15 @@ export default function EventSalesScreen() {
   const [simsActivated, setSimsActivated] = useState('');
   const [ftthSold, setFtthSold] = useState('');
   const [ftthActivated, setFtthActivated] = useState('');
+  const [leaseSold, setLeaseSold] = useState('');
+  const [ebSold, setEbSold] = useState('');
   const [customerType, setCustomerType] = useState<'B2C' | 'B2B' | 'Government' | 'Enterprise'>('B2C');
   const [remarks, setRemarks] = useState('');
   const [photos, setPhotos] = useState<GeoTaggedPhoto[]>([]);
   const [currentLocation, setCurrentLocation] = useState<{ latitude: string; longitude: string } | null>(null);
   const [showCustomerTypePicker, setShowCustomerTypePicker] = useState(false);
   const [isCapturingLocation, setIsCapturingLocation] = useState(false);
+  const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
 
   const { data: eventData } = trpc.events.getEventWithDetails.useQuery(
     { id: eventId || '' },
@@ -160,15 +164,35 @@ export default function EventSalesScreen() {
     setPhotos(photos.filter((_, i) => i !== index));
   };
 
-  const handleSubmit = () => {
-    if (!simsSold && !ftthSold) {
-      Alert.alert('Error', 'Please enter at least one sales entry (SIM or FTTH)');
+  const handleSubmit = async () => {
+    if (!simsSold && !ftthSold && !leaseSold && !ebSold) {
+      Alert.alert('Error', 'Please enter at least one sales entry');
       return;
     }
 
     if (!employee?.id || !eventId) {
       Alert.alert('Error', 'Invalid session. Please login again.');
       return;
+    }
+
+    let uploadedPhotoResults: GeoTaggedPhoto[] | undefined;
+
+    if (photos.length > 0) {
+      try {
+        setIsUploadingPhotos(true);
+        uploadedPhotoResults = await uploadPhotos(
+          photos,
+          employee.id,
+          'sales_entry',
+          eventId
+        );
+      } catch (err) {
+        console.error('Photo upload failed:', err);
+        Alert.alert('Upload Error', 'Failed to upload photos. Please try again.');
+        setIsUploadingPhotos(false);
+        return;
+      }
+      setIsUploadingPhotos(false);
     }
 
     submitSalesMutation.mutate({
@@ -178,8 +202,10 @@ export default function EventSalesScreen() {
       simsActivated: parseInt(simsActivated) || 0,
       ftthSold: parseInt(ftthSold) || 0,
       ftthActivated: parseInt(ftthActivated) || 0,
+      leaseSold: parseInt(leaseSold) || 0,
+      ebSold: parseInt(ebSold) || 0,
       customerType,
-      photos: photos.length > 0 ? photos : undefined,
+      photos: uploadedPhotoResults && uploadedPhotoResults.length > 0 ? uploadedPhotoResults : undefined,
       gpsLatitude: currentLocation?.latitude,
       gpsLongitude: currentLocation?.longitude,
       remarks: remarks.trim() || undefined,
@@ -187,13 +213,16 @@ export default function EventSalesScreen() {
   };
 
   const myAssignment = eventData?.teamWithAllocations?.find(t => t.employeeId === employee?.id);
+  const myAssignedTypes: string[] = (myAssignment as any)?.assignedTaskTypes || [];
+  const hasSpecificAssignment = myAssignedTypes.length > 0;
   
-  // Parse categories to show only relevant sections
   const categories = eventData?.category ? eventData.category.split(',').map((c: string) => c.trim()) : [];
-  const hasSIM = categories.includes('SIM');
-  const hasFTTH = categories.includes('FTTH');
+  const hasSIM = categories.includes('SIM') && (!hasSpecificAssignment || myAssignedTypes.includes('SIM'));
+  const hasFTTH = categories.includes('FTTH') && (!hasSpecificAssignment || myAssignedTypes.includes('FTTH'));
+  const hasLC = categories.includes('Lease Circuit') && (!hasSpecificAssignment || myAssignedTypes.includes('LEASE_CIRCUIT'));
+  const hasEB = categories.includes('EB') && (!hasSpecificAssignment || myAssignedTypes.includes('EB'));
   const hasMaintenanceCategories = categories.some((c: string) => 
-    ['Lease Circuit', 'BTS-Down', 'Route-Fail', 'FTTH-Down', 'OFC-Fail', 'EB'].includes(c)
+    ['BTS-Down', 'Route-Fail', 'FTTH-Down', 'OFC-Fail'].includes(c)
   );
 
   return (
@@ -211,7 +240,7 @@ export default function EventSalesScreen() {
           <View style={styles.eventInfo}>
             <Text style={styles.eventName}>{eventData.name}</Text>
             <Text style={styles.eventLocation}>{eventData.location}</Text>
-            {myAssignment && (hasSIM || hasFTTH) && (
+            {myAssignment && (hasSIM || hasFTTH || hasLC || hasEB) && (
               <View style={styles.myTargets}>
                 {hasSIM && (
                   <View style={styles.myTargetItem}>
@@ -223,6 +252,18 @@ export default function EventSalesScreen() {
                   <View style={styles.myTargetItem}>
                     <Text style={styles.myTargetLabel}>My FTTH Target</Text>
                     <Text style={styles.myTargetValue}>{myAssignment.actualFtthSold} / {myAssignment.ftthTarget}</Text>
+                  </View>
+                )}
+                {hasLC && myAssignment.leaseTarget > 0 && (
+                  <View style={styles.myTargetItem}>
+                    <Text style={styles.myTargetLabel}>My LC Target</Text>
+                    <Text style={styles.myTargetValue}>{myAssignment.leaseCompleted || 0} / {myAssignment.leaseTarget}</Text>
+                  </View>
+                )}
+                {hasEB && myAssignment.ebTarget > 0 && (
+                  <View style={styles.myTargetItem}>
+                    <Text style={styles.myTargetLabel}>My EB Target</Text>
+                    <Text style={styles.myTargetValue}>{myAssignment.ebCompleted || 0} / {myAssignment.ebTarget}</Text>
                   </View>
                 )}
               </View>
@@ -285,6 +326,44 @@ export default function EventSalesScreen() {
               </View>
             </View>
           </View>
+          )}
+
+          {hasLC && myAssignment && myAssignment.leaseTarget > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Lease Circuit Sales</Text>
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Lease Circuit Sold *</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="0"
+                  value={leaseSold}
+                  onChangeText={setLeaseSold}
+                  keyboardType="number-pad"
+                />
+                <Text style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+                  Remaining: {(myAssignment.leaseTarget || 0) - (myAssignment.leaseCompleted || 0)} of {myAssignment.leaseTarget}
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {hasEB && myAssignment && myAssignment.ebTarget > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>EB Connection Sales</Text>
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>EB Connections Sold *</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="0"
+                  value={ebSold}
+                  onChangeText={setEbSold}
+                  keyboardType="number-pad"
+                />
+                <Text style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+                  Remaining: {(myAssignment.ebTarget || 0) - (myAssignment.ebCompleted || 0)} of {myAssignment.ebTarget}
+                </Text>
+              </View>
+            </View>
           )}
 
           <View style={styles.inputGroup}>
@@ -395,12 +474,13 @@ export default function EventSalesScreen() {
           </View>
 
           <TouchableOpacity 
-            style={[styles.submitButton, submitSalesMutation.isPending && styles.submitButtonDisabled]}
+            style={[styles.submitButton, (submitSalesMutation.isPending || isUploadingPhotos) && styles.submitButtonDisabled]}
             onPress={handleSubmit}
-            disabled={submitSalesMutation.isPending}
+            disabled={submitSalesMutation.isPending || isUploadingPhotos}
           >
+            {isUploadingPhotos && <ActivityIndicator color="#fff" style={{ marginRight: 8 }} />}
             <Text style={styles.submitButtonText}>
-              {submitSalesMutation.isPending ? 'Submitting...' : 'Submit Sales Entry'}
+              {isUploadingPhotos ? 'Uploading Photos...' : submitSalesMutation.isPending ? 'Submitting...' : 'Submit Sales Entry'}
             </Text>
           </TouchableOpacity>
         </View>

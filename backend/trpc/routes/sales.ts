@@ -4,50 +4,37 @@ import { eq, and, desc, sql, inArray, gte, lte, sum, count } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
 import { db, salesReports, auditLogs, events, employees, eventAssignments, employeeMaster, financeCollectionEntries, eventSalesEntries } from "@/backend/db";
 
-// Helper function to get all subordinate IDs (copied from events.ts for consistency)
-async function getAllSubordinateIds(employeeId: string, maxDepth: number = 10): Promise<string[]> {
-  const employee = await db.select({ persNo: employees.persNo }).from(employees)
-    .where(eq(employees.id, employeeId));
-  
-  if (!employee[0]?.persNo) {
-    return [];
-  }
-  
-  const allSubordinateIds: string[] = [];
-  const persNosToProcess: string[] = [employee[0].persNo];
-  const processedPersNos = new Set<string>();
-  let depth = 0;
-  
-  while (persNosToProcess.length > 0 && depth < maxDepth) {
-    const currentPersNos = [...persNosToProcess];
-    persNosToProcess.length = 0;
-    
-    for (const persNo of currentPersNos) {
-      if (processedPersNos.has(persNo)) continue;
-      processedPersNos.add(persNo);
-      
-      const subordinates = await db.select({
-        persNo: employeeMaster.persNo,
-      }).from(employeeMaster)
-        .where(eq(employeeMaster.reportingPersNo, persNo));
-      
-      for (const sub of subordinates) {
-        if (!sub.persNo) continue;
-        const subEmployee = await db.select({ id: employees.id })
-          .from(employees)
-          .where(eq(employees.persNo, sub.persNo))
-          .limit(1);
-        
-        if (subEmployee[0]) {
-          allSubordinateIds.push(subEmployee[0].id);
-        }
-        persNosToProcess.push(sub.persNo);
-      }
-    }
-    depth++;
-  }
-  
-  return allSubordinateIds;
+function getVisibleEmployeeIdsSubquery(persNo: string) {
+  return sql`(
+    SELECT e.id FROM employees e WHERE e.pers_no = ${persNo}
+    UNION
+    SELECT e.id FROM (
+      WITH RECURSIVE subordinates AS (
+        SELECT pers_no FROM employee_master WHERE reporting_pers_no = ${persNo}
+        UNION ALL
+        SELECT em.pers_no FROM employee_master em
+        INNER JOIN subordinates s ON em.reporting_pers_no = s.pers_no
+      )
+      SELECT pers_no FROM subordinates
+    ) sub
+    INNER JOIN employees e ON e.pers_no = sub.pers_no
+  )`;
+}
+
+function getVisiblePersNosSubquery(persNo: string) {
+  return sql`(
+    SELECT ${persNo}
+    UNION
+    SELECT pers_no FROM (
+      WITH RECURSIVE subordinates AS (
+        SELECT pers_no FROM employee_master WHERE reporting_pers_no = ${persNo}
+        UNION ALL
+        SELECT em.pers_no FROM employee_master em
+        INNER JOIN subordinates s ON em.reporting_pers_no = s.pers_no
+      )
+      SELECT pers_no FROM subordinates
+    ) sub
+  )`;
 }
 
 export const salesRouter = createTRPCRouter({
@@ -135,51 +122,34 @@ export const salesRouter = createTRPCRouter({
       const userPersNo = employee[0].persNo;
       const isAdmin = userRole === 'ADMIN';
       
-      // Build condition based on type
       const typeCondition = input.type === 'sim' 
-        ? sql`${eventAssignments.simSold} > 0`
-        : sql`${eventAssignments.ftthSold} > 0`;
+        ? sql`${eventAssignments.simTarget} > 0`
+        : sql`${eventAssignments.ftthTarget} > 0`;
       
-      // Get subordinate IDs for managers
-      const subordinateIds = await getAllSubordinateIds(input.employeeId);
-      const allVisibleIds = [input.employeeId, ...subordinateIds];
-      
-      // Get subordinates' persNos for team assignment visibility
-      let allVisiblePersNos: string[] = userPersNo ? [userPersNo] : [];
-      if (subordinateIds.length > 0) {
-        const subEmployees = await db.select({ persNo: employees.persNo })
-          .from(employees)
-          .where(inArray(employees.id, subordinateIds));
-        allVisiblePersNos = [...allVisiblePersNos, ...subEmployees.map(e => e.persNo).filter(Boolean) as string[]];
-      }
-      
-      // For admins, show all; for others, show events they created, assigned to, or subordinates'
       let visibilityCondition;
       if (isAdmin) {
         visibilityCondition = sql`1=1`;
-      } else {
-        // Build team check condition
-        const teamCheckCondition = allVisiblePersNos.length > 0
-          ? sql`EXISTS (SELECT 1 FROM jsonb_array_elements_text(${events.assignedTeam}::jsonb) AS elem WHERE elem IN (${sql.raw(allVisiblePersNos.map(p => `'${p}'`).join(','))}))`
-          : sql`false`;
-        
-        // Show assignments from events created by user/subordinates or where user/subordinates are in assigned team
+      } else if (userPersNo) {
+        const idsSubquery = getVisibleEmployeeIdsSubquery(userPersNo);
+        const persNosSubquery = getVisiblePersNosSubquery(userPersNo);
         visibilityCondition = sql`(
-          ${events.createdBy} IN (${sql.raw(allVisibleIds.map(id => `'${id}'`).join(','))})
-          OR ${events.assignedTo} IN (${sql.raw(allVisibleIds.map(id => `'${id}'`).join(','))})
-          OR ${teamCheckCondition}
+          ${events.createdBy} IN ${idsSubquery}
+          OR ${events.assignedTo} IN ${idsSubquery}
+          OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(${events.assignedTeam}::jsonb) AS elem WHERE elem IN ${persNosSubquery})
         )`;
+      } else {
+        visibilityCondition = sql`1=0`;
       }
       
       const results = await db.select({
         id: eventAssignments.id,
         eventId: eventAssignments.eventId,
         salesStaffId: eventAssignments.employeeId,
-        simsSold: eventAssignments.simSold,
-        simsActivated: sql<number>`0`.as('sims_activated'),
+        simsSold: sql<number>`COALESCE((SELECT SUM(ese.sims_sold) FROM event_sales_entries ese WHERE ese.event_id = ${eventAssignments.eventId} AND ese.employee_id = ${eventAssignments.employeeId}), 0)::integer`.as('actual_sims_sold'),
+        simsActivated: sql<number>`COALESCE((SELECT SUM(ese.sims_activated) FROM event_sales_entries ese WHERE ese.event_id = ${eventAssignments.eventId} AND ese.employee_id = ${eventAssignments.employeeId}), 0)::integer`.as('sims_activated'),
         activatedMobileNumbers: sql<string[]>`ARRAY[]::text[]`.as('activated_mobile_numbers'),
-        ftthLeads: eventAssignments.ftthSold,
-        ftthInstalled: sql<number>`0`.as('ftth_installed'),
+        ftthLeads: sql<number>`COALESCE((SELECT SUM(ese.ftth_sold) FROM event_sales_entries ese WHERE ese.event_id = ${eventAssignments.eventId} AND ese.employee_id = ${eventAssignments.employeeId}), 0)::integer`.as('actual_ftth_sold'),
+        ftthInstalled: sql<number>`COALESCE((SELECT SUM(ese.ftth_activated) FROM event_sales_entries ese WHERE ese.event_id = ${eventAssignments.eventId} AND ese.employee_id = ${eventAssignments.employeeId}), 0)::integer`.as('ftth_installed'),
         activatedFtthIds: sql<string[]>`ARRAY[]::text[]`.as('activated_ftth_ids'),
         customerType: sql<string>`'B2C'`.as('customer_type'),
         status: eventAssignments.submissionStatus,
@@ -505,15 +475,20 @@ export const salesRouter = createTRPCRouter({
       }
       
       const userRole = employee[0].role;
+      const userPersNo = employee[0].persNo;
       const isAdmin = userRole === 'ADMIN';
       
-      const subordinateIds = await getAllSubordinateIds(input.employeeId);
-      const allVisibleIds = [input.employeeId, ...subordinateIds];
+      let baseCondition;
+      if (isAdmin) {
+        baseCondition = sql`1=1`;
+      } else if (userPersNo) {
+        const idsSubquery = getVisibleEmployeeIdsSubquery(userPersNo);
+        baseCondition = sql`${financeCollectionEntries.employeeId} IN ${idsSubquery}`;
+      } else {
+        baseCondition = sql`1=0`;
+      }
       
-      let whereConditions = isAdmin 
-        ? sql`1=1`
-        : inArray(financeCollectionEntries.employeeId, allVisibleIds);
-      
+      let whereConditions: any = baseCondition;
       if (input.financeType) {
         whereConditions = and(whereConditions, eq(financeCollectionEntries.financeType, input.financeType)) || whereConditions;
       }
@@ -561,14 +536,18 @@ export const salesRouter = createTRPCRouter({
       }
       
       const userRole = employee[0].role;
+      const userPersNo = employee[0].persNo;
       const isAdmin = userRole === 'ADMIN';
       
-      const subordinateIds = await getAllSubordinateIds(input.employeeId);
-      const allVisibleIds = [input.employeeId, ...subordinateIds];
-      
-      const collectionConditions = isAdmin 
-        ? sql`1=1`
-        : inArray(financeCollectionEntries.employeeId, allVisibleIds);
+      let collectionConditions;
+      if (isAdmin) {
+        collectionConditions = sql`1=1`;
+      } else if (userPersNo) {
+        const idsSubquery = getVisibleEmployeeIdsSubquery(userPersNo);
+        collectionConditions = sql`${financeCollectionEntries.employeeId} IN ${idsSubquery}`;
+      } else {
+        collectionConditions = sql`1=0`;
+      }
       
       const results = await db.select({
         financeType: financeCollectionEntries.financeType,
@@ -579,28 +558,19 @@ export const salesRouter = createTRPCRouter({
       .where(collectionConditions)
       .groupBy(financeCollectionEntries.financeType);
       
-      const userPersNo = employee[0].persNo;
-      let allVisiblePersNos: string[] = userPersNo ? [userPersNo] : [];
-      if (subordinateIds.length > 0) {
-        const subEmployees = await db.select({ persNo: employees.persNo })
-          .from(employees)
-          .where(inArray(employees.id, subordinateIds));
-        allVisiblePersNos = [...allVisiblePersNos, ...subEmployees.map(e => e.persNo).filter(Boolean) as string[]];
-      }
-      
       let eventVisibilityCondition;
       if (isAdmin) {
         eventVisibilityCondition = sql`1=1`;
-      } else {
-        const teamCheckCondition = allVisiblePersNos.length > 0
-          ? sql`EXISTS (SELECT 1 FROM jsonb_array_elements_text(${events.assignedTeam}::jsonb) AS elem WHERE elem = ANY(${allVisiblePersNos}))`
-          : sql`false`;
-        
+      } else if (userPersNo) {
+        const idsSubquery = getVisibleEmployeeIdsSubquery(userPersNo);
+        const persNosSubquery = getVisiblePersNosSubquery(userPersNo);
         eventVisibilityCondition = sql`(
-          ${inArray(events.createdBy, allVisibleIds)}
-          OR ${inArray(events.assignedTo, allVisibleIds)}
-          OR ${teamCheckCondition}
+          ${events.createdBy} IN ${idsSubquery}
+          OR ${events.assignedTo} IN ${idsSubquery}
+          OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(${events.assignedTeam}::jsonb) AS elem WHERE elem IN ${persNosSubquery})
         )`;
+      } else {
+        eventVisibilityCondition = sql`1=0`;
       }
       
       const eventTargets = await db.select({
@@ -657,11 +627,7 @@ export const salesRouter = createTRPCRouter({
       }
       
       const userRole = employee[0].role;
-      const userCircle = employee[0].circle;
       const isAdmin = userRole === 'ADMIN';
-      
-      const subordinateIds = await getAllSubordinateIds(input.employeeId);
-      const visibleIds = isAdmin ? [] : [input.employeeId, ...subordinateIds];
       
       const buildConditions = () => {
         const conditions: any[] = [];
@@ -675,8 +641,9 @@ export const salesRouter = createTRPCRouter({
         if (input.circle) {
           conditions.push(eq(employees.circle, input.circle));
         }
-        if (!isAdmin && visibleIds.length > 0) {
-          conditions.push(inArray(eventSalesEntries.employeeId, visibleIds));
+        if (!isAdmin && employee[0].persNo) {
+          const subquery = getVisibleEmployeeIdsSubquery(employee[0].persNo);
+          conditions.push(sql`${eventSalesEntries.employeeId} IN ${subquery}`);
         } else if (!isAdmin) {
           conditions.push(sql`1=0`);
         }
@@ -688,10 +655,10 @@ export const salesRouter = createTRPCRouter({
       const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
       
       const totalsResult = await db.select({
-        totalSimsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)`,
-        totalSimsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)`,
-        totalFtthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)`,
-        totalFtthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)`,
+        totalSimsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+        totalSimsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)::integer`,
+        totalFtthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+        totalFtthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)::integer`,
         totalEntries: sql<number>`COUNT(*)`,
       })
       .from(eventSalesEntries)
@@ -709,10 +676,10 @@ export const salesRouter = createTRPCRouter({
         name: employees.name,
         designation: employees.designation,
         circle: employees.circle,
-        simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)`,
-        simsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)`,
-        ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)`,
-        ftthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)`,
+        simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+        simsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)::integer`,
+        ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+        ftthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)::integer`,
         entries: sql<number>`COUNT(*)`,
       })
       .from(eventSalesEntries)
@@ -726,10 +693,10 @@ export const salesRouter = createTRPCRouter({
         id: eventSalesEntries.eventId,
         name: events.name,
         category: events.category,
-        simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)`,
-        simsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)`,
-        ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)`,
-        ftthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)`,
+        simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+        simsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)::integer`,
+        ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+        ftthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)::integer`,
         entries: sql<number>`COUNT(*)`,
       })
       .from(eventSalesEntries)
@@ -815,9 +782,6 @@ export const salesRouter = createTRPCRouter({
       const userRole = employee[0].role;
       const isAdmin = userRole === 'ADMIN';
       
-      const subordinateIds = await getAllSubordinateIds(input.employeeId);
-      const visibleIds = isAdmin ? [] : [input.employeeId, ...subordinateIds];
-      
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - input.days);
       
@@ -826,8 +790,9 @@ export const salesRouter = createTRPCRouter({
       if (input.circle) {
         conditions.push(eq(employees.circle, input.circle));
       }
-      if (!isAdmin && visibleIds.length > 0) {
-        conditions.push(inArray(eventSalesEntries.employeeId, visibleIds));
+      if (!isAdmin && employee[0].persNo) {
+        const subquery = getVisibleEmployeeIdsSubquery(employee[0].persNo);
+        conditions.push(sql`${eventSalesEntries.employeeId} IN ${subquery}`);
       } else if (!isAdmin) {
         conditions.push(sql`1=0`);
       }
@@ -839,11 +804,11 @@ export const salesRouter = createTRPCRouter({
         name: employees.name,
         designation: employees.designation,
         circle: employees.circle,
-        simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)`,
-        simsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)`,
-        ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)`,
-        ftthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)`,
-        totalSales: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}) + SUM(${eventSalesEntries.ftthSold}), 0)`,
+        simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+        simsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)::integer`,
+        ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+        ftthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)::integer`,
+        totalSales: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}) + SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
         entries: sql<number>`COUNT(*)`,
       })
       .from(eventSalesEntries)
@@ -891,9 +856,6 @@ export const salesRouter = createTRPCRouter({
       const userRole = employee[0].role;
       const isAdmin = userRole === 'ADMIN';
       
-      const subordinateIds = await getAllSubordinateIds(input.employeeId);
-      const visibleIds = isAdmin ? [] : [input.employeeId, ...subordinateIds];
-      
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - input.days);
       
@@ -902,8 +864,9 @@ export const salesRouter = createTRPCRouter({
       if (input.circle) {
         conditions.push(eq(employees.circle, input.circle));
       }
-      if (!isAdmin && visibleIds.length > 0) {
-        conditions.push(inArray(eventSalesEntries.employeeId, visibleIds));
+      if (!isAdmin && employee[0].persNo) {
+        const subquery = getVisibleEmployeeIdsSubquery(employee[0].persNo);
+        conditions.push(sql`${eventSalesEntries.employeeId} IN ${subquery}`);
       } else if (!isAdmin) {
         conditions.push(sql`1=0`);
       }
@@ -912,10 +875,10 @@ export const salesRouter = createTRPCRouter({
       
       const dailyResult = await db.select({
         date: sql<string>`DATE(${eventSalesEntries.createdAt})`,
-        simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)`,
-        simsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)`,
-        ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)`,
-        ftthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)`,
+        simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+        simsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)::integer`,
+        ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+        ftthActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)::integer`,
       })
       .from(eventSalesEntries)
       .leftJoin(employees, eq(eventSalesEntries.employeeId, employees.id))

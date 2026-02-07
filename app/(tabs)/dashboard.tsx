@@ -19,7 +19,7 @@ const { width } = Dimensions.get('window');
 export default function DashboardScreen() {
   const router = useRouter();
   const { employee } = useAuth();
-  const { salesReports, resources, issues } = useApp();
+  const { resources, issues } = useApp();
   const [showAllActive, setShowAllActive] = useState(false);
   const [showAllCompleted, setShowAllCompleted] = useState(false);
   const [outstandingModal, setOutstandingModal] = useState<{ visible: boolean; type: 'ftth' | 'lc' }>({ visible: false, type: 'ftth' });
@@ -33,22 +33,34 @@ export default function DashboardScreen() {
     setExpandedOutstandingEmployee(null);
   }, [outstandingModal.type, outstandingModal.visible]);
 
-  const { data: myEventsData } = trpc.events.getMyEvents.useQuery(
+  const { data: myEventsData, isLoading: eventsLoading } = trpc.events.getMyEvents.useQuery(
     { employeeId: employee?.id || '' },
     {
       enabled: !!employee?.id,
-      retry: 1,
+      retry: 2,
       refetchOnWindowFocus: true,
-      refetchInterval: 5000,
-      staleTime: 0,
+      refetchInterval: 30000,
+      staleTime: 15000,
     }
   );
   
+  const eventIds = useMemo(() => {
+    if (!myEventsData) return [];
+    return myEventsData.map((e: any) => e.id);
+  }, [myEventsData]);
+
+  const { data: salesEntrySummary } = trpc.events.getSalesEntrySummary.useQuery(
+    { eventIds },
+    {
+      enabled: eventIds.length > 0,
+      refetchOnWindowFocus: true,
+      refetchInterval: 30000,
+      staleTime: 15000,
+    }
+  );
+
   const events: Event[] = useMemo(() => {
     if (!myEventsData) return [];
-    const totalSim = myEventsData.reduce((acc: number, e: any) => acc + (e.simSold || 0), 0);
-    const totalFtth = myEventsData.reduce((acc: number, e: any) => acc + (e.ftthSold || 0), 0);
-    console.log("Dashboard sales totals - SIM:", totalSim, "FTTH:", totalFtth, "from", myEventsData.length, "events");
     return myEventsData.map((e: any) => ({
       id: e.id,
       name: e.name,
@@ -144,14 +156,19 @@ export default function DashboardScreen() {
   const stats = useMemo(() => {
     const myEvents = events;
     
-    // Calculate sales from live events data (from database via tRPC)
     const totalSimsSold = myEvents.reduce((acc, e) => acc + (e.simsSold || 0), 0);
     const totalFtthSold = myEvents.reduce((acc, e) => acc + (e.ftthSold || 0), 0);
+    const totalEbCompleted = myEvents.reduce((acc, e) => acc + ((e as any).ebCompleted || 0), 0);
+    const totalLeaseCompleted = myEvents.reduce((acc, e) => acc + ((e as any).leaseCompleted || 0), 0);
+    const totalBtsDown = myEvents.reduce((acc, e) => acc + ((e as any).btsDownCompleted || 0), 0);
+    const totalFtthDown = myEvents.reduce((acc, e) => acc + ((e as any).ftthDownCompleted || 0), 0);
+    const totalRouteFail = myEvents.reduce((acc, e) => acc + ((e as any).routeFailCompleted || 0), 0);
+    const totalOfcFail = myEvents.reduce((acc, e) => acc + ((e as any).ofcFailCompleted || 0), 0);
+    const totalOmCompleted = totalBtsDown + totalFtthDown + totalRouteFail + totalOfcFail;
     
-    // Fallback to salesReports for activated counts if available
-    const totalSimsActivated = salesReports.reduce((acc, r) => acc + r.simsActivated, 0);
+    const totalSimsActivated = salesEntrySummary?.totalSimsActivated || 0;
     const totalFtthLeads = totalFtthSold;
-    const totalFtthInstalled = salesReports.reduce((acc, r) => acc + r.ftthInstalled, 0);
+    const totalFtthInstalled = salesEntrySummary?.totalFtthActivated || 0;
     
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -222,13 +239,16 @@ export default function DashboardScreen() {
       simsActivated: totalSimsActivated,
       ftthLeads: totalFtthLeads,
       ftthInstalled: totalFtthInstalled,
+      ebCompleted: totalEbCompleted,
+      leaseCompleted: totalLeaseCompleted,
+      omCompleted: totalOmCompleted,
       pendingIssues: pendingIssues.length,
       simAvailable: simResources?.remaining || 0,
       ftthAvailable: ftthResources?.remaining || 0,
       activeEventsList: sortedActiveEvents,
       recentCompletedList: recentCompletedEvents,
     };
-  }, [events, salesReports, issues, resources, employee]);
+  }, [events, salesEntrySummary, issues, resources, employee]);
 
   return (
     <>
@@ -279,6 +299,24 @@ export default function DashboardScreen() {
             color={Colors.light.info}
             onPress={() => router.push('/ftth-sales-detail')}
           />
+          {(stats.ebCompleted > 0 || stats.leaseCompleted > 0) && (
+            <StatCard
+              icon={<ClipboardList size={24} color="#6A1B9A" />}
+              label="EB / LC"
+              value={`${stats.ebCompleted} / ${stats.leaseCompleted}`}
+              subtitle="EB & Lease Circuit"
+              color="#6A1B9A"
+            />
+          )}
+          {stats.omCompleted > 0 && (
+            <StatCard
+              icon={<Server size={24} color="#E65100" />}
+              label="O&M Done"
+              value={stats.omCompleted.toString()}
+              subtitle="Maintenance tasks"
+              color="#E65100"
+            />
+          )}
           <StatCard
             icon={<AlertCircle size={24} color={Colors.light.error} />}
             label="Pending Issues"

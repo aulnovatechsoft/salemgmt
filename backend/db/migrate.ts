@@ -1,6 +1,6 @@
 import postgres from "postgres";
 
-const connectionString = process.env.DATABASE_URL!;
+const connectionString = process.env.BSNL_DATABASE_URL || process.env.DATABASE_URL!;
 
 async function createTables() {
   const sql = postgres(connectionString, { ssl: false });

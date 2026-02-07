@@ -4,8 +4,8 @@ import { trpcServer } from '@hono/trpc-server';
 import { appRouter } from './backend/trpc/app-router';
 import { createContext } from './backend/trpc/create-context';
 import { join } from 'path';
-import { db, employees } from './backend/db';
-import { sql } from 'drizzle-orm';
+import { db, employees, uploadedPhotos } from './backend/db';
+import { sql, eq } from 'drizzle-orm';
 import { startNotificationScheduler } from './backend/services/notification-scheduler.service';
 
 const distDir = join(import.meta.dir, 'dist');
@@ -26,6 +26,107 @@ app.get('/api', (c) => {
 
 app.get('/health', (c) => {
   return c.json({ status: 'healthy', version: '1.0.5', timestamp: new Date().toISOString() });
+});
+
+const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+const MAX_PHOTO_SIZE = 5 * 1024 * 1024;
+const MAX_PHOTOS_PER_REQUEST = 10;
+
+app.post('/api/photos/upload', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { photos, uploadedBy, entityType, entityId } = body;
+
+    if (!uploadedBy) {
+      return c.json({ error: 'Authentication required' }, 401);
+    }
+
+    const [uploader] = await db.select({ id: employees.id }).from(employees).where(eq(employees.id, uploadedBy));
+    if (!uploader) {
+      return c.json({ error: 'Invalid user' }, 401);
+    }
+
+    if (!photos || !Array.isArray(photos) || photos.length === 0) {
+      return c.json({ error: 'No photos provided' }, 400);
+    }
+
+    if (photos.length > MAX_PHOTOS_PER_REQUEST) {
+      return c.json({ error: `Maximum ${MAX_PHOTOS_PER_REQUEST} photos per upload` }, 400);
+    }
+
+    const results = [];
+    for (const photo of photos) {
+      if (!photo.base64 || !photo.mimeType) {
+        continue;
+      }
+
+      if (!ALLOWED_MIME_TYPES.includes(photo.mimeType)) {
+        continue;
+      }
+
+      const fileSize = Math.ceil(photo.base64.length * 0.75);
+      if (fileSize > MAX_PHOTO_SIZE) {
+        continue;
+      }
+
+      const [inserted] = await db.insert(uploadedPhotos).values({
+        fileName: photo.fileName || `photo_${Date.now()}.jpg`,
+        mimeType: photo.mimeType,
+        fileSize,
+        data: photo.base64,
+        uploadedBy: uploadedBy,
+        entityType: entityType || null,
+        entityId: entityId || null,
+        latitude: photo.latitude || null,
+        longitude: photo.longitude || null,
+      }).returning({ id: uploadedPhotos.id });
+
+      results.push({
+        id: inserted.id,
+        url: `/api/photos/${inserted.id}`,
+        latitude: photo.latitude,
+        longitude: photo.longitude,
+      });
+    }
+
+    return c.json({ photos: results });
+  } catch (error: any) {
+    console.error('Photo upload error:', error);
+    return c.json({ error: 'Failed to upload photos' }, 500);
+  }
+});
+
+app.get('/api/photos/:id', async (c) => {
+  try {
+    const photoId = c.req.param('id');
+
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(photoId)) {
+      return c.json({ error: 'Invalid photo ID' }, 400);
+    }
+
+    const [photo] = await db.select({
+      data: uploadedPhotos.data,
+      mimeType: uploadedPhotos.mimeType,
+      fileName: uploadedPhotos.fileName,
+    }).from(uploadedPhotos).where(eq(uploadedPhotos.id, photoId));
+
+    if (!photo) {
+      return c.json({ error: 'Photo not found' }, 404);
+    }
+
+    const binaryData = Buffer.from(photo.data, 'base64');
+    return new Response(binaryData, {
+      headers: {
+        'Content-Type': photo.mimeType,
+        'Content-Disposition': `inline; filename="${photo.fileName}"`,
+        'Cache-Control': 'public, max-age=31536000, immutable',
+      },
+    });
+  } catch (error: any) {
+    console.error('Photo serve error:', error);
+    return c.json({ error: 'Failed to load photo' }, 500);
+  }
 });
 
 app.use(

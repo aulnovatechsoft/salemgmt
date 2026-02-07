@@ -23,9 +23,9 @@ export default function FtthSalesDetailScreen() {
 
   const totals = useMemo(() => {
     return {
-      leads: salesData.reduce((sum, r) => sum + (r.ftthLeads || 0), 0),
-      installed: salesData.reduce((sum, r) => sum + (r.ftthInstalled || 0), 0),
-      target: salesData.reduce((sum, r) => sum + (r.ftthTarget || 0), 0)
+      leads: salesData.reduce((sum, r) => sum + Number(r.ftthLeads || 0), 0),
+      installed: salesData.reduce((sum, r) => sum + Number(r.ftthInstalled || 0), 0),
+      target: salesData.reduce((sum, r) => sum + Number(r.ftthTarget || 0), 0)
     };
   }, [salesData]);
 

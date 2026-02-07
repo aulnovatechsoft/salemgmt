@@ -7,6 +7,7 @@ import { Camera, MapPin, Trash2, ChevronDown, Check, IndianRupee, CreditCard, Fi
 import { useAuth } from '@/contexts/auth';
 import { trpc } from '@/lib/trpc';
 import Colors from '@/constants/colors';
+import { uploadPhotos } from '@/lib/photoUpload';
 
 const FINANCE_TYPES = [
   { id: 'FIN_LC', label: 'LC Outstanding', targetField: 'targetFinLc', collectedField: 'finLcCollected' },
@@ -169,6 +170,30 @@ export default function SubmitFinanceScreen() {
 
     setIsSubmitting(true);
     try {
+      let uploadedPhotoResults: { uri: string; latitude?: string; longitude?: string; timestamp: string }[] = [];
+
+      if (photos.length > 0) {
+        try {
+          const photosToUpload = photos.map(uri => ({
+            uri,
+            latitude: location?.latitude?.toString(),
+            longitude: location?.longitude?.toString(),
+            timestamp: new Date().toISOString(),
+          }));
+          uploadedPhotoResults = await uploadPhotos(
+            photosToUpload,
+            employee?.id,
+            'finance_entry',
+            eventId || undefined
+          );
+        } catch (uploadErr) {
+          console.error('Photo upload failed:', uploadErr);
+          Alert.alert('Upload Error', 'Failed to upload photos. Please try again.');
+          setIsSubmitting(false);
+          return;
+        }
+      }
+
       await submitFinanceMutation.mutateAsync({
         eventId: eventId || '',
         employeeId: employee?.id || '',
@@ -179,12 +204,7 @@ export default function SubmitFinanceScreen() {
         customerName: customerName || undefined,
         customerContact: customerContact || undefined,
         remarks: remarks || undefined,
-        photos: photos.map(uri => ({
-          uri,
-          latitude: location?.latitude?.toString(),
-          longitude: location?.longitude?.toString(),
-          timestamp: new Date().toISOString(),
-        })),
+        photos: uploadedPhotoResults.length > 0 ? uploadedPhotoResults : [],
         gpsLatitude: location?.latitude?.toString(),
         gpsLongitude: location?.longitude?.toString(),
       });
