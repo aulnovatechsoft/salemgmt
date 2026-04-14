@@ -25,13 +25,13 @@ args = "Expo Mobile"
 name = "BSNL App"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "bun run server.ts"
-waitForPort = 5000
-
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bunx expo export --platform web && bun run server.ts"
+waitForPort = 5000
 
 [[workflows.workflow]]
 name = "Expo Mobile"
@@ -48,10 +48,6 @@ waitForPort = 8080
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 8080
-externalPort = 8080
 
 [[ports]]
 localPort = 8081

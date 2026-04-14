@@ -6,7 +6,7 @@ BSNL Sales & Task App is a mobile-first application for managing task assignment
 ## Tech Stack
 - **Frontend**: React Native with Expo SDK 54, React Native Web
 - **Backend**: Hono server with tRPC for type-safe API calls
-- **Database**: PostgreSQL (external Neon database)
+- **Database**: PostgreSQL (external at 117.251.72.195:5433)
 - **ORM**: Drizzle ORM
 - **State Management**: Zustand, React Query
 - **Styling**: React Native StyleSheet
@@ -249,9 +249,10 @@ The complete resource management flow tracks SIM and FTTH from circle inventory 
 
 ## Running the App
 The app runs on port 5000 with a combined frontend/backend server:
-- Frontend: Static web build from Expo export
+- Frontend: Static web build from Expo export (dist/ folder)
 - Backend: tRPC API at /api/trpc/*
 - Health check: GET /health
+- The BSNL App workflow automatically rebuilds the web app (`bunx expo export --platform web`) before starting the server to ensure the latest code is always served
 
 ## Environment Variables
 - `DATABASE_URL`: PostgreSQL connection string (stored as secret)
