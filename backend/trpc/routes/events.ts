@@ -321,14 +321,29 @@ export const eventsRouter = createTRPCRouter({
           adminAssignsByEvent.set(a.eventId, arr);
         }
         
-        const adminSalesEntries = adminEventIds.length > 0
-          ? await db.select({
-              eventId: eventSalesEntries.eventId,
-              totalSimsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
-              totalFtthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
-            }).from(eventSalesEntries).where(inArray(eventSalesEntries.eventId, adminEventIds)).groupBy(eventSalesEntries.eventId)
-          : [];
+        const [adminSalesEntries, adminPerEmpSales] = adminEventIds.length > 0
+          ? await Promise.all([
+              db.select({
+                eventId: eventSalesEntries.eventId,
+                totalSimsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+                totalFtthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+              }).from(eventSalesEntries).where(inArray(eventSalesEntries.eventId, adminEventIds)).groupBy(eventSalesEntries.eventId),
+              db.select({
+                eventId: eventSalesEntries.eventId,
+                employeeId: eventSalesEntries.employeeId,
+                simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+                ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+                leaseSold: sql<number>`COALESCE(SUM(${eventSalesEntries.leaseSold}), 0)::integer`,
+                ebSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ebSold}), 0)::integer`,
+              }).from(eventSalesEntries).where(inArray(eventSalesEntries.eventId, adminEventIds))
+                .groupBy(eventSalesEntries.eventId, eventSalesEntries.employeeId),
+            ])
+          : [[], []];
         const adminSalesMap = new Map(adminSalesEntries.map(s => [s.eventId, s]));
+        const adminPerEmpSalesMap = new Map<string, typeof adminPerEmpSales[0]>();
+        for (const s of adminPerEmpSales) {
+          adminPerEmpSalesMap.set(`${s.eventId}:${s.employeeId}`, s);
+        }
         
         const adminTeamPersNos = [...new Set(allEvents.flatMap(e => (e.assignedTeam || []) as string[]))];
         let adminMasterMap = new Map<string, { persNo: string; name: string; designation: string | null }>();
@@ -376,6 +391,7 @@ export const eventsRouter = createTRPCRouter({
             const member = adminMasterMap.get(persNo);
             const empId = adminPersNoToEmpId.get(persNo);
             const ma = empId ? assignByEmpId.get(empId) : undefined;
+            const es = empId ? adminPerEmpSalesMap.get(`${event.id}:${empId}`) : undefined;
             const sz = eventTeam.length || 1;
             const dist = (total: number) => { const b = Math.floor(total / sz); return idx < (total % sz) ? b + 1 : b; };
             return {
@@ -393,10 +409,14 @@ export const eventsRouter = createTRPCRouter({
                 eb: ma ? ma.ebTarget : (cats.includes('EB') ? dist(event.targetEb ?? 0) : 0),
               },
               progress: {
-                simSold: ma?.simSold ?? 0, ftthSold: ma?.ftthSold ?? 0,
-                lease: ma?.leaseCompleted ?? 0, btsDown: ma?.btsDownCompleted ?? 0,
-                routeFail: ma?.routeFailCompleted ?? 0, ftthDown: ma?.ftthDownCompleted ?? 0,
-                ofcFail: ma?.ofcFailCompleted ?? 0, eb: ma?.ebCompleted ?? 0,
+                simSold: Math.max(es ? Number(es.simsSold) : 0, ma?.simSold ?? 0),
+                ftthSold: Math.max(es ? Number(es.ftthSold) : 0, ma?.ftthSold ?? 0),
+                lease: Math.max(es ? Number(es.leaseSold) : 0, ma?.leaseCompleted ?? 0),
+                btsDown: ma?.btsDownCompleted ?? 0,
+                routeFail: ma?.routeFailCompleted ?? 0,
+                ftthDown: ma?.ftthDownCompleted ?? 0,
+                ofcFail: ma?.ofcFailCompleted ?? 0,
+                eb: Math.max(es ? Number(es.ebSold) : 0, ma?.ebCompleted ?? 0),
               },
             };
           });
@@ -508,15 +528,29 @@ export const eventsRouter = createTRPCRouter({
         assignmentsByEventId.set(a.eventId, arr);
       }
       
-      // Get actual sales from event_sales_entries (real submitted data)
-      const salesEntrySums = await db.select({
-        eventId: eventSalesEntries.eventId,
-        totalSimsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
-        totalFtthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
-        totalLeaseSold: sql<number>`COALESCE(SUM(${eventSalesEntries.leaseSold}), 0)::integer`,
-        totalEbSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ebSold}), 0)::integer`,
-      }).from(eventSalesEntries).where(inArray(eventSalesEntries.eventId, eventIds)).groupBy(eventSalesEntries.eventId);
+      const [salesEntrySums, perEmployeeSales] = await Promise.all([
+        db.select({
+          eventId: eventSalesEntries.eventId,
+          totalSimsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+          totalFtthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+          totalLeaseSold: sql<number>`COALESCE(SUM(${eventSalesEntries.leaseSold}), 0)::integer`,
+          totalEbSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ebSold}), 0)::integer`,
+        }).from(eventSalesEntries).where(inArray(eventSalesEntries.eventId, eventIds)).groupBy(eventSalesEntries.eventId),
+        db.select({
+          eventId: eventSalesEntries.eventId,
+          employeeId: eventSalesEntries.employeeId,
+          simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+          ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+          leaseSold: sql<number>`COALESCE(SUM(${eventSalesEntries.leaseSold}), 0)::integer`,
+          ebSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ebSold}), 0)::integer`,
+        }).from(eventSalesEntries).where(inArray(eventSalesEntries.eventId, eventIds))
+          .groupBy(eventSalesEntries.eventId, eventSalesEntries.employeeId),
+      ]);
       const salesEntryMap2 = new Map(salesEntrySums.map(s => [s.eventId, s]));
+      const perEmpSalesMap = new Map<string, typeof perEmployeeSales[0]>();
+      for (const s of perEmployeeSales) {
+        perEmpSalesMap.set(`${s.eventId}:${s.employeeId}`, s);
+      }
       
       const allTeamPersNos = results.flatMap(e => (e.assignedTeam || []) as string[]);
       const uniquePersNos = [...new Set(allTeamPersNos)];
@@ -615,6 +649,7 @@ export const eventsRouter = createTRPCRouter({
           const member = masterMap.get(persNo);
           const empId = persNoToEmpIdMapMyEvents.get(persNo);
           const memberAssignment = empId ? assignByEmpIdMyEv.get(empId) : undefined;
+          const empSales = empId ? perEmpSalesMap.get(`${event.id}:${empId}`) : undefined;
           const memberTeamSize = assignedTeamPurseIds.length || 1;
           const getDistTarget = (total: number) => {
             const base = Math.floor(total / memberTeamSize);
@@ -637,14 +672,14 @@ export const eventsRouter = createTRPCRouter({
               eb: memberAssignment ? memberAssignment.ebTarget : (evtHasEb ? getDistTarget(event.targetEb ?? 0) : 0),
             },
             progress: {
-              simSold: memberAssignment?.simSold ?? 0,
-              ftthSold: memberAssignment?.ftthSold ?? 0,
-              lease: memberAssignment?.leaseCompleted ?? 0,
+              simSold: Math.max(empSales ? Number(empSales.simsSold) : 0, memberAssignment?.simSold ?? 0),
+              ftthSold: Math.max(empSales ? Number(empSales.ftthSold) : 0, memberAssignment?.ftthSold ?? 0),
+              lease: Math.max(empSales ? Number(empSales.leaseSold) : 0, memberAssignment?.leaseCompleted ?? 0),
               btsDown: memberAssignment?.btsDownCompleted ?? 0,
               routeFail: memberAssignment?.routeFailCompleted ?? 0,
               ftthDown: memberAssignment?.ftthDownCompleted ?? 0,
               ofcFail: memberAssignment?.ofcFailCompleted ?? 0,
-              eb: memberAssignment?.ebCompleted ?? 0,
+              eb: Math.max(empSales ? Number(empSales.ebSold) : 0, memberAssignment?.ebCompleted ?? 0),
             },
           };
         });
