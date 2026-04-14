@@ -484,28 +484,40 @@ function EventCard({ event, getDisplayStatus, canEdit, onActivate }: {
         </View>
       )}
 
-      {/* Team Member Avatars */}
       {event.teamMembers && event.teamMembers.length > 0 && (
-        <View style={styles.teamAvatarsRow}>
-          <Text style={styles.teamLabel}>Team:</Text>
-          <View style={styles.avatarStack}>
-            {event.teamMembers.slice(0, 5).map((member: { persNo: string; name: string }, index: number) => (
-              <View 
-                key={member.persNo} 
-                style={[
-                  styles.stackedAvatar, 
-                  { backgroundColor: getAvatarColor(member.name), marginLeft: index > 0 ? -8 : 0, zIndex: 5 - index }
-                ]}
-              >
-                <Text style={styles.stackedAvatarText}>{getInitials(member.name)}</Text>
+        <View style={styles.teamDetailSection}>
+          <Text style={styles.teamDetailLabel}>Team ({event.teamMembers.length})</Text>
+          {event.teamMembers.map((member: any) => {
+            const t = member.targets || {};
+            const p = member.progress || {};
+            const chips: { label: string; value: string }[] = [];
+            if (t.sim > 0) chips.push({ label: 'SIM', value: `${p.simSold ?? 0}/${t.sim}` });
+            if (t.ftth > 0) chips.push({ label: 'FTTH', value: `${p.ftthSold ?? 0}/${t.ftth}` });
+            if (t.lease > 0) chips.push({ label: 'LC', value: `${p.lease ?? 0}/${t.lease}` });
+            if (t.btsDown > 0) chips.push({ label: 'BTS', value: `${p.btsDown ?? 0}/${t.btsDown}` });
+            if (t.routeFail > 0) chips.push({ label: 'RF', value: `${p.routeFail ?? 0}/${t.routeFail}` });
+            if (t.ftthDown > 0) chips.push({ label: 'FD', value: `${p.ftthDown ?? 0}/${t.ftthDown}` });
+            if (t.ofcFail > 0) chips.push({ label: 'OFC', value: `${p.ofcFail ?? 0}/${t.ofcFail}` });
+            if (t.eb > 0) chips.push({ label: 'EB', value: `${p.eb ?? 0}/${t.eb}` });
+
+            return (
+              <View key={member.persNo} style={styles.teamMemberDetailRow}>
+                <View style={[styles.miniAvatar, { backgroundColor: getAvatarColor(member.name) }]}>
+                  <Text style={styles.miniAvatarText}>{getInitials(member.name)}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.memberDetailName} numberOfLines={1}>{member.name}</Text>
+                </View>
+                {chips.length > 0 && (
+                  <View style={styles.memberChipsRow}>
+                    {chips.map(c => (
+                      <Text key={c.label} style={styles.memberChip}>{c.label}: {c.value}</Text>
+                    ))}
+                  </View>
+                )}
               </View>
-            ))}
-            {event.teamMembers.length > 5 && (
-              <View style={[styles.stackedAvatar, styles.moreAvatar, { marginLeft: -8 }]}>
-                <Text style={styles.moreAvatarText}>+{event.teamMembers.length - 5}</Text>
-              </View>
-            )}
-          </View>
+            );
+          })}
         </View>
       )}
 
@@ -925,5 +937,57 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '600' as const,
     color: '#fff',
+  },
+  teamDetailSection: {
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#E8EDF2',
+  },
+  teamDetailLabel: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: Colors.light.textSecondary,
+    marginBottom: 8,
+  },
+  teamMemberDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 6,
+    gap: 8,
+  },
+  miniAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 1,
+  },
+  miniAvatarText: {
+    fontSize: 9,
+    fontWeight: '700' as const,
+    color: '#fff',
+  },
+  memberDetailName: {
+    fontSize: 12,
+    fontWeight: '500' as const,
+    color: Colors.light.text,
+  },
+  memberChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    maxWidth: '60%' as any,
+  },
+  memberChip: {
+    fontSize: 10,
+    fontWeight: '600' as const,
+    color: Colors.light.primary,
+    backgroundColor: Colors.light.lightBlue || '#E3F2FD',
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+    overflow: 'hidden',
   },
 });

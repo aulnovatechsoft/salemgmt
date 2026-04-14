@@ -309,6 +309,47 @@ export const eventsRouter = createTRPCRouter({
           .orderBy(desc(events.createdAt));
         
         const adminPersNo = employee[0].persNo;
+        
+        const adminEventIds = allEvents.map(e => e.id);
+        const adminAssignments = adminEventIds.length > 0 
+          ? await db.select().from(eventAssignments).where(inArray(eventAssignments.eventId, adminEventIds))
+          : [];
+        const adminAssignsByEvent = new Map<string, typeof adminAssignments>();
+        for (const a of adminAssignments) {
+          const arr = adminAssignsByEvent.get(a.eventId) || [];
+          arr.push(a);
+          adminAssignsByEvent.set(a.eventId, arr);
+        }
+        
+        const adminSalesEntries = adminEventIds.length > 0
+          ? await db.select({
+              eventId: eventSalesEntries.eventId,
+              totalSimsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+              totalFtthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+            }).from(eventSalesEntries).where(inArray(eventSalesEntries.eventId, adminEventIds)).groupBy(eventSalesEntries.eventId)
+          : [];
+        const adminSalesMap = new Map(adminSalesEntries.map(s => [s.eventId, s]));
+        
+        const adminTeamPersNos = [...new Set(allEvents.flatMap(e => (e.assignedTeam || []) as string[]))];
+        let adminMasterMap = new Map<string, { persNo: string; name: string; designation: string | null }>();
+        let adminPersNoToEmpId = new Map<string, string>();
+        if (adminTeamPersNos.length > 0) {
+          const empRows = await db.select({ id: employees.id, persNo: employees.persNo, name: employees.name, designation: employees.designation })
+            .from(employees).where(inArray(employees.persNo, adminTeamPersNos));
+          for (const row of empRows) {
+            if (row.persNo) {
+              adminPersNoToEmpId.set(row.persNo, row.id);
+              adminMasterMap.set(row.persNo, { persNo: row.persNo, name: row.name, designation: row.designation || null });
+            }
+          }
+          const missing = adminTeamPersNos.filter(p => !adminMasterMap.has(p));
+          if (missing.length > 0) {
+            const masterRecs = await db.select({ persNo: employeeMaster.persNo, name: employeeMaster.name, designation: employeeMaster.designation })
+              .from(employeeMaster).where(inArray(employeeMaster.persNo, missing));
+            for (const m of masterRecs) adminMasterMap.set(m.persNo, m);
+          }
+        }
+        
         return allEvents.map(event => {
           const eventTeam = (event.assignedTeam || []) as string[];
           const isInTeam = adminPersNo && eventTeam.includes(adminPersNo);
@@ -323,7 +364,44 @@ export const eventsRouter = createTRPCRouter({
           } else {
             ownershipCategory = 'subordinate_task';
           }
-          return { ...event, ownershipCategory, simSold: 0, ftthSold: 0, submissionStatus: 'not_started', teamMembers: [], creatorName: null, assigneeName: null, assigneeDesignation: null, myAssignment: null };
+          
+          const evtAssigns = adminAssignsByEvent.get(event.id) || [];
+          const assignByEmpId = new Map<string, typeof evtAssigns[0]>();
+          for (const ea of evtAssigns) assignByEmpId.set(ea.employeeId, ea);
+          
+          const sales = adminSalesMap.get(event.id);
+          const cats = (event.category || '').split(',').filter(Boolean);
+          
+          const teamMembers = eventTeam.map((persNo, idx) => {
+            const member = adminMasterMap.get(persNo);
+            const empId = adminPersNoToEmpId.get(persNo);
+            const ma = empId ? assignByEmpId.get(empId) : undefined;
+            const sz = eventTeam.length || 1;
+            const dist = (total: number) => { const b = Math.floor(total / sz); return idx < (total % sz) ? b + 1 : b; };
+            return {
+              persNo,
+              name: member?.name || persNo,
+              designation: member?.designation || null,
+              targets: {
+                sim: ma ? ma.simTarget : (cats.includes('SIM') ? dist(event.targetSim) : 0),
+                ftth: ma ? ma.ftthTarget : (cats.includes('FTTH') ? dist(event.targetFtth) : 0),
+                lease: ma ? ma.leaseTarget : (cats.includes('LEASE_CIRCUIT') ? dist(event.targetLease ?? 0) : 0),
+                btsDown: ma ? ma.btsDownTarget : (cats.includes('BTS_DOWN') ? dist(event.targetBtsDown ?? 0) : 0),
+                routeFail: ma ? ma.routeFailTarget : (cats.includes('ROUTE_FAIL') ? dist(event.targetRouteFail ?? 0) : 0),
+                ftthDown: ma ? ma.ftthDownTarget : (cats.includes('FTTH_DOWN') ? dist(event.targetFtthDown ?? 0) : 0),
+                ofcFail: ma ? ma.ofcFailTarget : (cats.includes('OFC_FAIL') ? dist(event.targetOfcFail ?? 0) : 0),
+                eb: ma ? ma.ebTarget : (cats.includes('EB') ? dist(event.targetEb ?? 0) : 0),
+              },
+              progress: {
+                simSold: ma?.simSold ?? 0, ftthSold: ma?.ftthSold ?? 0,
+                lease: ma?.leaseCompleted ?? 0, btsDown: ma?.btsDownCompleted ?? 0,
+                routeFail: ma?.routeFailCompleted ?? 0, ftthDown: ma?.ftthDownCompleted ?? 0,
+                ofcFail: ma?.ofcFailCompleted ?? 0, eb: ma?.ebCompleted ?? 0,
+              },
+            };
+          });
+          
+          return { ...event, ownershipCategory, simSold: Number(sales?.totalSimsSold || 0), ftthSold: Number(sales?.totalFtthSold || 0), submissionStatus: 'not_started', teamMembers, creatorName: null, assigneeName: null, assigneeDesignation: null, myAssignment: null };
         });
       }
       
@@ -423,6 +501,13 @@ export const eventsRouter = createTRPCRouter({
       const relevantAssignments = await db.select().from(eventAssignments)
         .where(inArray(eventAssignments.eventId, eventIds));
       
+      const assignmentsByEventId = new Map<string, typeof relevantAssignments>();
+      for (const a of relevantAssignments) {
+        const arr = assignmentsByEventId.get(a.eventId) || [];
+        arr.push(a);
+        assignmentsByEventId.set(a.eventId, arr);
+      }
+      
       // Get actual sales from event_sales_entries (real submitted data)
       const salesEntrySums = await db.select({
         eventId: eventSalesEntries.eventId,
@@ -436,13 +521,28 @@ export const eventsRouter = createTRPCRouter({
       const allTeamPersNos = results.flatMap(e => (e.assignedTeam || []) as string[]);
       const uniquePersNos = [...new Set(allTeamPersNos)];
       let masterMap = new Map<string, { persNo: string; name: string; designation: string | null }>();
+      let persNoToEmpIdMapMyEvents = new Map<string, string>();
       if (uniquePersNos.length > 0) {
-        const masterRecords = await db.select({
-          persNo: employeeMaster.persNo,
-          name: employeeMaster.name,
-          designation: employeeMaster.designation,
-        }).from(employeeMaster).where(inArray(employeeMaster.persNo, uniquePersNos));
-        masterMap = new Map(masterRecords.map(m => [m.persNo, m]));
+        const empRowsForTeam = await db.select({ id: employees.id, persNo: employees.persNo, name: employees.name, designation: employees.designation })
+          .from(employees)
+          .where(inArray(employees.persNo, uniquePersNos));
+        for (const row of empRowsForTeam) {
+          if (row.persNo) {
+            persNoToEmpIdMapMyEvents.set(row.persNo, row.id);
+            masterMap.set(row.persNo, { persNo: row.persNo, name: row.name, designation: row.designation || null });
+          }
+        }
+        const missingPersNosForMaster = uniquePersNos.filter(p => !masterMap.has(p));
+        if (missingPersNosForMaster.length > 0) {
+          const masterRecords = await db.select({
+            persNo: employeeMaster.persNo,
+            name: employeeMaster.name,
+            designation: employeeMaster.designation,
+          }).from(employeeMaster).where(inArray(employeeMaster.persNo, missingPersNosForMaster));
+          for (const m of masterRecords) {
+            masterMap.set(m.persNo, m);
+          }
+        }
       }
       
       const allEmployeeIds = [...new Set([
@@ -462,7 +562,7 @@ export const eventsRouter = createTRPCRouter({
       const expiredEventIds = await autoCompleteExpiredEvents(results);
       
       const eventsWithProgress = results.map(event => {
-        const eventAssigns = relevantAssignments.filter(a => a.eventId === event.id);
+        const eventAssigns = assignmentsByEventId.get(event.id) || [];
         const salesEntry2 = salesEntryMap2.get(event.id);
         const simSold = Number(salesEntry2?.totalSimsSold || 0);
         const ftthSold = Number(salesEntry2?.totalFtthSold || 0);
@@ -482,17 +582,12 @@ export const eventsRouter = createTRPCRouter({
           ownershipCategory = 'subordinate_task';
         }
         
-        // Find the current user's assignment for this event to get their submissionStatus
         const myAssignment = eventAssigns.find(a => a.employeeId === input.employeeId);
         
-        // Determine the overall submission status:
-        // 1. If user has their own assignment, use their status
-        // 2. If user is the event creator/manager, aggregate the team's status
         let submissionStatus: string = 'not_started';
         if (myAssignment) {
           submissionStatus = myAssignment.submissionStatus || 'not_started';
         } else if (event.createdBy === input.employeeId || event.assignedTo === input.employeeId) {
-          // For managers/creators: show the most advanced status of the team
           const statuses = eventAssigns.map(a => a.submissionStatus || 'not_started');
           if (statuses.includes('approved')) submissionStatus = 'approved';
           else if (statuses.includes('submitted')) submissionStatus = 'submitted';
@@ -501,9 +596,57 @@ export const eventsRouter = createTRPCRouter({
         }
         
         const assignedTeamPurseIds = (event.assignedTeam || []) as string[];
-        const teamMembers = assignedTeamPurseIds.map(persNo => {
+        const evtCategories = (event.category || '').split(',').filter(Boolean);
+        const evtHasSIM = evtCategories.includes('SIM');
+        const evtHasFTTH = evtCategories.includes('FTTH');
+        const evtHasLease = evtCategories.includes('LEASE_CIRCUIT');
+        const evtHasBtsDown = evtCategories.includes('BTS_DOWN');
+        const evtHasRouteFail = evtCategories.includes('ROUTE_FAIL');
+        const evtHasFtthDown = evtCategories.includes('FTTH_DOWN');
+        const evtHasOfcFail = evtCategories.includes('OFC_FAIL');
+        const evtHasEb = evtCategories.includes('EB');
+
+        const assignByEmpIdMyEv = new Map<string, typeof eventAssigns[0]>();
+        for (const ea of eventAssigns) {
+          assignByEmpIdMyEv.set(ea.employeeId, ea);
+        }
+
+        const teamMembers = assignedTeamPurseIds.map((persNo, idx) => {
           const member = masterMap.get(persNo);
-          return member ? { persNo, name: member.name, designation: member.designation } : { persNo, name: persNo, designation: null };
+          const empId = persNoToEmpIdMapMyEvents.get(persNo);
+          const memberAssignment = empId ? assignByEmpIdMyEv.get(empId) : undefined;
+          const memberTeamSize = assignedTeamPurseIds.length || 1;
+          const getDistTarget = (total: number) => {
+            const base = Math.floor(total / memberTeamSize);
+            const remainder = total % memberTeamSize;
+            return idx < remainder ? base + 1 : base;
+          };
+
+          return {
+            persNo,
+            name: member?.name || persNo,
+            designation: member?.designation || null,
+            targets: {
+              sim: memberAssignment ? memberAssignment.simTarget : (evtHasSIM ? getDistTarget(event.targetSim) : 0),
+              ftth: memberAssignment ? memberAssignment.ftthTarget : (evtHasFTTH ? getDistTarget(event.targetFtth) : 0),
+              lease: memberAssignment ? memberAssignment.leaseTarget : (evtHasLease ? getDistTarget(event.targetLease ?? 0) : 0),
+              btsDown: memberAssignment ? memberAssignment.btsDownTarget : (evtHasBtsDown ? getDistTarget(event.targetBtsDown ?? 0) : 0),
+              routeFail: memberAssignment ? memberAssignment.routeFailTarget : (evtHasRouteFail ? getDistTarget(event.targetRouteFail ?? 0) : 0),
+              ftthDown: memberAssignment ? memberAssignment.ftthDownTarget : (evtHasFtthDown ? getDistTarget(event.targetFtthDown ?? 0) : 0),
+              ofcFail: memberAssignment ? memberAssignment.ofcFailTarget : (evtHasOfcFail ? getDistTarget(event.targetOfcFail ?? 0) : 0),
+              eb: memberAssignment ? memberAssignment.ebTarget : (evtHasEb ? getDistTarget(event.targetEb ?? 0) : 0),
+            },
+            progress: {
+              simSold: memberAssignment?.simSold ?? 0,
+              ftthSold: memberAssignment?.ftthSold ?? 0,
+              lease: memberAssignment?.leaseCompleted ?? 0,
+              btsDown: memberAssignment?.btsDownCompleted ?? 0,
+              routeFail: memberAssignment?.routeFailCompleted ?? 0,
+              ftthDown: memberAssignment?.ftthDownCompleted ?? 0,
+              ofcFail: memberAssignment?.ofcFailCompleted ?? 0,
+              eb: memberAssignment?.ebCompleted ?? 0,
+            },
+          };
         });
         
         const creatorInfo = employeeMap.get(event.createdBy);
