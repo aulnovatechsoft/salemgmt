@@ -3106,6 +3106,43 @@ export const eventsRouter = createTRPCRouter({
       
       const assignmentMap = new Map(myAssignments.map(a => [a.eventId, a]));
       
+      const allTeamPersNos = new Set<string>();
+      for (const event of myEvents) {
+        const team = (event.assignedTeam as string[] || []);
+        for (const pn of team) allTeamPersNos.add(pn);
+      }
+      
+      let persNoNameMap = new Map<string, string>();
+      if (allTeamPersNos.size > 0) {
+        const persNoArr = [...allTeamPersNos];
+        const empRows = await db.select({ persNo: employees.persNo, name: employees.name })
+          .from(employees)
+          .where(inArray(employees.persNo, persNoArr));
+        for (const row of empRows) {
+          if (row.persNo) persNoNameMap.set(row.persNo, row.name);
+        }
+        const missingPersNos = persNoArr.filter(p => !persNoNameMap.has(p));
+        if (missingPersNos.length > 0) {
+          const masterRows = await db.select({ persNo: employeeMaster.persNo, name: employeeMaster.name })
+            .from(employeeMaster)
+            .where(inArray(employeeMaster.persNo, missingPersNos));
+          for (const row of masterRows) {
+            if (row.persNo) persNoNameMap.set(row.persNo, row.name);
+          }
+        }
+      }
+
+      const allEventAssignments = myEvents.length > 0
+        ? await db.select().from(eventAssignments)
+            .where(inArray(eventAssignments.eventId, myEvents.map(e => e.id)))
+        : [];
+      const eventAssignmentsMap = new Map<string, typeof allEventAssignments>();
+      for (const ea of allEventAssignments) {
+        const arr = eventAssignmentsMap.get(ea.eventId) || [];
+        arr.push(ea);
+        eventAssignmentsMap.set(ea.eventId, arr);
+      }
+      
       return myEvents.map(event => {
         const assignment = assignmentMap.get(event.id);
         const eventCategories = (event.category || '').split(',').filter(Boolean);
@@ -3118,8 +3155,9 @@ export const eventsRouter = createTRPCRouter({
         const eventHasOfcFail = eventCategories.includes('OFC_FAIL');
         const eventHasEb = eventCategories.includes('EB');
         
-        const teamSize = (event.assignedTeam as string[] || []).length || 1;
-        const teamIndex = employeePersNo ? (event.assignedTeam as string[] || []).indexOf(employeePersNo) : 0;
+        const teamPersNos = (event.assignedTeam as string[] || []);
+        const teamSize = teamPersNos.length || 1;
+        const teamIndex = employeePersNo ? teamPersNos.indexOf(employeePersNo) : 0;
         const effectiveIndex = teamIndex >= 0 ? teamIndex : 0;
         
         const getDistributedTarget = (total: number) => {
@@ -3130,13 +3168,115 @@ export const eventsRouter = createTRPCRouter({
         
         const isCreator = event.createdBy === input.employeeId;
         const isManager = event.assignedTo === input.employeeId;
-        const isTeamMember = employeePersNo ? (event.assignedTeam as string[] || []).includes(employeePersNo) : false;
+        const isTeamMember = employeePersNo ? teamPersNos.includes(employeePersNo) : false;
         const hasDirectAssignment = !!assignment;
         
         let myRole: 'creator' | 'manager' | 'team_member' | 'assigned' = 'team_member';
         if (isCreator) myRole = 'creator';
         else if (isManager) myRole = 'manager';
         else if (hasDirectAssignment) myRole = 'assigned';
+
+        const teamMembers = teamPersNos.map(pn => ({
+          persNo: pn,
+          name: persNoNameMap.get(pn) || pn,
+        }));
+
+        if (isCreator && !isTeamMember && !hasDirectAssignment) {
+          const hasSIM = eventHasSIM;
+          const hasFTTH = eventHasFTTH;
+          const hasLease = eventHasLease;
+          const hasBtsDown = eventHasBtsDown;
+          const hasRouteFail = eventHasRouteFail;
+          const hasFtthDown = eventHasFtthDown;
+          const hasOfcFail = eventHasOfcFail;
+          const hasEb = eventHasEb;
+          
+          const allCategoryLabels: string[] = [];
+          if (hasSIM) allCategoryLabels.push('SIM');
+          if (hasFTTH) allCategoryLabels.push('FTTH');
+          if (hasLease) allCategoryLabels.push('LEASE_CIRCUIT');
+          if (hasBtsDown) allCategoryLabels.push('BTS_DOWN');
+          if (hasRouteFail) allCategoryLabels.push('ROUTE_FAIL');
+          if (hasFtthDown) allCategoryLabels.push('FTTH_DOWN');
+          if (hasOfcFail) allCategoryLabels.push('OFC_FAIL');
+          if (hasEb) allCategoryLabels.push('EB');
+
+          const eventAssigns = eventAssignmentsMap.get(event.id) || [];
+          const totalSimSold = eventAssigns.reduce((sum, a) => sum + (a.simSold ?? 0), 0);
+          const totalFtthSold = eventAssigns.reduce((sum, a) => sum + (a.ftthSold ?? 0), 0);
+          
+          return {
+            id: event.id,
+            name: event.name,
+            location: event.location,
+            circle: event.circle,
+            zone: event.zone,
+            startDate: event.startDate,
+            endDate: event.endDate,
+            status: event.status,
+            category: allCategoryLabels.join(','),
+            myRole,
+            isCreator,
+            isManager,
+            isTeamMember,
+            hasDirectAssignment,
+            assignmentId: null as string | null,
+            teamMembers,
+            myTargets: {
+              sim: eventHasSIM ? event.targetSim : 0,
+              ftth: eventHasFTTH ? event.targetFtth : 0,
+              lease: eventHasLease ? (event.targetLease ?? 0) : 0,
+              btsDown: eventHasBtsDown ? (event.targetBtsDown ?? 0) : 0,
+              routeFail: eventHasRouteFail ? (event.targetRouteFail ?? 0) : 0,
+              ftthDown: eventHasFtthDown ? (event.targetFtthDown ?? 0) : 0,
+              ofcFail: eventHasOfcFail ? (event.targetOfcFail ?? 0) : 0,
+              eb: eventHasEb ? (event.targetEb ?? 0) : 0,
+            },
+            myProgress: {
+              simSold: totalSimSold,
+              ftthSold: totalFtthSold,
+            },
+            maintenanceProgress: {
+              lease: event.leaseCompleted ?? 0,
+              leaseTarget: event.targetLease ?? 0,
+              btsDown: event.btsDownCompleted ?? 0,
+              btsDownTarget: event.targetBtsDown ?? 0,
+              routeFail: event.routeFailCompleted ?? 0,
+              routeFailTarget: event.targetRouteFail ?? 0,
+              ftthDown: event.ftthDownCompleted ?? 0,
+              ftthDownTarget: event.targetFtthDown ?? 0,
+              ofcFail: event.ofcFailCompleted ?? 0,
+              ofcFailTarget: event.targetOfcFail ?? 0,
+              eb: event.ebCompleted ?? 0,
+              ebTarget: event.targetEb ?? 0,
+            },
+            categories: {
+              hasSIM,
+              hasFTTH,
+              hasLease,
+              hasBtsDown,
+              hasRouteFail,
+              hasFtthDown,
+              hasOfcFail,
+              hasEb,
+            },
+            submissionStatus: (() => {
+              const hasProgress = 
+                totalSimSold > 0 || 
+                totalFtthSold > 0 ||
+                (event.leaseCompleted ?? 0) > 0 ||
+                (event.btsDownCompleted ?? 0) > 0 ||
+                (event.routeFailCompleted ?? 0) > 0 ||
+                (event.ftthDownCompleted ?? 0) > 0 ||
+                (event.ofcFailCompleted ?? 0) > 0 ||
+                (event.ebCompleted ?? 0) > 0;
+              return hasProgress ? 'in_progress' : 'not_started';
+            })(),
+            submittedAt: null as string | null,
+            reviewedAt: null as string | null,
+            rejectionReason: null as string | null,
+          };
+        }
         
         const mySimTarget = assignment
           ? assignment.simTarget
@@ -3186,6 +3326,7 @@ export const eventsRouter = createTRPCRouter({
           isTeamMember,
           hasDirectAssignment,
           assignmentId: assignment?.id ?? null,
+          teamMembers,
           myTargets: {
             sim: mySimTarget,
             ftth: myFtthTarget,
