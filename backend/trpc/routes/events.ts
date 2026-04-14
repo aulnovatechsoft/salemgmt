@@ -3113,13 +3113,17 @@ export const eventsRouter = createTRPCRouter({
       }
       
       let persNoNameMap = new Map<string, string>();
+      let persNoToEmpIdMap = new Map<string, string>();
       if (allTeamPersNos.size > 0) {
         const persNoArr = [...allTeamPersNos];
-        const empRows = await db.select({ persNo: employees.persNo, name: employees.name })
+        const empRows = await db.select({ id: employees.id, persNo: employees.persNo, name: employees.name })
           .from(employees)
           .where(inArray(employees.persNo, persNoArr));
         for (const row of empRows) {
-          if (row.persNo) persNoNameMap.set(row.persNo, row.name);
+          if (row.persNo) {
+            persNoNameMap.set(row.persNo, row.name);
+            persNoToEmpIdMap.set(row.persNo, row.id);
+          }
         }
         const missingPersNos = persNoArr.filter(p => !persNoNameMap.has(p));
         if (missingPersNos.length > 0) {
@@ -3178,11 +3182,14 @@ export const eventsRouter = createTRPCRouter({
 
         const eventAssigns = eventAssignmentsMap.get(event.id) || [];
 
-        const teamMembersWithTargets = teamPersNos.map((pn, idx) => {
-          const memberAssignment = eventAssigns.find(a => {
-            const empMatch = allEventAssignments.find(ea => ea.id === a.id);
-            return empMatch !== undefined;
-          });
+        const assignByEmpId = new Map<string, typeof eventAssigns[0]>();
+        for (const ea of eventAssigns) {
+          assignByEmpId.set(ea.employeeId, ea);
+        }
+
+        const teamMembers = teamPersNos.map((pn, idx) => {
+          const empId = persNoToEmpIdMap.get(pn);
+          const memberAssignment = empId ? assignByEmpId.get(empId) : undefined;
           
           const memberTeamSize = teamPersNos.length || 1;
           const getMemberDistTarget = (total: number) => {
@@ -3195,13 +3202,15 @@ export const eventsRouter = createTRPCRouter({
             persNo: pn,
             name: persNoNameMap.get(pn) || pn,
             targets: {
-              sim: eventHasSIM ? getMemberDistTarget(event.targetSim) : 0,
-              ftth: eventHasFTTH ? getMemberDistTarget(event.targetFtth) : 0,
+              sim: memberAssignment ? memberAssignment.simTarget : (eventHasSIM ? getMemberDistTarget(event.targetSim) : 0),
+              ftth: memberAssignment ? memberAssignment.ftthTarget : (eventHasFTTH ? getMemberDistTarget(event.targetFtth) : 0),
+            },
+            progress: {
+              simSold: memberAssignment?.simSold ?? 0,
+              ftthSold: memberAssignment?.ftthSold ?? 0,
             },
           };
         });
-
-        const teamMembers = teamMembersWithTargets;
 
         if (isCreator) {
           const hasSIM = eventHasSIM;

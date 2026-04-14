@@ -233,10 +233,10 @@ export default function MyTasksScreen() {
                 {member.targets && (
                   <View style={styles.memberTargets}>
                     {member.targets.sim > 0 && (
-                      <Text style={styles.memberTargetText}>SIM: {member.targets.sim}</Text>
+                      <Text style={styles.memberTargetText}>SIM: {member.progress?.simSold ?? 0}/{member.targets.sim}</Text>
                     )}
                     {member.targets.ftth > 0 && (
-                      <Text style={styles.memberTargetText}>FTTH: {member.targets.ftth}</Text>
+                      <Text style={styles.memberTargetText}>FTTH: {member.progress?.ftthSold ?? 0}/{member.targets.ftth}</Text>
                     )}
                   </View>
                 )}
