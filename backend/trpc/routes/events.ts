@@ -3204,10 +3204,22 @@ export const eventsRouter = createTRPCRouter({
             targets: {
               sim: memberAssignment ? memberAssignment.simTarget : (eventHasSIM ? getMemberDistTarget(event.targetSim) : 0),
               ftth: memberAssignment ? memberAssignment.ftthTarget : (eventHasFTTH ? getMemberDistTarget(event.targetFtth) : 0),
+              lease: memberAssignment ? memberAssignment.leaseTarget : (eventHasLease ? getMemberDistTarget(event.targetLease ?? 0) : 0),
+              btsDown: memberAssignment ? memberAssignment.btsDownTarget : (eventHasBtsDown ? getMemberDistTarget(event.targetBtsDown ?? 0) : 0),
+              routeFail: memberAssignment ? memberAssignment.routeFailTarget : (eventHasRouteFail ? getMemberDistTarget(event.targetRouteFail ?? 0) : 0),
+              ftthDown: memberAssignment ? memberAssignment.ftthDownTarget : (eventHasFtthDown ? getMemberDistTarget(event.targetFtthDown ?? 0) : 0),
+              ofcFail: memberAssignment ? memberAssignment.ofcFailTarget : (eventHasOfcFail ? getMemberDistTarget(event.targetOfcFail ?? 0) : 0),
+              eb: memberAssignment ? memberAssignment.ebTarget : (eventHasEb ? getMemberDistTarget(event.targetEb ?? 0) : 0),
             },
             progress: {
               simSold: memberAssignment?.simSold ?? 0,
               ftthSold: memberAssignment?.ftthSold ?? 0,
+              lease: memberAssignment?.leaseCompleted ?? 0,
+              btsDown: memberAssignment?.btsDownCompleted ?? 0,
+              routeFail: memberAssignment?.routeFailCompleted ?? 0,
+              ftthDown: memberAssignment?.ftthDownCompleted ?? 0,
+              ofcFail: memberAssignment?.ofcFailCompleted ?? 0,
+              eb: memberAssignment?.ebCompleted ?? 0,
             },
           };
         });

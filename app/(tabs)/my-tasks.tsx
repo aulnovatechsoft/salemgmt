@@ -238,6 +238,24 @@ export default function MyTasksScreen() {
                     {member.targets.ftth > 0 && (
                       <Text style={styles.memberTargetText}>FTTH: {member.progress?.ftthSold ?? 0}/{member.targets.ftth}</Text>
                     )}
+                    {member.targets.lease > 0 && (
+                      <Text style={styles.memberTargetText}>LC: {member.progress?.lease ?? 0}/{member.targets.lease}</Text>
+                    )}
+                    {member.targets.btsDown > 0 && (
+                      <Text style={styles.memberTargetText}>BTS: {member.progress?.btsDown ?? 0}/{member.targets.btsDown}</Text>
+                    )}
+                    {member.targets.routeFail > 0 && (
+                      <Text style={styles.memberTargetText}>RF: {member.progress?.routeFail ?? 0}/{member.targets.routeFail}</Text>
+                    )}
+                    {member.targets.ftthDown > 0 && (
+                      <Text style={styles.memberTargetText}>FD: {member.progress?.ftthDown ?? 0}/{member.targets.ftthDown}</Text>
+                    )}
+                    {member.targets.ofcFail > 0 && (
+                      <Text style={styles.memberTargetText}>OFC: {member.progress?.ofcFail ?? 0}/{member.targets.ofcFail}</Text>
+                    )}
+                    {member.targets.eb > 0 && (
+                      <Text style={styles.memberTargetText}>EB: {member.progress?.eb ?? 0}/{member.targets.eb}</Text>
+                    )}
                   </View>
                 )}
               </View>
@@ -904,8 +922,8 @@ const styles = StyleSheet.create({
   teamMemberAvatarText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   teamMemberName: { fontSize: 13, fontWeight: '500', color: Colors.light.text },
   teamMemberPersNo: { fontSize: 11, color: Colors.light.textSecondary },
-  memberTargets: { flexDirection: 'row', gap: 8 },
-  memberTargetText: { fontSize: 11, fontWeight: '600', color: Colors.light.primary, backgroundColor: '#E3F2FD', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  memberTargets: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, justifyContent: 'flex-end', maxWidth: 180 },
+  memberTargetText: { fontSize: 10, fontWeight: '600', color: Colors.light.primary, backgroundColor: '#E3F2FD', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4 },
   teamMembersInline: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
   teamMembersInlineText: { fontSize: 12, color: Colors.light.textSecondary, flex: 1 },
   myTargetsLabel: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: 8 },
