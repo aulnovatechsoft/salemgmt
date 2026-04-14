@@ -3176,12 +3176,34 @@ export const eventsRouter = createTRPCRouter({
         else if (isManager) myRole = 'manager';
         else if (hasDirectAssignment) myRole = 'assigned';
 
-        const teamMembers = teamPersNos.map(pn => ({
-          persNo: pn,
-          name: persNoNameMap.get(pn) || pn,
-        }));
+        const eventAssigns = eventAssignmentsMap.get(event.id) || [];
 
-        if (isCreator && !isTeamMember && !hasDirectAssignment) {
+        const teamMembersWithTargets = teamPersNos.map((pn, idx) => {
+          const memberAssignment = eventAssigns.find(a => {
+            const empMatch = allEventAssignments.find(ea => ea.id === a.id);
+            return empMatch !== undefined;
+          });
+          
+          const memberTeamSize = teamPersNos.length || 1;
+          const getMemberDistTarget = (total: number) => {
+            const base = Math.floor(total / memberTeamSize);
+            const remainder = total % memberTeamSize;
+            return idx < remainder ? base + 1 : base;
+          };
+
+          return {
+            persNo: pn,
+            name: persNoNameMap.get(pn) || pn,
+            targets: {
+              sim: eventHasSIM ? getMemberDistTarget(event.targetSim) : 0,
+              ftth: eventHasFTTH ? getMemberDistTarget(event.targetFtth) : 0,
+            },
+          };
+        });
+
+        const teamMembers = teamMembersWithTargets;
+
+        if (isCreator) {
           const hasSIM = eventHasSIM;
           const hasFTTH = eventHasFTTH;
           const hasLease = eventHasLease;
@@ -3201,7 +3223,6 @@ export const eventsRouter = createTRPCRouter({
           if (hasOfcFail) allCategoryLabels.push('OFC_FAIL');
           if (hasEb) allCategoryLabels.push('EB');
 
-          const eventAssigns = eventAssignmentsMap.get(event.id) || [];
           const totalSimSold = eventAssigns.reduce((sum, a) => sum + (a.simSold ?? 0), 0);
           const totalFtthSold = eventAssigns.reduce((sum, a) => sum + (a.ftthSold ?? 0), 0);
           

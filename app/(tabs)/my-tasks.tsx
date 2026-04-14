@@ -87,7 +87,7 @@ export default function MyTasksScreen() {
     const created: any[] = [];
     const assigned: any[] = [];
     for (const task of myTasks) {
-      if (task.myRole === 'creator' && !task.isTeamMember && !task.hasDirectAssignment) {
+      if (task.myRole === 'creator') {
         created.push(task);
       } else {
         assigned.push(task);
@@ -226,8 +226,20 @@ export default function MyTasksScreen() {
                     {(member.name || '?')[0].toUpperCase()}
                   </Text>
                 </View>
-                <Text style={styles.teamMemberName} numberOfLines={1}>{member.name}</Text>
-                <Text style={styles.teamMemberPersNo}>({member.persNo})</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.teamMemberName} numberOfLines={1}>{member.name}</Text>
+                  <Text style={styles.teamMemberPersNo}>{member.persNo}</Text>
+                </View>
+                {member.targets && (
+                  <View style={styles.memberTargets}>
+                    {member.targets.sim > 0 && (
+                      <Text style={styles.memberTargetText}>SIM: {member.targets.sim}</Text>
+                    )}
+                    {member.targets.ftth > 0 && (
+                      <Text style={styles.memberTargetText}>FTTH: {member.targets.ftth}</Text>
+                    )}
+                  </View>
+                )}
               </View>
             ))}
           </View>
@@ -887,11 +899,13 @@ const styles = StyleSheet.create({
   teamSection: { backgroundColor: '#F8F9FA', borderRadius: 10, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#E8E8E8' },
   teamHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
   teamLabel: { fontSize: 13, fontWeight: '700', color: Colors.light.primary },
-  teamMemberRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
+  teamMemberRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   teamMemberAvatar: { width: 26, height: 26, borderRadius: 13, backgroundColor: Colors.light.primary, justifyContent: 'center', alignItems: 'center' },
   teamMemberAvatarText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-  teamMemberName: { fontSize: 13, fontWeight: '500', color: Colors.light.text, flex: 1 },
+  teamMemberName: { fontSize: 13, fontWeight: '500', color: Colors.light.text },
   teamMemberPersNo: { fontSize: 11, color: Colors.light.textSecondary },
+  memberTargets: { flexDirection: 'row', gap: 8 },
+  memberTargetText: { fontSize: 11, fontWeight: '600', color: Colors.light.primary, backgroundColor: '#E3F2FD', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   teamMembersInline: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
   teamMembersInlineText: { fontSize: 12, color: Colors.light.textSecondary, flex: 1 },
   myTargetsLabel: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: 8 },
