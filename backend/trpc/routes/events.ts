@@ -3519,21 +3519,33 @@ export const eventsRouter = createTRPCRouter({
         const myFtthTarget = assignment
           ? assignment.ftthTarget
           : (eventHasFTTH ? getDistributedTarget(event.targetFtth) : 0);
-        const myLeaseTarget = eventHasLease ? getDistributedTarget(event.targetLease ?? 0) : 0;
-        const myBtsDownTarget = eventHasBtsDown ? getDistributedTarget(event.targetBtsDown ?? 0) : 0;
-        const myRouteFailTarget = eventHasRouteFail ? getDistributedTarget(event.targetRouteFail ?? 0) : 0;
-        const myFtthDownTarget = eventHasFtthDown ? getDistributedTarget(event.targetFtthDown ?? 0) : 0;
-        const myOfcFailTarget = eventHasOfcFail ? getDistributedTarget(event.targetOfcFail ?? 0) : 0;
-        const myEbTarget = eventHasEb ? getDistributedTarget(event.targetEb ?? 0) : 0;
+        const myLeaseTarget = assignment
+          ? (assignment.leaseTarget ?? 0)
+          : (eventHasLease ? getDistributedTarget(event.targetLease ?? 0) : 0);
+        const myBtsDownTarget = assignment
+          ? (assignment.btsDownTarget ?? 0)
+          : (eventHasBtsDown ? getDistributedTarget(event.targetBtsDown ?? 0) : 0);
+        const myRouteFailTarget = assignment
+          ? (assignment.routeFailTarget ?? 0)
+          : (eventHasRouteFail ? getDistributedTarget(event.targetRouteFail ?? 0) : 0);
+        const myFtthDownTarget = assignment
+          ? (assignment.ftthDownTarget ?? 0)
+          : (eventHasFtthDown ? getDistributedTarget(event.targetFtthDown ?? 0) : 0);
+        const myOfcFailTarget = assignment
+          ? (assignment.ofcFailTarget ?? 0)
+          : (eventHasOfcFail ? getDistributedTarget(event.targetOfcFail ?? 0) : 0);
+        const myEbTarget = assignment
+          ? (assignment.ebTarget ?? 0)
+          : (eventHasEb ? getDistributedTarget(event.targetEb ?? 0) : 0);
         
         const hasSIM = assignment ? assignment.simTarget > 0 : eventHasSIM;
         const hasFTTH = assignment ? assignment.ftthTarget > 0 : eventHasFTTH;
-        const hasLease = assignment ? false : eventHasLease;
-        const hasBtsDown = assignment ? false : eventHasBtsDown;
-        const hasRouteFail = assignment ? false : eventHasRouteFail;
-        const hasFtthDown = assignment ? false : eventHasFtthDown;
-        const hasOfcFail = assignment ? false : eventHasOfcFail;
-        const hasEb = assignment ? false : eventHasEb;
+        const hasLease = assignment ? myLeaseTarget > 0 : eventHasLease;
+        const hasBtsDown = assignment ? myBtsDownTarget > 0 : eventHasBtsDown;
+        const hasRouteFail = assignment ? myRouteFailTarget > 0 : eventHasRouteFail;
+        const hasFtthDown = assignment ? myFtthDownTarget > 0 : eventHasFtthDown;
+        const hasOfcFail = assignment ? myOfcFailTarget > 0 : eventHasOfcFail;
+        const hasEb = assignment ? myEbTarget > 0 : eventHasEb;
         
         const assignedCategoryLabels: string[] = [];
         if (hasSIM) assignedCategoryLabels.push('SIM');
