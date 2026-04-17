@@ -167,38 +167,53 @@ const AUTO_COMPLETE_INTERVAL = 60 * 1000;
 async function autoCompleteExpiredEvents(eventsList: typeof events.$inferSelect[]) {
   const now = Date.now();
   if (now - lastAutoCompleteRun < AUTO_COMPLETE_INTERVAL) {
-    const today = getISTDate();
-    today.setHours(0, 0, 0, 0);
-    return eventsList
-      .filter(e => e.status === 'active' && e.endDate && new Date(e.endDate).setHours(23,59,59,999) < today.getTime())
-      .map(e => e.id);
+    return [];
   }
   lastAutoCompleteRun = now;
 
   const today = getISTDate();
   today.setHours(0, 0, 0, 0);
   
-  const expiredEventIds: string[] = [];
+  const expiredCandidateIds: string[] = [];
   for (const event of eventsList) {
     if (event.status === 'active' && event.endDate) {
       const endDate = new Date(event.endDate);
       endDate.setHours(23, 59, 59, 999);
       if (endDate < today) {
-        expiredEventIds.push(event.id);
+        expiredCandidateIds.push(event.id);
       }
     }
   }
   
-  if (expiredEventIds.length > 0) {
-    await Promise.all(expiredEventIds.map(id =>
+  if (expiredCandidateIds.length === 0) return [];
+  
+  const [salesProgress, assignProgress] = await Promise.all([
+    db.select({
+      eventId: eventSalesEntries.eventId,
+      total: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold} + ${eventSalesEntries.ftthSold} + ${eventSalesEntries.leaseSold} + ${eventSalesEntries.ebSold}), 0)::integer`,
+    }).from(eventSalesEntries).where(inArray(eventSalesEntries.eventId, expiredCandidateIds)).groupBy(eventSalesEntries.eventId),
+    db.select({
+      eventId: eventAssignments.eventId,
+      total: sql<number>`COALESCE(SUM(${eventAssignments.simSold} + ${eventAssignments.ftthSold} + ${eventAssignments.leaseCompleted} + ${eventAssignments.ebCompleted} + ${eventAssignments.btsDownCompleted} + ${eventAssignments.routeFailCompleted} + ${eventAssignments.ftthDownCompleted} + ${eventAssignments.ofcFailCompleted}), 0)::integer`,
+    }).from(eventAssignments).where(inArray(eventAssignments.eventId, expiredCandidateIds)).groupBy(eventAssignments.eventId),
+  ]);
+  
+  const progressMap = new Map<string, number>();
+  for (const r of salesProgress) progressMap.set(r.eventId, (progressMap.get(r.eventId) || 0) + Number(r.total));
+  for (const r of assignProgress) progressMap.set(r.eventId, Math.max(progressMap.get(r.eventId) || 0, Number(r.total)));
+  
+  const toComplete = expiredCandidateIds.filter(id => (progressMap.get(id) || 0) > 0);
+  
+  if (toComplete.length > 0) {
+    await Promise.all(toComplete.map(id =>
       db.update(events)
         .set({ status: 'completed', updatedAt: new Date() })
         .where(eq(events.id, id))
     ));
-    console.log(`Auto-completed ${expiredEventIds.length} expired works`);
+    console.log(`Auto-completed ${toComplete.length} expired works with progress`);
   }
   
-  return expiredEventIds;
+  return toComplete;
 }
 
 export const eventsRouter = createTRPCRouter({

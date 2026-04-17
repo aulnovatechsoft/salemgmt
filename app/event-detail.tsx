@@ -1244,17 +1244,22 @@ export default function EventDetailScreen() {
           </View>
         )}
 
-        {canManageTeam && availableTransitions.length > 0 && !isDraftEvent && (
+        {canManageTeam && availableTransitions.length > 0 && !isDraftEvent && (() => {
+          const isBreached = dbStatus === 'active' && eventData?.endDate &&
+            new Date(eventData.endDate).setHours(23,59,59,999) < Date.now();
+          const breachedConfig = { label: 'Breached', color: '#B71C1C', bg: '#FFCDD2', description: 'Task end date has passed without completion' };
+          const displayConfig = isBreached ? breachedConfig : EVENT_STATUS_CONFIG[dbStatus];
+          return (
           <View style={styles.statusSection}>
             <View style={styles.currentStatusRow}>
               <Text style={styles.statusLabel}>Current Status:</Text>
-              <View style={[styles.currentStatusBadge, { backgroundColor: EVENT_STATUS_CONFIG[dbStatus]?.bg }]}>
-                <Text style={[styles.currentStatusText, { color: EVENT_STATUS_CONFIG[dbStatus]?.color }]}>
-                  {EVENT_STATUS_CONFIG[dbStatus]?.label}
+              <View style={[styles.currentStatusBadge, { backgroundColor: displayConfig?.bg }]}>
+                <Text style={[styles.currentStatusText, { color: displayConfig?.color }]}>
+                  {displayConfig?.label}
                 </Text>
               </View>
             </View>
-            <Text style={styles.statusDescription}>{EVENT_STATUS_CONFIG[dbStatus]?.description}</Text>
+            <Text style={styles.statusDescription}>{displayConfig?.description}</Text>
             <View style={styles.actionButtonsRow}>
               {availableTransitions.includes('active') && (
                 <TouchableOpacity style={[styles.actionBtn, styles.startBtn]} onPress={() => handleUpdateStatus('active')}>
@@ -1288,7 +1293,8 @@ export default function EventDetailScreen() {
               )}
             </View>
           </View>
-        )}
+          );
+        })()}
 
         {/* ===== CATEGORY-BASED TASK CARDS ===== */}
         <View style={styles.categoryCardsSection}>
