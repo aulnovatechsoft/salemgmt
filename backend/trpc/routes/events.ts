@@ -190,19 +190,65 @@ async function autoCompleteExpiredEvents(eventsList: typeof events.$inferSelect[
   const [salesProgress, assignProgress] = await Promise.all([
     db.select({
       eventId: eventSalesEntries.eventId,
-      total: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold} + ${eventSalesEntries.ftthSold} + ${eventSalesEntries.leaseSold} + ${eventSalesEntries.ebSold}), 0)::integer`,
+      sim: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
+      ftth: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
+      lease: sql<number>`COALESCE(SUM(${eventSalesEntries.leaseSold}), 0)::integer`,
+      eb: sql<number>`COALESCE(SUM(${eventSalesEntries.ebSold}), 0)::integer`,
     }).from(eventSalesEntries).where(inArray(eventSalesEntries.eventId, expiredCandidateIds)).groupBy(eventSalesEntries.eventId),
     db.select({
       eventId: eventAssignments.eventId,
-      total: sql<number>`COALESCE(SUM(${eventAssignments.simSold} + ${eventAssignments.ftthSold} + ${eventAssignments.leaseCompleted} + ${eventAssignments.ebCompleted} + ${eventAssignments.btsDownCompleted} + ${eventAssignments.routeFailCompleted} + ${eventAssignments.ftthDownCompleted} + ${eventAssignments.ofcFailCompleted}), 0)::integer`,
+      sim: sql<number>`COALESCE(SUM(${eventAssignments.simSold}), 0)::integer`,
+      ftth: sql<number>`COALESCE(SUM(${eventAssignments.ftthSold}), 0)::integer`,
+      lease: sql<number>`COALESCE(SUM(${eventAssignments.leaseCompleted}), 0)::integer`,
+      eb: sql<number>`COALESCE(SUM(${eventAssignments.ebCompleted}), 0)::integer`,
+      btsDown: sql<number>`COALESCE(SUM(${eventAssignments.btsDownCompleted}), 0)::integer`,
+      routeFail: sql<number>`COALESCE(SUM(${eventAssignments.routeFailCompleted}), 0)::integer`,
+      ftthDown: sql<number>`COALESCE(SUM(${eventAssignments.ftthDownCompleted}), 0)::integer`,
+      ofcFail: sql<number>`COALESCE(SUM(${eventAssignments.ofcFailCompleted}), 0)::integer`,
     }).from(eventAssignments).where(inArray(eventAssignments.eventId, expiredCandidateIds)).groupBy(eventAssignments.eventId),
   ]);
   
-  const progressMap = new Map<string, number>();
-  for (const r of salesProgress) progressMap.set(r.eventId, (progressMap.get(r.eventId) || 0) + Number(r.total));
-  for (const r of assignProgress) progressMap.set(r.eventId, Math.max(progressMap.get(r.eventId) || 0, Number(r.total)));
+  const progressByEvent = new Map<string, Record<string, number>>();
+  for (const r of salesProgress) {
+    progressByEvent.set(r.eventId, {
+      sim: Number(r.sim), ftth: Number(r.ftth), lease: Number(r.lease), eb: Number(r.eb),
+      btsDown: 0, routeFail: 0, ftthDown: 0, ofcFail: 0,
+    });
+  }
+  for (const r of assignProgress) {
+    const cur = progressByEvent.get(r.eventId) || { sim: 0, ftth: 0, lease: 0, eb: 0, btsDown: 0, routeFail: 0, ftthDown: 0, ofcFail: 0 };
+    cur.sim = Math.max(cur.sim, Number(r.sim));
+    cur.ftth = Math.max(cur.ftth, Number(r.ftth));
+    cur.lease = Math.max(cur.lease, Number(r.lease));
+    cur.eb = Math.max(cur.eb, Number(r.eb));
+    cur.btsDown = Number(r.btsDown);
+    cur.routeFail = Number(r.routeFail);
+    cur.ftthDown = Number(r.ftthDown);
+    cur.ofcFail = Number(r.ofcFail);
+    progressByEvent.set(r.eventId, cur);
+  }
   
-  const toComplete = expiredCandidateIds.filter(id => (progressMap.get(id) || 0) > 0);
+  const eventsById = new Map(eventsList.map(e => [e.id, e]));
+  const toComplete: string[] = [];
+  for (const id of expiredCandidateIds) {
+    const ev = eventsById.get(id);
+    if (!ev) continue;
+    const p = progressByEvent.get(id) || { sim: 0, ftth: 0, lease: 0, eb: 0, btsDown: 0, routeFail: 0, ftthDown: 0, ofcFail: 0 };
+    const checks: { target: number; progress: number }[] = [
+      { target: ev.targetSim ?? 0, progress: p.sim },
+      { target: ev.targetFtth ?? 0, progress: p.ftth },
+      { target: ev.targetLease ?? 0, progress: p.lease },
+      { target: ev.targetEb ?? 0, progress: p.eb },
+      { target: ev.targetBtsDown ?? 0, progress: p.btsDown },
+      { target: ev.targetRouteFail ?? 0, progress: p.routeFail },
+      { target: ev.targetFtthDown ?? 0, progress: p.ftthDown },
+      { target: ev.targetOfcFail ?? 0, progress: p.ofcFail },
+    ];
+    const activeCategories = checks.filter(c => c.target > 0);
+    if (activeCategories.length === 0) continue;
+    const allMet = activeCategories.every(c => c.progress >= c.target);
+    if (allMet) toComplete.push(id);
+  }
   
   if (toComplete.length > 0) {
     await Promise.all(toComplete.map(id =>
@@ -210,7 +256,7 @@ async function autoCompleteExpiredEvents(eventsList: typeof events.$inferSelect[
         .set({ status: 'completed', updatedAt: new Date() })
         .where(eq(events.id, id))
     ));
-    console.log(`Auto-completed ${toComplete.length} expired works with progress`);
+    console.log(`Auto-completed ${toComplete.length} expired works with all targets met`);
   }
   
   return toComplete;
