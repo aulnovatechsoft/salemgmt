@@ -353,6 +353,8 @@ The app runs on port 5000 with a combined frontend/backend server:
 - All new procedures reuse `getVisibleEmployeeIdsSubquery(persNo)` for hierarchical scope (admin sees all, others see self + subordinates). Optional `circle` filter applies on top.
 - Numbers formatted in Indian style (Cr / L / K) via `formatIndianNumber`; rupee values prefixed with ₹.
 - Production-grade safety: chart primitives sanitize NaN/Infinity inputs (`safeNum`/`safeArr`), clamp percentages, guard divisors, and expose `accessibilityLabel` summaries for screen readers. Each tab's tRPC query is `enabled` only when its category is active to avoid unnecessary fetches.
+- **IST-correct daily bucketing**: Daily group-by uses `(${col} AT TIME ZONE 'Asia/Kolkata')::date` and emits `TO_CHAR(..., 'YYYY-MM-DD')` so backend day-keys align with the frontend's local-date keys (`toLocalKey`). This prevents late-night IST entries from being mis-bucketed into the prior day when the DB session timezone is UTC. Applied to `getSalesTrends`, `getOperationsAnalytics`, and `getFinanceAnalytics`.
+- **Parallel queries**: `getOperationsAnalytics` and `getFinanceAnalytics` batch their three independent aggregations (totals/byEmployee/daily and collectors/daily/status, respectively) via `Promise.all` for ~3x lower perceived latency.
 
 ## Deployment
 Configured for autoscale deployment:

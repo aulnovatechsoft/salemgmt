@@ -920,7 +920,7 @@ export const salesRouter = createTRPCRouter({
       const whereClause = and(...conditions);
       
       const dailyResult = await db.select({
-        date: sql<string>`DATE(${eventSalesEntries.createdAt})`,
+        date: sql<string>`TO_CHAR((${eventSalesEntries.createdAt} AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD')`,
         simsSold: sql<number>`COALESCE(SUM(${eventSalesEntries.simsSold}), 0)::integer`,
         simsActivated: sql<number>`COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)::integer`,
         ftthSold: sql<number>`COALESCE(SUM(${eventSalesEntries.ftthSold}), 0)::integer`,
@@ -931,8 +931,8 @@ export const salesRouter = createTRPCRouter({
       .from(eventSalesEntries)
       .leftJoin(employees, eq(eventSalesEntries.employeeId, employees.id))
       .where(whereClause)
-      .groupBy(sql`DATE(${eventSalesEntries.createdAt})`)
-      .orderBy(sql`DATE(${eventSalesEntries.createdAt})`);
+      .groupBy(sql`(${eventSalesEntries.createdAt} AT TIME ZONE 'Asia/Kolkata')::date`)
+      .orderBy(sql`(${eventSalesEntries.createdAt} AT TIME ZONE 'Asia/Kolkata')::date`);
       
       const daily = dailyResult.map(d => ({
         date: String(d.date),
@@ -1005,16 +1005,41 @@ export const salesRouter = createTRPCRouter({
       }
       const whereClause = and(...conditions);
 
-      // Totals by task type
-      const byTypeResult = await db.select({
-        taskType: maintenanceEntries.taskType,
-        total: sql<number>`COALESCE(SUM(${maintenanceEntries.increment}), 0)::integer`,
-        entries: sql<number>`COUNT(*)`,
-      })
-        .from(maintenanceEntries)
-        .leftJoin(employees, eq(maintenanceEntries.employeeId, employees.id))
-        .where(whereClause)
-        .groupBy(maintenanceEntries.taskType);
+      const [byTypeResult, byEmployeeRaw, dailyRaw] = await Promise.all([
+        db.select({
+          taskType: maintenanceEntries.taskType,
+          total: sql<number>`COALESCE(SUM(${maintenanceEntries.increment}), 0)::integer`,
+          entries: sql<number>`COUNT(*)::integer`,
+        })
+          .from(maintenanceEntries)
+          .leftJoin(employees, eq(maintenanceEntries.employeeId, employees.id))
+          .where(whereClause)
+          .groupBy(maintenanceEntries.taskType),
+
+        db.select({
+          id: maintenanceEntries.employeeId,
+          name: employees.name,
+          designation: employees.designation,
+          circle: employees.circle,
+          taskType: maintenanceEntries.taskType,
+          total: sql<number>`COALESCE(SUM(${maintenanceEntries.increment}), 0)::integer`,
+        })
+          .from(maintenanceEntries)
+          .leftJoin(employees, eq(maintenanceEntries.employeeId, employees.id))
+          .where(whereClause)
+          .groupBy(maintenanceEntries.employeeId, employees.name, employees.designation, employees.circle, maintenanceEntries.taskType),
+
+        db.select({
+          date: sql<string>`TO_CHAR((${maintenanceEntries.createdAt} AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD')`,
+          taskType: maintenanceEntries.taskType,
+          total: sql<number>`COALESCE(SUM(${maintenanceEntries.increment}), 0)::integer`,
+        })
+          .from(maintenanceEntries)
+          .leftJoin(employees, eq(maintenanceEntries.employeeId, employees.id))
+          .where(whereClause)
+          .groupBy(sql`(${maintenanceEntries.createdAt} AT TIME ZONE 'Asia/Kolkata')::date`, maintenanceEntries.taskType)
+          .orderBy(sql`(${maintenanceEntries.createdAt} AT TIME ZONE 'Asia/Kolkata')::date`),
+      ]);
 
       const byType: Record<string, { total: number; entries: number }> = {
         BTS_DOWN: { total: 0, entries: 0 },
@@ -1034,20 +1059,6 @@ export const salesRouter = createTRPCRouter({
         totalEntries += Number(r.entries) || 0;
       }
 
-      // By employee (top performers across all task types)
-      const byEmployeeRaw = await db.select({
-        id: maintenanceEntries.employeeId,
-        name: employees.name,
-        designation: employees.designation,
-        circle: employees.circle,
-        taskType: maintenanceEntries.taskType,
-        total: sql<number>`COALESCE(SUM(${maintenanceEntries.increment}), 0)::integer`,
-      })
-        .from(maintenanceEntries)
-        .leftJoin(employees, eq(maintenanceEntries.employeeId, employees.id))
-        .where(whereClause)
-        .groupBy(maintenanceEntries.employeeId, employees.name, employees.designation, employees.circle, maintenanceEntries.taskType);
-
       const empMap = new Map<string, { id: string; name: string; designation: string; circle: string; btsDown: number; ftthDown: number; routeFail: number; ofcFail: number; total: number }>();
       for (const r of byEmployeeRaw) {
         const id = r.id || '';
@@ -1066,18 +1077,6 @@ export const salesRouter = createTRPCRouter({
         .sort((a, b) => b.total - a.total)
         .slice(0, 20)
         .map((m, i) => ({ ...m, rank: i + 1, contribution: grandTotal > 0 ? Math.round((m.total / grandTotal) * 100) : 0 }));
-
-      // Daily series by task type
-      const dailyRaw = await db.select({
-        date: sql<string>`DATE(${maintenanceEntries.createdAt})`,
-        taskType: maintenanceEntries.taskType,
-        total: sql<number>`COALESCE(SUM(${maintenanceEntries.increment}), 0)::integer`,
-      })
-        .from(maintenanceEntries)
-        .leftJoin(employees, eq(maintenanceEntries.employeeId, employees.id))
-        .where(whereClause)
-        .groupBy(sql`DATE(${maintenanceEntries.createdAt})`, maintenanceEntries.taskType)
-        .orderBy(sql`DATE(${maintenanceEntries.createdAt})`);
 
       const dailyMap = new Map<string, { date: string; btsDown: number; ftthDown: number; routeFail: number; ofcFail: number }>();
       for (const r of dailyRaw) {
@@ -1129,19 +1128,41 @@ export const salesRouter = createTRPCRouter({
       const whereClauseAll = and(...conditions);
       const whereClauseApproved = and(...conditions, eq(financeCollectionEntries.approvalStatus, 'approved'));
 
-      // Top collectors (approved only)
-      const collectorsRaw = await db.select({
-        id: financeCollectionEntries.employeeId,
-        name: employees.name,
-        designation: employees.designation,
-        circle: employees.circle,
-        financeType: financeCollectionEntries.financeType,
-        amount: sql<number>`COALESCE(SUM(${financeCollectionEntries.amountCollected}), 0)::bigint`,
-      })
-        .from(financeCollectionEntries)
-        .leftJoin(employees, eq(financeCollectionEntries.employeeId, employees.id))
-        .where(whereClauseApproved)
-        .groupBy(financeCollectionEntries.employeeId, employees.name, employees.designation, employees.circle, financeCollectionEntries.financeType);
+      const [collectorsRaw, dailyRaw, statusRaw] = await Promise.all([
+        db.select({
+          id: financeCollectionEntries.employeeId,
+          name: employees.name,
+          designation: employees.designation,
+          circle: employees.circle,
+          financeType: financeCollectionEntries.financeType,
+          amount: sql<number>`COALESCE(SUM(${financeCollectionEntries.amountCollected}), 0)::bigint`,
+        })
+          .from(financeCollectionEntries)
+          .leftJoin(employees, eq(financeCollectionEntries.employeeId, employees.id))
+          .where(whereClauseApproved)
+          .groupBy(financeCollectionEntries.employeeId, employees.name, employees.designation, employees.circle, financeCollectionEntries.financeType),
+
+        db.select({
+          date: sql<string>`TO_CHAR((${financeCollectionEntries.createdAt} AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD')`,
+          financeType: financeCollectionEntries.financeType,
+          amount: sql<number>`COALESCE(SUM(${financeCollectionEntries.amountCollected}), 0)::bigint`,
+        })
+          .from(financeCollectionEntries)
+          .leftJoin(employees, eq(financeCollectionEntries.employeeId, employees.id))
+          .where(whereClauseApproved)
+          .groupBy(sql`(${financeCollectionEntries.createdAt} AT TIME ZONE 'Asia/Kolkata')::date`, financeCollectionEntries.financeType)
+          .orderBy(sql`(${financeCollectionEntries.createdAt} AT TIME ZONE 'Asia/Kolkata')::date`),
+
+        db.select({
+          approvalStatus: financeCollectionEntries.approvalStatus,
+          amount: sql<number>`COALESCE(SUM(${financeCollectionEntries.amountCollected}), 0)::bigint`,
+          entries: sql<number>`COUNT(*)::integer`,
+        })
+          .from(financeCollectionEntries)
+          .leftJoin(employees, eq(financeCollectionEntries.employeeId, employees.id))
+          .where(whereClauseAll)
+          .groupBy(financeCollectionEntries.approvalStatus),
+      ]);
 
       type CollectorRow = { id: string; name: string; designation: string; circle: string; FIN_LC: number; FIN_LL_FTTH: number; FIN_TOWER: number; FIN_GSM_POSTPAID: number; FIN_RENT_BUILDING: number; total: number };
       const cMap = new Map<string, CollectorRow>();
@@ -1164,18 +1185,6 @@ export const salesRouter = createTRPCRouter({
         .slice(0, 20)
         .map((m, i) => ({ ...m, rank: i + 1, contribution: grandApproved > 0 ? Math.round((m.total / grandApproved) * 100) : 0 }));
 
-      // Daily series by finance type (approved only)
-      const dailyRaw = await db.select({
-        date: sql<string>`DATE(${financeCollectionEntries.createdAt})`,
-        financeType: financeCollectionEntries.financeType,
-        amount: sql<number>`COALESCE(SUM(${financeCollectionEntries.amountCollected}), 0)::bigint`,
-      })
-        .from(financeCollectionEntries)
-        .leftJoin(employees, eq(financeCollectionEntries.employeeId, employees.id))
-        .where(whereClauseApproved)
-        .groupBy(sql`DATE(${financeCollectionEntries.createdAt})`, financeCollectionEntries.financeType)
-        .orderBy(sql`DATE(${financeCollectionEntries.createdAt})`);
-
       const dMap = new Map<string, { date: string; FIN_LC: number; FIN_LL_FTTH: number; FIN_TOWER: number; FIN_GSM_POSTPAID: number; FIN_RENT_BUILDING: number }>();
       for (const r of dailyRaw) {
         const d = String(r.date);
@@ -1188,17 +1197,6 @@ export const salesRouter = createTRPCRouter({
         }
       }
       const daily = Array.from(dMap.values()).sort((a, b) => a.date.localeCompare(b.date));
-
-      // Pending vs approved totals across window
-      const statusRaw = await db.select({
-        approvalStatus: financeCollectionEntries.approvalStatus,
-        amount: sql<number>`COALESCE(SUM(${financeCollectionEntries.amountCollected}), 0)::bigint`,
-        entries: sql<number>`COUNT(*)`,
-      })
-        .from(financeCollectionEntries)
-        .leftJoin(employees, eq(financeCollectionEntries.employeeId, employees.id))
-        .where(whereClauseAll)
-        .groupBy(financeCollectionEntries.approvalStatus);
 
       let approvedAmount = 0, pendingAmount = 0, rejectedAmount = 0;
       let approvedEntries = 0, pendingEntries = 0, rejectedEntries = 0;
