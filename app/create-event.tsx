@@ -459,13 +459,25 @@ export default function CreateEventScreen() {
     return found ? found.label : value;
   };
 
+  // Sticky flag: once a task creation succeeds we keep the button locked
+  // until the screen unmounts. Without this, on web the success Alert's
+  // onPress: router.back is silently ignored (window.alert has no callbacks),
+  // the page stays put, and a confused user keeps tapping — producing
+  // duplicate inserts. We also auto-navigate via setTimeout for the same
+  // reason.
+  const [hasCreated, setHasCreated] = useState(false);
+
   const createEventMutation = trpc.events.create.useMutation({
     onSuccess: (data) => {
       console.log('Task created in database:', data.id);
+      setHasCreated(true);
       setIsSubmitting(false);
       Alert.alert('Success', 'Task created successfully', [
         { text: 'OK', onPress: () => router.back() },
       ]);
+      setTimeout(() => {
+        if (router.canGoBack()) router.back();
+      }, 50);
     },
     onError: (error) => {
       console.error('Failed to create task:', error);
@@ -475,6 +487,9 @@ export default function CreateEventScreen() {
   });
 
   const handleSubmit = async () => {
+    // Defensive: even though the button is disabled, RN/Web have edge cases
+    // (rapid double-tap, accessibility tooling) where onPress can fire twice.
+    if (isSubmitting || hasCreated) return;
     if (!taskCategory) {
       Alert.alert('Error', 'Please select a task category (S&M or O&M)');
       return;
@@ -1280,12 +1295,12 @@ export default function CreateEventScreen() {
           </View>
 
           <TouchableOpacity 
-            style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
+            style={[styles.submitButton, (isSubmitting || hasCreated) && styles.submitButtonDisabled]}
             onPress={handleSubmit}
-            disabled={isSubmitting}
+            disabled={isSubmitting || hasCreated}
           >
             <Text style={styles.submitButtonText}>
-              {isSubmitting ? 'Creating...' : 'Create Task'}
+              {hasCreated ? 'Task Created ✓' : isSubmitting ? 'Creating...' : 'Create Task'}
             </Text>
           </TouchableOpacity>
         </View>
