@@ -2454,6 +2454,272 @@ export const eventsRouter = createTRPCRouter({
       return result;
     }),
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // submitMaintenanceEntry — turns an O&M (BTS_DOWN/FTTH_DOWN/ROUTE_FAIL/
+  // OFC_FAIL) "+1" tap into a real evidenced submission with mandatory photo,
+  // GPS, and site ID. Mirrors submitEventSales's photo+GPS+geo-fence
+  // enforcement and updateMemberTaskProgress's authorisation + transaction
+  // pattern.
+  //
+  //   - Auth: actor must be self|event-creator|assignedManager
+  //   - Atomic per-event lock + per-assignment FOR UPDATE
+  //   - Inserts maintenance_entries with photos+gps+siteId+remarks INSIDE tx
+  //   - Recomputes event-level total from assignments
+  //   - Geo-fence anchor = avg of prior maintenance_entries.gps* for this event
+  //   - Audit log inside the transaction
+  // ─────────────────────────────────────────────────────────────────────────
+  submitMaintenanceEntry: authedProcedure
+    .input(z.object({
+      eventId: z.string().uuid(),
+      taskType: z.enum(['BTS_DOWN', 'FTTH_DOWN', 'ROUTE_FAIL', 'OFC_FAIL']),
+      // Optional — defaults to actor. When set, the actor must be creator or
+      // assignedManager (cannot post on someone else's behalf as a peer).
+      targetEmployeeId: z.string().uuid().optional(),
+      photos: z.array(z.object({
+        uri: z.string(),
+        latitude: z.string().optional(),
+        longitude: z.string().optional(),
+        timestamp: z.string(),
+      })).min(1, 'At least one geo-tagged photo is required'),
+      gpsLatitude: z.string(),
+      gpsLongitude: z.string(),
+      siteId: z.string().min(1, 'Site / Location ID is required').max(100),
+      remarks: z.string().max(2000).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const actorId = ctx.employeeId;
+      const targetEmployeeId = input.targetEmployeeId ?? actorId;
+
+      const submitLat = parseFloat(input.gpsLatitude);
+      const submitLng = parseFloat(input.gpsLongitude);
+      if (!Number.isFinite(submitLat) || !Number.isFinite(submitLng)) {
+        throw new Error("Invalid GPS coordinates.");
+      }
+
+      // Geo-fence: anchor = avg GPS of prior maintenance entries for this
+      // event. Lazy-init: the first entry establishes the anchor (no fence
+      // yet). Mirrors submitEventSales.
+      const priorWithGps = await db.select({
+        lat: maintenanceEntries.gpsLatitude,
+        lng: maintenanceEntries.gpsLongitude,
+      })
+        .from(maintenanceEntries)
+        .where(and(
+          eq(maintenanceEntries.eventId, input.eventId),
+          isNotNull(maintenanceEntries.gpsLatitude),
+          isNotNull(maintenanceEntries.gpsLongitude),
+        ))
+        .limit(50);
+
+      let geoWarning: string | null = null;
+      if (priorWithGps.length > 0) {
+        const valid = priorWithGps
+          .map(p => ({ lat: parseFloat(p.lat as string), lng: parseFloat(p.lng as string) }))
+          .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+        if (valid.length > 0) {
+          const anchorLat = valid.reduce((s, p) => s + p.lat, 0) / valid.length;
+          const anchorLng = valid.reduce((s, p) => s + p.lng, 0) / valid.length;
+          const distKm = haversineKm(anchorLat, anchorLng, submitLat, submitLng);
+          if (distKm > GEO_FENCE_KM * GEO_FENCE_HARD_MULT) {
+            throw new Error(
+              `Submission location is ${distKm.toFixed(1)} km from the event area (limit ${GEO_FENCE_KM * GEO_FENCE_HARD_MULT} km). Please verify your GPS location.`
+            );
+          }
+          if (distKm > GEO_FENCE_KM) {
+            geoWarning = `Submission location is ${distKm.toFixed(1)} km from the event area (soft limit ${GEO_FENCE_KM} km).`;
+            if (GEO_FENCE_ENFORCE === 'hard') {
+              throw new Error(geoWarning);
+            }
+            console.warn(`[geo-fence] event=${input.eventId} actor=${actorId} target=${targetEmployeeId} distKm=${distKm.toFixed(2)}`);
+          }
+        }
+      }
+
+      const memberCompletedMap: Record<string, string> = {
+        BTS_DOWN: 'btsDownCompleted', FTTH_DOWN: 'ftthDownCompleted',
+        ROUTE_FAIL: 'routeFailCompleted', OFC_FAIL: 'ofcFailCompleted',
+      };
+      const memberTargetMap: Record<string, string> = {
+        BTS_DOWN: 'btsDownTarget', FTTH_DOWN: 'ftthDownTarget',
+        ROUTE_FAIL: 'routeFailTarget', OFC_FAIL: 'ofcFailTarget',
+      };
+      const eventCompletedMap: Record<string, string> = {
+        BTS_DOWN: 'btsDownCompleted', FTTH_DOWN: 'ftthDownCompleted',
+        ROUTE_FAIL: 'routeFailCompleted', OFC_FAIL: 'ofcFailCompleted',
+      };
+      const eventStartedAtMap: Record<string, string> = {
+        BTS_DOWN: 'btsDownStartedAt', FTTH_DOWN: 'ftthDownStartedAt',
+        ROUTE_FAIL: 'routeFailStartedAt', OFC_FAIL: 'ofcFailStartedAt',
+      };
+      const eventTargetMap: Record<string, string> = {
+        BTS_DOWN: 'targetBtsDown', FTTH_DOWN: 'targetFtthDown',
+        ROUTE_FAIL: 'targetRouteFail', OFC_FAIL: 'targetOfcFail',
+      };
+      const eventStartedAtSnake: Record<string, string> = {
+        btsDownStartedAt: 'bts_down_started_at',
+        ftthDownStartedAt: 'ftth_down_started_at',
+        routeFailStartedAt: 'route_fail_started_at',
+        ofcFailStartedAt: 'ofc_fail_started_at',
+      };
+      const eventTargetSnake: Record<string, string> = {
+        targetBtsDown: 'target_bts_down',
+        targetFtthDown: 'target_ftth_down',
+        targetRouteFail: 'target_route_fail',
+        targetOfcFail: 'target_ofc_fail',
+      };
+
+      const completedColumn = memberCompletedMap[input.taskType];
+      const targetColumn = memberTargetMap[input.taskType];
+      const eventCompletedColumn = eventCompletedMap[input.taskType];
+      const eventStartedAtColumn = eventStartedAtMap[input.taskType];
+      const eventTargetColumn = eventTargetMap[input.taskType];
+
+      return await db.transaction(async (tx) => {
+        // 1) Lock the event row.
+        const eventRows = await tx.execute(
+          sql`SELECT * FROM ${events} WHERE ${events.id} = ${input.eventId} FOR UPDATE`
+        );
+        const eventRow = (eventRows as any).rows?.[0] ?? (eventRows as any)[0];
+        if (!eventRow) throw new Error("Event not found");
+
+        if (eventRow.status === 'completed' || eventRow.status === 'cancelled') {
+          throw new Error(`Cannot submit maintenance on a ${eventRow.status} event.`);
+        }
+
+        // 2) Authorisation.
+        const isSelf = actorId === targetEmployeeId;
+        const isCreator = actorId === eventRow.created_by;
+        const isAssignedManager = actorId === eventRow.assigned_to;
+        if (!isSelf && !isCreator && !isAssignedManager) {
+          throw new Error(
+            "Only the assignee, the event creator, or the assigned manager can record maintenance for a team member."
+          );
+        }
+
+        // 3) Lock target member's assignment row.
+        const [lockedAssignment] = await tx.select().from(eventAssignments)
+          .where(and(
+            eq(eventAssignments.eventId, input.eventId),
+            eq(eventAssignments.employeeId, targetEmployeeId)
+          ))
+          .for('update');
+        if (!lockedAssignment) {
+          throw new Error("Team member is not assigned to this event.");
+        }
+
+        // 4) Assignment-type guard.
+        const assignedTypes = (lockedAssignment.assignedTaskTypes as string[]) || [];
+        if (assignedTypes.length > 0 && !assignedTypes.includes(input.taskType)) {
+          throw new Error(
+            `This member is not assigned to ${input.taskType} tasks. ` +
+            `Their assigned types: ${assignedTypes.join(', ') || '(none)'}`
+          );
+        }
+
+        const currentMemberCompleted = Number((lockedAssignment as any)[completedColumn] ?? 0);
+        let memberTarget = Number((lockedAssignment as any)[targetColumn] ?? 0);
+
+        // 5) Lazy fallback target (deterministic split, same as
+        //    updateMemberTaskProgress).
+        if (memberTarget === 0) {
+          const eventTarget = Number(eventRow[eventTargetSnake[eventTargetColumn]] ?? 0);
+          if (eventTarget > 0) {
+            const allAssignments = await tx.select().from(eventAssignments)
+              .where(eq(eventAssignments.eventId, input.eventId));
+            const ordered = [...allAssignments].sort(
+              (a, b) => a.employeeId.localeCompare(b.employeeId)
+            );
+            if (ordered.length > 0) {
+              const split = distributeFairly(eventTarget, ordered.length);
+              const memberIdx = ordered.findIndex(a => a.employeeId === targetEmployeeId);
+              memberTarget = memberIdx >= 0 ? (split[memberIdx] ?? 0) : 0;
+            }
+          }
+        }
+
+        // 6) Compute new value (always +1) — typed error on overflow.
+        const newMemberCompleted = currentMemberCompleted + 1;
+        if (memberTarget > 0 && newMemberCompleted > memberTarget) {
+          const remaining = Math.max(0, memberTarget - currentMemberCompleted);
+          throw new Error(
+            `Member would exceed their ${input.taskType} target (${memberTarget}). ` +
+            `Only ${remaining} remaining. Redistribute targets or raise this member's share first.`
+          );
+        }
+
+        // 7) Persist member counter.
+        await tx.update(eventAssignments)
+          .set({ [completedColumn]: newMemberCompleted, updatedAt: new Date() } as any)
+          .where(eq(eventAssignments.id, lockedAssignment.id));
+
+        // 8) Insert the evidenced maintenance entry INSIDE the transaction.
+        const [entry] = await tx.insert(maintenanceEntries).values({
+          eventId: input.eventId,
+          employeeId: targetEmployeeId,
+          taskType: input.taskType,
+          increment: 1,
+          photos: input.photos,
+          gpsLatitude: input.gpsLatitude,
+          gpsLongitude: input.gpsLongitude,
+          siteId: input.siteId,
+          remarks: input.remarks,
+          createdBy: actorId,
+        }).returning();
+
+        // 9) Recompute event-level total and roll up.
+        const allAssignmentsAfter = await tx.select().from(eventAssignments)
+          .where(eq(eventAssignments.eventId, input.eventId));
+        const totalCompleted = allAssignmentsAfter.reduce(
+          (sum, a) => sum + Number((a as any)[completedColumn] ?? 0), 0
+        );
+
+        const currentStartedAt = eventRow[eventStartedAtSnake[eventStartedAtColumn]];
+        const updateData: any = {
+          [eventCompletedColumn]: totalCompleted,
+          updatedAt: new Date(),
+        };
+        if (!currentStartedAt && totalCompleted > 0) {
+          updateData[eventStartedAtColumn] = new Date();
+        }
+
+        const [updatedEvent] = await tx.update(events)
+          .set(updateData)
+          .where(eq(events.id, input.eventId))
+          .returning();
+
+        // 10) Audit row inside the transaction.
+        await tx.insert(auditLogs).values({
+          action: 'SUBMIT_MAINTENANCE_ENTRY',
+          entityType: 'EVENT',
+          entityId: input.eventId,
+          performedBy: actorId,
+          timestamp: new Date(),
+          details: {
+            taskType: input.taskType,
+            targetEmployeeId,
+            entryId: entry.id,
+            siteId: input.siteId,
+            photoCount: input.photos.length,
+            gpsLatitude: input.gpsLatitude,
+            gpsLongitude: input.gpsLongitude,
+            geoWarning,
+            newMemberCompleted,
+            totalCompleted,
+            actedAs: isSelf ? 'self' : isCreator ? 'creator' : 'manager',
+          },
+        });
+
+        return {
+          entryId: entry.id,
+          memberCompleted: newMemberCompleted,
+          memberTarget,
+          totalCompleted,
+          event: updatedEvent,
+          geoWarning,
+        };
+      });
+    }),
+
   getEventSalesEntries: publicProcedure
     .input(z.object({
       eventId: z.string().uuid(),
@@ -3240,6 +3506,19 @@ export const eventsRouter = createTRPCRouter({
         throw new Error("SIM and FTTH progress is tracked through sales submissions, not direct increments.");
       }
 
+      // P1 lockdown: O&M increments must go through `submitMaintenanceEntry`
+      // (mandatory photo + GPS + site-ID + geo-fence). Negative increments
+      // are still allowed here as a manager rollback path until a "delete
+      // most recent entry" flow is built (P2).
+      const isOm =
+        input.taskType === 'BTS_DOWN' || input.taskType === 'FTTH_DOWN' ||
+        input.taskType === 'ROUTE_FAIL' || input.taskType === 'OFC_FAIL';
+      if (isOm && input.increment > 0) {
+        throw new Error(
+          "O&M progress (BTS_DOWN/FTTH_DOWN/ROUTE_FAIL/OFC_FAIL) must be recorded via submitMaintenanceEntry with photo + GPS + site ID."
+        );
+      }
+
       const completedColMap: Record<string, string> = {
         EB: 'ebCompleted', LEASE: 'leaseCompleted',
         BTS_DOWN: 'btsDownCompleted', FTTH_DOWN: 'ftthDownCompleted',
@@ -3373,6 +3652,19 @@ export const eventsRouter = createTRPCRouter({
     }))
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.employeeId;
+
+      // P1 lockdown: O&M increments must go through `submitMaintenanceEntry`
+      // (mandatory photo + GPS + site-ID + geo-fence). Negative increments
+      // are still allowed here as a manager rollback path until a "delete
+      // most recent entry" flow is built (P2).
+      const isOm =
+        input.taskType === 'BTS_DOWN' || input.taskType === 'FTTH_DOWN' ||
+        input.taskType === 'ROUTE_FAIL' || input.taskType === 'OFC_FAIL';
+      if (isOm && input.increment > 0) {
+        throw new Error(
+          "O&M progress (BTS_DOWN/FTTH_DOWN/ROUTE_FAIL/OFC_FAIL) must be recorded via submitMaintenanceEntry with photo + GPS + site ID."
+        );
+      }
 
       const memberCompletedMap: Record<string, string> = {
         EB: 'ebCompleted', LEASE: 'leaseCompleted',

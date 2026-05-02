@@ -40,6 +40,7 @@ function RootLayoutNav() {
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="event-detail" options={{ headerShown: true }} />
       <Stack.Screen name="event-sales" options={{ headerShown: true }} />
+      <Stack.Screen name="submit-maintenance" options={{ headerShown: true, title: "Submit Maintenance" }} />
       <Stack.Screen name="sales-approval" options={{ headerShown: true }} />
       <Stack.Screen name="resource-management" options={{ headerShown: true }} />
       <Stack.Screen name="notifications" options={{ headerShown: true, title: "Notifications" }} />

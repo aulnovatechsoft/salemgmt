@@ -753,12 +753,21 @@ export default function EventDetailScreen() {
 
   const handleMemberTaskComplete = (memberId: string, taskType: 'EB' | 'LEASE' | 'BTS_DOWN' | 'FTTH_DOWN' | 'ROUTE_FAIL' | 'OFC_FAIL', increment: number = 1) => {
     if (!employee?.id || !id) return;
+
+    // O&M increments must go through the evidence form (photo + GPS + site ID).
+    // Legacy direct-increment is preserved only for decrement (-1) rollback.
+    const isOm = taskType === 'BTS_DOWN' || taskType === 'FTTH_DOWN' || taskType === 'ROUTE_FAIL' || taskType === 'OFC_FAIL';
+    if (isOm && increment > 0) {
+      router.push(`/submit-maintenance?eventId=${id}&taskType=${taskType}&memberId=${memberId}`);
+      return;
+    }
+
     if (updateMemberTaskProgressMutation.isPending) return;
-    
+
     const taskKey = `${memberId}-${taskType}`;
     setPendingMemberTask(taskKey);
     console.log("Calling updateMemberTaskProgress for:", memberId, taskType, increment);
-    
+
     updateMemberTaskProgressMutation.mutate({
       eventId: id,
       employeeId: memberId,

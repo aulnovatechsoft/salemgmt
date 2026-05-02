@@ -1,14 +1,58 @@
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 
-const getBaseUrl = () => {
-  if (Platform.OS === 'ios' || Platform.OS === 'android') {
-    return 'http://117.251.72.195';
+// Base URL for the photo upload endpoint. Photo uploads carry sensitive
+// geo-tagged evidence (photo + lat/long), so plain HTTP is REJECTED on
+// production native builds — fail-closed rather than transmit insecurely.
+//
+// Resolution order:
+//   1) `EXPO_PUBLIC_API_BASE_URL` env var (must be HTTPS in production).
+//   2) Web: `window.location.origin` (HTTPS under Replit deploys).
+//   3) Otherwise (native, no env var): throw — caller surfaces a clear
+//      configuration error instead of silently downgrading transport.
+//
+// Dev-only exemptions allow `http://` for `localhost` and `127.0.0.1` so
+// local Expo Go / simulators keep working against a dev server.
+const isHttps = (url: string): boolean => {
+  try { return new URL(url).protocol === 'https:'; } catch { return false; }
+};
+
+const isDevLocalhost = (url: string): boolean => {
+  try {
+    const u = new URL(url);
+    return (u.hostname === 'localhost' || u.hostname === '127.0.0.1');
+  } catch { return false; }
+};
+
+const getBaseUrl = (): string => {
+  const envUrl = (process.env.EXPO_PUBLIC_API_BASE_URL as string | undefined)?.trim();
+  if (envUrl) {
+    const cleaned = envUrl.replace(/\/+$/, '');
+    if (!isHttps(cleaned) && !(__DEV__ && isDevLocalhost(cleaned))) {
+      throw new Error(
+        '[photoUpload] EXPO_PUBLIC_API_BASE_URL must use HTTPS in production. ' +
+        'Plain HTTP is only allowed for localhost/127.0.0.1 in development.'
+      );
+    }
+    return cleaned;
   }
-  if (typeof window !== 'undefined' && window.location) {
-    return window.location.origin;
+
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    const origin = window.location.origin;
+    if (!isHttps(origin) && !(__DEV__ && isDevLocalhost(origin))) {
+      throw new Error(
+        '[photoUpload] Refusing to upload over plain HTTP. ' +
+        'Open the app over HTTPS or set EXPO_PUBLIC_API_BASE_URL to an HTTPS URL.'
+      );
+    }
+    return origin;
   }
-  return 'http://117.251.72.195';
+
+  // Native build with no configured endpoint — fail closed.
+  throw new Error(
+    '[photoUpload] EXPO_PUBLIC_API_BASE_URL is not set. ' +
+    'Native builds must be configured with an HTTPS upload endpoint before submitting evidence.'
+  );
 };
 
 interface PhotoToUpload {
@@ -32,6 +76,10 @@ export async function uploadPhotos(
   entityId?: string
 ): Promise<UploadedPhotoResult[]> {
   if (!photos || photos.length === 0) return [];
+
+  // Resolve the upload host up front so any transport-config error throws
+  // BEFORE we burn time reading photos into base64.
+  const baseUrl = getBaseUrl();
 
   const photosWithBase64 = [];
 
@@ -81,7 +129,6 @@ export async function uploadPhotos(
 
   if (photosWithBase64.length === 0) return [];
 
-  const baseUrl = getBaseUrl();
   const response = await fetch(`${baseUrl}/api/photos/upload`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

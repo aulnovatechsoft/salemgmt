@@ -20,6 +20,21 @@ BSNL Sales & Task App is a mobile-first application for managing task assignment
 - `app/submit-sales.tsx` is a redirect-only screen; `app/event-sales.tsx` is the single canonical submit screen.
 - `app/(tabs)/my-tasks.tsx` shows **per-employee** LC/EB/maintenance progress sourced from `getMyAssignedTasks.myProgress` / `maintenanceProgress`.
 - Owners (and event creators / managers) can soft-delete entries with an audit reason; owners can append SIM/FTTH activations via `activateSimsForEntry` / `activateFtthForEntry` mutations.
+
+## O&M Submission Flow (P1, architect-aligned)
+- `submitMaintenanceEntry` is the **only** server-side write path for positive O&M increments — `authedProcedure` with the same transaction pattern as `updateMemberTaskProgress` (lock event row + `.for('update')` on the target's assignment row).
+- Server requires `siteId` (≥1 char), ≥1 photo, valid `gpsLatitude`/`gpsLongitude`; geo-fence anchor = avg GPS of prior `maintenance_entries` for the event, soft (`GEO_FENCE_KM`) and hard (`× 3`) limits, `GEO_FENCE_ENFORCE` honoured.
+- Authorisation: actor must be self, the event creator, or the assigned manager. `targetEmployeeId` defaults to the actor; managers/creators can record on behalf of a team member.
+- Inside the same tx: increments per-member completed counter (`btsDownCompleted` etc.), inserts the `maintenance_entries` row with `photos`, `gpsLatitude/Longitude`, `siteId`, `remarks`, `createdBy`, recomputes the event-level total from assignments, sets the per-type `*StartedAt` timestamp on first non-zero, and writes an audit log row — all rolled back together on any failure.
+- **Server-side lockdown**: both `updateTaskProgress` and `updateMemberTaskProgress` now reject positive O&M increments at the top of their handlers, redirecting clients to `submitMaintenanceEntry`. Negative O&M increments still work via these mutations as a manager rollback path.
+- New screen `app/submit-maintenance.tsx` is the only UI path to a positive O&M increment. `my-tasks` `+` button (`handleMaintenanceComplete`) and `event-detail` `Mark +1` for O&M types both `router.push('/submit-maintenance?eventId=…&taskType=…&memberId=…')`.
+- The `-1` undo path on `event-detail` and the `Undo` modal in `my-tasks` still call `updateMemberTaskProgress(increment: -1)` (with a confirm dialog). **Known gap (P2)**: undo decrements the counter but does NOT delete the matching `maintenance_entries` row — counter and entries can drift on undo. Replace with a "delete most recent entry" flow.
+- Schema additions in `maintenance_entries` (Drizzle + idempotent SQL migration via `scripts/add-site-id-column.ts`): `site_id text`, `created_by uuid REFERENCES employees(id)`.
+
+## Photo upload base URL — fail-closed transport policy
+- `lib/photoUpload.ts` resolves the upload host as: `EXPO_PUBLIC_API_BASE_URL` env var → web `window.location.origin` → **throws** (no insecure fallback).
+- HTTPS is enforced at runtime — any non-HTTPS resolved URL throws, except for `localhost`/`127.0.0.1` when `__DEV__` is true (so local Expo Go / simulators keep working).
+- **Set `EXPO_PUBLIC_API_BASE_URL` to an HTTPS URL** before shipping native builds; without it, native uploads fail with a clear configuration error rather than silently downgrading transport.
 - **ORM**: Drizzle ORM
 - **State Management**: Zustand, React Query
 - **Styling**: React Native StyleSheet

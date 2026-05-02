@@ -353,7 +353,9 @@ export const maintenanceEntries = pgTable('maintenance_entries', {
   photos: jsonb('photos').$type<{ uri: string; latitude?: string; longitude?: string; timestamp: string }[]>().default([]),
   gpsLatitude: text('gps_latitude'),
   gpsLongitude: text('gps_longitude'),
+  siteId: text('site_id'),
   remarks: text('remarks'),
+  createdBy: uuid('created_by').references(() => employees.id),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

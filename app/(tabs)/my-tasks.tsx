@@ -130,24 +130,41 @@ export default function MyTasksScreen() {
     setMaintenanceModalVisible(true);
   };
 
+  // Route to the evidence form instead of incrementing in-place. The
+  // submit-maintenance screen captures photo + GPS + site ID and calls
+  // submitMaintenanceEntry, which transactionally writes the maintenance_entries
+  // row AND increments the per-member counter.
   const handleMaintenanceComplete = (taskType: string) => {
-    if (!selectedTask || !employee?.id) return;
-    maintenanceMutation.mutate({
-      eventId: selectedTask.id,
-      taskType: taskType as any,
-      increment: 1,
-      updatedBy: employee.id,
-    });
+    if (!selectedTask) return;
+    setMaintenanceModalVisible(false);
+    router.push(`/submit-maintenance?eventId=${selectedTask.id}&taskType=${taskType}`);
   };
 
+  // Undo still uses the legacy decrement path. This rolls the per-member
+  // counter back by 1 but does NOT delete the corresponding maintenance_entry.
+  // TODO(P2): replace with a "delete most recent entry" flow so counter and
+  // entries stay consistent.
   const handleMaintenanceUndo = (taskType: string) => {
     if (!selectedTask || !employee?.id) return;
-    maintenanceMutation.mutate({
-      eventId: selectedTask.id,
-      taskType: taskType as any,
-      increment: -1,
-      updatedBy: employee.id,
-    });
+    Alert.alert(
+      'Undo last entry',
+      `This will decrement your ${taskType} counter by 1 but will not remove the photo/GPS evidence already on record. Continue?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Undo',
+          style: 'destructive',
+          onPress: () => {
+            maintenanceMutation.mutate({
+              eventId: selectedTask.id,
+              taskType: taskType as any,
+              increment: -1,
+              updatedBy: employee.id,
+            });
+          },
+        },
+      ]
+    );
   };
 
   const getRoleBadge = (role: string) => {
