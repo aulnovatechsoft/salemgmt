@@ -4,6 +4,50 @@ import { eq, and, desc, sql, inArray, gte, lte, sum, count } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
 import { db, salesReports, auditLogs, events, employees, eventAssignments, employeeMaster, financeCollectionEntries, eventSalesEntries, maintenanceEntries } from "@/backend/db";
 
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+const ymdSchema = z.string().regex(YMD_RE, "Date must be in YYYY-MM-DD format");
+const MAX_WINDOW_DAYS = 730;
+
+function isYmd(s?: string): s is string {
+  return !!s && YMD_RE.test(s);
+}
+function istDayStart(dateStr: string): Date {
+  return new Date(`${dateStr}T00:00:00+05:30`);
+}
+function istDayEnd(dateStr: string): Date {
+  return new Date(`${dateStr}T23:59:59.999+05:30`);
+}
+function ymdSpanDays(start: string, end: string): number {
+  const s = istDayStart(start).getTime();
+  const e = istDayStart(end).getTime();
+  return Math.floor((e - s) / 86400000) + 1;
+}
+function refineDateWindow(
+  data: { startDate?: string; endDate?: string },
+  ctx: z.RefinementCtx,
+) {
+  if (data.startDate && data.endDate) {
+    if (data.startDate > data.endDate) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "startDate must be on or before endDate", path: ["startDate"] });
+      return;
+    }
+    if (ymdSpanDays(data.startDate, data.endDate) > MAX_WINDOW_DAYS) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Date range cannot exceed ${MAX_WINDOW_DAYS} days`, path: ["endDate"] });
+    }
+  }
+}
+function resolveWindow(input: { startDate?: string; endDate?: string; days?: number }): { start: Date; end: Date } {
+  if (isYmd(input.startDate) && isYmd(input.endDate)) {
+    return { start: istDayStart(input.startDate), end: istDayEnd(input.endDate) };
+  }
+  const days = input.days ?? 30;
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - (days - 1));
+  start.setHours(0, 0, 0, 0);
+  return { start, end };
+}
+
 function getVisibleEmployeeIdsSubquery(persNo: string) {
   return sql`(
     SELECT e.id FROM employees e WHERE e.pers_no = ${persNo}
@@ -306,9 +350,9 @@ export const salesRouter = createTRPCRouter({
   getDashboardStats: publicProcedure
     .input(z.object({
       circle: z.string().optional(),
-      startDate: z.string().optional(),
-      endDate: z.string().optional(),
-    }).optional())
+      startDate: ymdSchema.optional(),
+      endDate: ymdSchema.optional(),
+    }).superRefine(refineDateWindow).optional())
     .query(async ({ input }) => {
       console.log("Fetching dashboard stats", input);
       const reports = await db.select().from(salesReports);
@@ -644,10 +688,10 @@ export const salesRouter = createTRPCRouter({
   getSalesAnalytics: publicProcedure
     .input(z.object({
       employeeId: z.string().uuid(),
-      startDate: z.string().optional(),
-      endDate: z.string().optional(),
+      startDate: ymdSchema.optional(),
+      endDate: ymdSchema.optional(),
       circle: z.string().optional(),
-    }))
+    }).superRefine(refineDateWindow))
     .query(async ({ input }) => {
       const employee = await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1);
       if (!employee[0]) {
@@ -659,12 +703,11 @@ export const salesRouter = createTRPCRouter({
       
       const buildConditions = () => {
         const conditions: any[] = [];
-        
-        if (input.startDate) {
-          conditions.push(gte(eventSalesEntries.createdAt, new Date(input.startDate)));
+        if (isYmd(input.startDate)) {
+          conditions.push(gte(eventSalesEntries.createdAt, istDayStart(input.startDate)));
         }
-        if (input.endDate) {
-          conditions.push(lte(eventSalesEntries.createdAt, new Date(input.endDate)));
+        if (isYmd(input.endDate)) {
+          conditions.push(lte(eventSalesEntries.createdAt, istDayEnd(input.endDate)));
         }
         if (input.circle) {
           conditions.push(eq(employees.circle, input.circle));
@@ -812,9 +855,11 @@ export const salesRouter = createTRPCRouter({
     .input(z.object({
       employeeId: z.string().uuid(),
       circle: z.string().optional(),
-      days: z.number().min(7).max(365).optional().default(30),
+      startDate: ymdSchema.optional(),
+      endDate: ymdSchema.optional(),
+      days: z.number().min(1).max(MAX_WINDOW_DAYS).optional().default(30),
       limit: z.number().min(1).max(100).optional().default(20),
-    }))
+    }).superRefine(refineDateWindow))
     .query(async ({ input }) => {
       const employee = await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1);
       if (!employee[0]) {
@@ -824,10 +869,8 @@ export const salesRouter = createTRPCRouter({
       const userRole = employee[0].role;
       const isAdmin = userRole === 'ADMIN';
       
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - input.days);
-      
-      const conditions: any[] = [gte(eventSalesEntries.createdAt, startDate)];
+      const { start: windowStart, end: windowEnd } = resolveWindow(input);
+      const conditions: any[] = [gte(eventSalesEntries.createdAt, windowStart), lte(eventSalesEntries.createdAt, windowEnd)];
       
       if (input.circle) {
         conditions.push(eq(employees.circle, input.circle));
@@ -891,8 +934,10 @@ export const salesRouter = createTRPCRouter({
     .input(z.object({
       employeeId: z.string().uuid(),
       circle: z.string().optional(),
-      days: z.number().min(7).max(90).optional().default(30),
-    }))
+      startDate: ymdSchema.optional(),
+      endDate: ymdSchema.optional(),
+      days: z.number().min(1).max(MAX_WINDOW_DAYS).optional().default(30),
+    }).superRefine(refineDateWindow))
     .query(async ({ input }) => {
       const employee = await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1);
       if (!employee[0]) {
@@ -902,10 +947,8 @@ export const salesRouter = createTRPCRouter({
       const userRole = employee[0].role;
       const isAdmin = userRole === 'ADMIN';
       
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - input.days);
-      
-      const conditions: any[] = [gte(eventSalesEntries.createdAt, startDate)];
+      const { start: windowStart, end: windowEnd } = resolveWindow(input);
+      const conditions: any[] = [gte(eventSalesEntries.createdAt, windowStart), lte(eventSalesEntries.createdAt, windowEnd)];
       
       if (input.circle) {
         conditions.push(eq(employees.circle, input.circle));
@@ -980,8 +1023,10 @@ export const salesRouter = createTRPCRouter({
     .input(z.object({
       employeeId: z.string().uuid(),
       circle: z.string().optional(),
-      days: z.number().min(7).max(90).optional().default(30),
-    }))
+      startDate: ymdSchema.optional(),
+      endDate: ymdSchema.optional(),
+      days: z.number().min(1).max(MAX_WINDOW_DAYS).optional().default(30),
+    }).superRefine(refineDateWindow))
     .query(async ({ input }) => {
       const employee = await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1);
       if (!employee[0]) {
@@ -990,10 +1035,8 @@ export const salesRouter = createTRPCRouter({
       const userRole = employee[0].role;
       const isAdmin = userRole === 'ADMIN';
 
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - input.days);
-
-      const conditions: any[] = [gte(maintenanceEntries.createdAt, startDate)];
+      const { start: windowStart, end: windowEnd } = resolveWindow(input);
+      const conditions: any[] = [gte(maintenanceEntries.createdAt, windowStart), lte(maintenanceEntries.createdAt, windowEnd)];
       if (input.circle) {
         conditions.push(eq(employees.circle, input.circle));
       }
@@ -1102,8 +1145,10 @@ export const salesRouter = createTRPCRouter({
     .input(z.object({
       employeeId: z.string().uuid(),
       circle: z.string().optional(),
-      days: z.number().min(7).max(90).optional().default(30),
-    }))
+      startDate: ymdSchema.optional(),
+      endDate: ymdSchema.optional(),
+      days: z.number().min(1).max(MAX_WINDOW_DAYS).optional().default(30),
+    }).superRefine(refineDateWindow))
     .query(async ({ input }) => {
       const employee = await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1);
       if (!employee[0]) {
@@ -1112,10 +1157,8 @@ export const salesRouter = createTRPCRouter({
       const userRole = employee[0].role;
       const isAdmin = userRole === 'ADMIN';
 
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - input.days);
-
-      const conditions: any[] = [gte(financeCollectionEntries.createdAt, startDate)];
+      const { start: windowStart, end: windowEnd } = resolveWindow(input);
+      const conditions: any[] = [gte(financeCollectionEntries.createdAt, windowStart), lte(financeCollectionEntries.createdAt, windowEnd)];
       if (input.circle) {
         conditions.push(eq(employees.circle, input.circle));
       }

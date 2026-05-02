@@ -349,6 +349,17 @@ The app runs on port 5000 with a combined frontend/backend server:
 - Team: Top-10 contribution grouped bar across 5 finance types + full ranking list with collector totals.
 - Trends: Multi-line and stacked-bar daily approved-collection trend per type.
 
+### Time Period Selector (Management Deep-Dive)
+A unified `TimePeriodPicker` (`components/TimePeriodPicker.tsx`) drives every analytics tab. State lives as a single `PeriodRange = { key, label, startDate, endDate }` in `app/sales.tsx` and is passed to all five backend procedures.
+
+Presets, grouped:
+- **Quick**: Today, Yesterday, Last 7 / 30 / 90 Days
+- **Calendar**: Month-to-Date, Last Month, Quarter-to-Date, Last Quarter, Calendar YTD, Last Calendar Year
+- **Financial Year (India)**: Financial YTD (Apr 1 → today), Last Financial Year (Apr → Mar)
+- **Custom**: free YYYY-MM-DD range up to 730 days (validated)
+
+All preset ranges are computed in `utils/timePeriod.ts` using India-local calendar math (Indian FY = Apr–Mar). Backend procedures accept `startDate` + `endDate` (YYYY-MM-DD) and interpret them as IST day boundaries via `istDayStart` / `istDayEnd`, then bucket daily results in `Asia/Kolkata` so backend keys align with frontend `eachDayInRange()` keys. The legacy `days` input is retained as a fallback for any older callers.
+
 ### Cross-Cutting
 - All new procedures reuse `getVisibleEmployeeIdsSubquery(persNo)` for hierarchical scope (admin sees all, others see self + subordinates). Optional `circle` filter applies on top.
 - Numbers formatted in Indian style (Cr / L / K) via `formatIndianNumber`; rupee values prefixed with ₹.

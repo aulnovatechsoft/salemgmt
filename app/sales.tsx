@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { ChevronLeft, TrendingUp, Users, BarChart3, Award, Smartphone, Wifi, AlertCircle, Cable, Zap, Wrench, IndianRupee, ShoppingCart } from 'lucide-react-native';
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback } from 'react';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/contexts/auth';
@@ -13,6 +13,8 @@ import {
   ChartLegend,
   formatIndianNumber,
 } from '@/components/SalesCharts';
+import TimePeriodPicker from '@/components/TimePeriodPicker';
+import { computePeriodRange, eachDayInRange, PeriodRange } from '@/utils/timePeriod';
 
 const SIM_COLOR = '#1976D2';
 const FTTH_COLOR = '#388E3C';
@@ -60,51 +62,43 @@ export default function SalesScreen() {
   const [category, setCategory] = useState<CategoryType>('sales');
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [refreshing, setRefreshing] = useState(false);
-  const [dateRange, setDateRange] = useState<'7' | '30' | '90'>('30');
-
-  const dateRangeParams = useMemo(() => {
-    const endDate = new Date();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - parseInt(dateRange));
-    return {
-      startDate: startDate.toISOString().split('T')[0],
-      endDate: endDate.toISOString().split('T')[0],
-    };
-  }, [dateRange]);
+  const [period, setPeriod] = useState<PeriodRange>(() => computePeriodRange('30d'));
 
   const analyticsQuery = trpc.sales.getSalesAnalytics.useQuery(
-    { 
+    {
       employeeId: employee?.id || '',
       circle: employee?.circle || undefined,
-      startDate: dateRangeParams.startDate,
-      endDate: dateRangeParams.endDate,
+      startDate: period.startDate,
+      endDate: period.endDate,
     },
-    { 
+    {
       enabled: !!employee?.id && category === 'sales',
       staleTime: 60000,
     }
   );
 
   const teamQuery = trpc.sales.getTeamPerformance.useQuery(
-    { 
-      employeeId: employee?.id || '', 
-      days: parseInt(dateRange), 
-      limit: 20,
+    {
+      employeeId: employee?.id || '',
       circle: employee?.circle || undefined,
+      startDate: period.startDate,
+      endDate: period.endDate,
+      limit: 20,
     },
-    { 
+    {
       enabled: !!employee?.id && category === 'sales' && activeTab === 'team',
       staleTime: 60000,
     }
   );
 
   const trendsQuery = trpc.sales.getSalesTrends.useQuery(
-    { 
-      employeeId: employee?.id || '', 
-      days: parseInt(dateRange),
+    {
+      employeeId: employee?.id || '',
       circle: employee?.circle || undefined,
+      startDate: period.startDate,
+      endDate: period.endDate,
     },
-    { 
+    {
       enabled: !!employee?.id && category === 'sales' && activeTab === 'trends',
       staleTime: 60000,
     }
@@ -113,8 +107,9 @@ export default function SalesScreen() {
   const opsQuery = trpc.sales.getOperationsAnalytics.useQuery(
     {
       employeeId: employee?.id || '',
-      days: parseInt(dateRange),
       circle: employee?.circle || undefined,
+      startDate: period.startDate,
+      endDate: period.endDate,
     },
     {
       enabled: !!employee?.id && category === 'operations',
@@ -125,8 +120,9 @@ export default function SalesScreen() {
   const financeQuery = trpc.sales.getFinanceAnalytics.useQuery(
     {
       employeeId: employee?.id || '',
-      days: parseInt(dateRange),
       circle: employee?.circle || undefined,
+      startDate: period.startDate,
+      endDate: period.endDate,
     },
     {
       enabled: !!employee?.id && category === 'finance',
@@ -192,11 +188,17 @@ export default function SalesScreen() {
     const data = analyticsQuery.data;
     if (!data?.totals) {
       return (
-        <View style={styles.emptyContainer}>
-          <BarChart3 size={48} color={Colors.light.textSecondary} />
-          <Text style={styles.emptyTitle}>No Sales Data</Text>
-          <Text style={styles.emptySubtitle}>Sales entries will appear here once submitted</Text>
-        </View>
+        <ScrollView
+          style={styles.tabContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+          {renderDateFilter()}
+          <View style={styles.emptyContainer}>
+            <BarChart3 size={48} color={Colors.light.textSecondary} />
+            <Text style={styles.emptyTitle}>No Sales Data</Text>
+            <Text style={styles.emptySubtitle}>Sales entries will appear here once submitted</Text>
+          </View>
+        </ScrollView>
       );
     }
 
@@ -207,22 +209,7 @@ export default function SalesScreen() {
         style={styles.tabContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        <View style={styles.dateFilterSection}>
-          <Text style={styles.filterLabel}>Time Period:</Text>
-          <View style={styles.dateFilterButtons}>
-            {(['7', '30', '90'] as const).map((days) => (
-              <TouchableOpacity
-                key={days}
-                style={[styles.dateFilterButton, dateRange === days && styles.dateFilterButtonActive]}
-                onPress={() => setDateRange(days)}
-              >
-                <Text style={[styles.dateFilterButtonText, dateRange === days && styles.dateFilterButtonTextActive]}>
-                  {days} Days
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
+        {renderDateFilter()}
 
         <View style={styles.summarySection}>
           <Text style={styles.sectionTitle}>Sales Summary</Text>
@@ -450,11 +437,17 @@ export default function SalesScreen() {
     const data = teamQuery.data;
     if (!data?.rankings || data.rankings.length === 0) {
       return (
-        <View style={styles.emptyContainer}>
-          <Users size={48} color={Colors.light.textSecondary} />
-          <Text style={styles.emptyTitle}>No Team Data</Text>
-          <Text style={styles.emptySubtitle}>Team performance will appear once sales are submitted</Text>
-        </View>
+        <ScrollView
+          style={styles.tabContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+          {renderDateFilter()}
+          <View style={styles.emptyContainer}>
+            <Users size={48} color={Colors.light.textSecondary} />
+            <Text style={styles.emptyTitle}>No Team Data</Text>
+            <Text style={styles.emptySubtitle}>Team performance will appear once sales are submitted</Text>
+          </View>
+        </ScrollView>
       );
     }
 
@@ -463,22 +456,7 @@ export default function SalesScreen() {
         style={styles.tabContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        <View style={styles.dateFilterSection}>
-          <Text style={styles.filterLabel}>Time Period:</Text>
-          <View style={styles.dateFilterButtons}>
-            {(['7', '30', '90'] as const).map((days) => (
-              <TouchableOpacity
-                key={days}
-                style={[styles.dateFilterButton, dateRange === days && styles.dateFilterButtonActive]}
-                onPress={() => setDateRange(days)}
-              >
-                <Text style={[styles.dateFilterButtonText, dateRange === days && styles.dateFilterButtonTextActive]}>
-                  {days} Days
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
+        {renderDateFilter()}
 
         {(data.grandTotal ?? 0) > 0 && (
           <View style={styles.grandTotalCard}>
@@ -588,36 +566,28 @@ export default function SalesScreen() {
     const data = trendsQuery.data;
     if (!data?.daily || data.daily.length === 0) {
       return (
-        <View style={styles.emptyContainer}>
-          <TrendingUp size={48} color={Colors.light.textSecondary} />
-          <Text style={styles.emptyTitle}>No Trend Data</Text>
-          <Text style={styles.emptySubtitle}>Sales trends will appear once data is available</Text>
-        </View>
+        <ScrollView
+          style={styles.tabContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+          {renderDateFilter()}
+          <View style={styles.emptyContainer}>
+            <TrendingUp size={48} color={Colors.light.textSecondary} />
+            <Text style={styles.emptyTitle}>No Trend Data</Text>
+            <Text style={styles.emptySubtitle}>Sales trends will appear once data is available</Text>
+          </View>
+        </ScrollView>
       );
     }
 
     // Build a continuous date series across the full requested window so missing
-    // days render as zero (avoids misleading gaps and the prior `slice(-14)` bug
-    // that ignored the 30/90-day selection). Build keys from local date parts
-    // (NOT toISOString) so positive-offset timezones like IST don't shift the
-    // local day backwards by one when serialised to UTC.
-    const days = parseInt(dateRange);
+    // days render as zero. Use IST-local day keys (eachDayInRange) so they match
+    // backend keys (DATE in Asia/Kolkata).
+    const allDays = eachDayInRange(period.startDate, period.endDate);
     const dailyMap = new Map(data.daily.map(d => [d.date, d]));
-    const toLocalKey = (d: Date) => {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      return `${y}-${m}-${day}`;
-    };
-    const fullSeries: { date: string; simsSold: number; ftthSold: number; simsActivated: number; ftthActivated: number; leaseSold: number; ebSold: number }[] = [];
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    for (let i = days - 1; i >= 0; i--) {
-      const dt = new Date(today);
-      dt.setDate(dt.getDate() - i);
-      const key = toLocalKey(dt);
+    const fullSeries = allDays.map(key => {
       const found = dailyMap.get(key) as any;
-      fullSeries.push({
+      return {
         date: key,
         simsSold: Number(found?.simsSold) || 0,
         ftthSold: Number(found?.ftthSold) || 0,
@@ -625,8 +595,8 @@ export default function SalesScreen() {
         ftthActivated: Number(found?.ftthActivated) || 0,
         leaseSold: Number(found?.leaseSold) || 0,
         ebSold: Number(found?.ebSold) || 0,
-      });
-    }
+      };
+    });
     const labels = fullSeries.map(d => {
       const [yy, mm, dd] = d.date.split('-').map(Number);
       const local = new Date(yy, (mm || 1) - 1, dd || 1);
@@ -638,22 +608,7 @@ export default function SalesScreen() {
         style={styles.tabContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        <View style={styles.dateFilterSection}>
-          <Text style={styles.filterLabel}>Time Period:</Text>
-          <View style={styles.dateFilterButtons}>
-            {(['7', '30', '90'] as const).map((days) => (
-              <TouchableOpacity
-                key={days}
-                style={[styles.dateFilterButton, dateRange === days && styles.dateFilterButtonActive]}
-                onPress={() => setDateRange(days)}
-              >
-                <Text style={[styles.dateFilterButtonText, dateRange === days && styles.dateFilterButtonTextActive]}>
-                  {days} Days
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
+        {renderDateFilter()}
 
         {data.summary && (
           <View style={styles.trendSummarySection}>
@@ -759,19 +714,8 @@ export default function SalesScreen() {
 
   const renderDateFilter = () => (
     <View style={styles.dateFilterSection}>
-      <Text style={styles.filterLabel}>Time Period:</Text>
-      <View style={styles.dateFilterButtons}>
-        {(['7', '30', '90'] as const).map((days) => (
-          <TouchableOpacity
-            key={days}
-            style={[styles.dateFilterButton, dateRange === days && styles.dateFilterButtonActive]}
-            onPress={() => setDateRange(days)}
-          >
-            <Text style={[styles.dateFilterButtonText, dateRange === days && styles.dateFilterButtonTextActive]}>
-              {days} Days
-            </Text>
-          </TouchableOpacity>
-        ))}
+      <View style={{ flex: 1 }}>
+        <TimePeriodPicker value={period} onChange={setPeriod} />
       </View>
     </View>
   );
@@ -998,30 +942,18 @@ export default function SalesScreen() {
         </ScrollView>
       );
     }
-    const days = parseInt(dateRange);
+    const allDays = eachDayInRange(period.startDate, period.endDate);
     const dailyMap = new Map(data.daily.map(d => [d.date, d]));
-    const toLocalKey = (d: Date) => {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      return `${y}-${m}-${day}`;
-    };
-    const series: { date: string; btsDown: number; ftthDown: number; routeFail: number; ofcFail: number }[] = [];
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    for (let i = days - 1; i >= 0; i--) {
-      const dt = new Date(today);
-      dt.setDate(dt.getDate() - i);
-      const key = toLocalKey(dt);
-      const f = dailyMap.get(key);
-      series.push({
+    const series = allDays.map(key => {
+      const f = dailyMap.get(key) as any;
+      return {
         date: key,
         btsDown: Number(f?.btsDown) || 0,
         ftthDown: Number(f?.ftthDown) || 0,
         routeFail: Number(f?.routeFail) || 0,
         ofcFail: Number(f?.ofcFail) || 0,
-      });
-    }
+      };
+    });
     const labels = series.map(d => {
       const [yy, mm, dd] = d.date.split('-').map(Number);
       const local = new Date(yy, (mm || 1) - 1, dd || 1);
@@ -1329,31 +1261,19 @@ export default function SalesScreen() {
         </ScrollView>
       );
     }
-    const days = parseInt(dateRange);
+    const allDays = eachDayInRange(period.startDate, period.endDate);
     const dailyMap = new Map(data.daily.map(d => [d.date, d]));
-    const toLocalKey = (d: Date) => {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      return `${y}-${m}-${day}`;
-    };
-    const series: { date: string; FIN_LC: number; FIN_LL_FTTH: number; FIN_TOWER: number; FIN_GSM_POSTPAID: number; FIN_RENT_BUILDING: number }[] = [];
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    for (let i = days - 1; i >= 0; i--) {
-      const dt = new Date(today);
-      dt.setDate(dt.getDate() - i);
-      const key = toLocalKey(dt);
-      const f = dailyMap.get(key);
-      series.push({
+    const series = allDays.map(key => {
+      const f = dailyMap.get(key) as any;
+      return {
         date: key,
         FIN_LC: Number(f?.FIN_LC) || 0,
         FIN_LL_FTTH: Number(f?.FIN_LL_FTTH) || 0,
         FIN_TOWER: Number(f?.FIN_TOWER) || 0,
         FIN_GSM_POSTPAID: Number(f?.FIN_GSM_POSTPAID) || 0,
         FIN_RENT_BUILDING: Number(f?.FIN_RENT_BUILDING) || 0,
-      });
-    }
+      };
+    });
     const labels = series.map(d => {
       const [yy, mm, dd] = d.date.split('-').map(Number);
       const local = new Date(yy, (mm || 1) - 1, dd || 1);
@@ -1903,34 +1823,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     gap: 12,
-  },
-  filterLabel: {
-    fontSize: 14,
-    color: Colors.light.textSecondary,
-  },
-  dateFilterButtons: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  dateFilterButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-  },
-  dateFilterButtonActive: {
-    backgroundColor: Colors.light.primary,
-    borderColor: Colors.light.primary,
-  },
-  dateFilterButtonText: {
-    fontSize: 13,
-    color: Colors.light.textSecondary,
-  },
-  dateFilterButtonTextActive: {
-    color: '#fff',
-    fontWeight: '600',
   },
   trendSummarySection: {
     padding: 16,
