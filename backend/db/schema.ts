@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, integer, timestamp, boolean, jsonb, pgEnum, uuid, customType } from 'drizzle-orm/pg-core';
+import { pgTable, text, varchar, integer, bigint, timestamp, boolean, jsonb, pgEnum, uuid, customType } from 'drizzle-orm/pg-core';
 
 export const userRoleEnum = pgEnum('user_role', ['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM', 'SD_JTO', 'SALES_STAFF']);
 
@@ -99,11 +99,11 @@ export const events = pgTable('events', {
   targetFtthDown: integer('target_ftth_down').default(0).notNull(),
   targetRouteFail: integer('target_route_fail').default(0).notNull(),
   targetOfcFail: integer('target_ofc_fail').default(0).notNull(),
-  targetFinLc: integer('target_fin_lc').default(0).notNull(),
-  targetFinLlFtth: integer('target_fin_ll_ftth').default(0).notNull(),
-  targetFinTower: integer('target_fin_tower').default(0).notNull(),
-  targetFinGsmPostpaid: integer('target_fin_gsm_postpaid').default(0).notNull(),
-  targetFinRentBuilding: integer('target_fin_rent_building').default(0).notNull(),
+  targetFinLc: bigint('target_fin_lc', { mode: 'number' }).default(0).notNull(),
+  targetFinLlFtth: bigint('target_fin_ll_ftth', { mode: 'number' }).default(0).notNull(),
+  targetFinTower: bigint('target_fin_tower', { mode: 'number' }).default(0).notNull(),
+  targetFinGsmPostpaid: bigint('target_fin_gsm_postpaid', { mode: 'number' }).default(0).notNull(),
+  targetFinRentBuilding: bigint('target_fin_rent_building', { mode: 'number' }).default(0).notNull(),
   assignedTeam: jsonb('assigned_team').$type<string[]>().default([]),
   allocatedSim: integer('allocated_sim').default(0).notNull(),
   allocatedFtth: integer('allocated_ftth').default(0).notNull(),
@@ -113,11 +113,11 @@ export const events = pgTable('events', {
   ftthDownCompleted: integer('ftth_down_completed').default(0).notNull(),
   routeFailCompleted: integer('route_fail_completed').default(0).notNull(),
   ofcFailCompleted: integer('ofc_fail_completed').default(0).notNull(),
-  finLcCollected: integer('fin_lc_collected').default(0).notNull(),
-  finLlFtthCollected: integer('fin_ll_ftth_collected').default(0).notNull(),
-  finTowerCollected: integer('fin_tower_collected').default(0).notNull(),
-  finGsmPostpaidCollected: integer('fin_gsm_postpaid_collected').default(0).notNull(),
-  finRentBuildingCollected: integer('fin_rent_building_collected').default(0).notNull(),
+  finLcCollected: bigint('fin_lc_collected', { mode: 'number' }).default(0).notNull(),
+  finLlFtthCollected: bigint('fin_ll_ftth_collected', { mode: 'number' }).default(0).notNull(),
+  finTowerCollected: bigint('fin_tower_collected', { mode: 'number' }).default(0).notNull(),
+  finGsmPostpaidCollected: bigint('fin_gsm_postpaid_collected', { mode: 'number' }).default(0).notNull(),
+  finRentBuildingCollected: bigint('fin_rent_building_collected', { mode: 'number' }).default(0).notNull(),
   ebEstHours: integer('eb_est_hours').default(0).notNull(),
   leaseEstHours: integer('lease_est_hours').default(0).notNull(),
   btsDownEstHours: integer('bts_down_est_hours').default(0).notNull(),
@@ -328,7 +328,7 @@ export const financeCollectionEntries = pgTable('finance_collection_entries', {
   eventId: uuid('event_id').notNull().references(() => events.id),
   employeeId: uuid('employee_id').notNull().references(() => employees.id),
   financeType: varchar('finance_type', { length: 50 }).notNull(),
-  amountCollected: integer('amount_collected').default(0).notNull(),
+  amountCollected: bigint('amount_collected', { mode: 'number' }).default(0).notNull(),
   paymentMode: varchar('payment_mode', { length: 50 }).notNull(),
   transactionReference: varchar('transaction_reference', { length: 100 }),
   customerName: varchar('customer_name', { length: 255 }),

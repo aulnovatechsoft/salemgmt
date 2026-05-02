@@ -21,6 +21,19 @@ BSNL Sales & Task App is a mobile-first application for managing task assignment
 - `app/(tabs)/my-tasks.tsx` shows **per-employee** LC/EB/maintenance progress sourced from `getMyAssignedTasks.myProgress` / `maintenanceProgress`.
 - Owners (and event creators / managers) can soft-delete entries with an audit reason; owners can append SIM/FTTH activations via `activateSimsForEntry` / `activateFtthForEntry` mutations.
 
+## Finance Collection Flow (production-grade, May 2026)
+
+The 5 Finance subtasks (LC, LL/FTTH, Tower, GSM PostPaid, Rent of Building) follow a strict submit→approve/reject lifecycle:
+
+- **Submit** (`submitFinanceCollection`): inserts entry with `approval_status='pending'`. Does NOT touch `events.fin_*_collected` — those reflect *verified* money only. Pending sub-totals are computed live from the entries table.
+- **Approve** (`approveFinanceCollection`): runs in a single DB transaction with two safeguards: (1) conditional `WHERE approval_status='pending'` so concurrent approvals can't double-claim, (2) SQL atomic `SET col = col + amount` so concurrent approvals on different entries can't lose increments.
+- **Reject** (`rejectFinanceCollection`): same conditional/atomic transaction pattern. No-op on event totals (since submit didn't add).
+- **Summary** (`sales.getFinanceSummary`): returns `totalCollected` (approved only), `totalPending`, `totalPendingEntries`, and per-type `byType[].pendingAmount`. Rejected entries excluded from totals.
+- **Pending review queue** (`getPendingFinanceCollections`): filters events by `taskCategory = 'Finance'` (literal value, not `LIKE 'FIN_%'`). CMD/ADMIN see all circles, GM/CGM see their circle, DGM/AGM see only their own events.
+- **Auth roles allowed to review**: CMD, ADMIN, GM, CGM, DGM, AGM (frontend `MANAGEMENT_ROLES` and backend gates kept in sync).
+- **Amount precision**: `amount_collected`, `target_fin_*`, `fin_*_collected` are PostgreSQL `BIGINT` (drizzle `bigint(mode:'number')`). Safe up to `Number.MAX_SAFE_INTEGER` (~9×10¹⁵ INR), needed because BSNL outstanding totals already exceed 35,720 Cr.
+- **Migration**: `backend/db/migrate.ts` includes idempotent `ALTER TABLE ... TYPE BIGINT` for fresh deploys.
+
 ## O&M Submission Flow (P1, architect-aligned)
 - `submitMaintenanceEntry` is the **only** server-side write path for positive O&M increments — `authedProcedure` with the same transaction pattern as `updateMemberTaskProgress` (lock event row + `.for('update')` on the target's assignment row).
 - Server requires `siteId` (≥1 char), ≥1 photo, valid `gpsLatitude`/`gpsLongitude`; geo-fence anchor = avg GPS of prior `maintenance_entries` for the event, soft (`GEO_FENCE_KM`) and hard (`× 3`) limits, `GEO_FENCE_ENFORCE` honoured.

@@ -11,7 +11,7 @@ const Colors = {
   textLight: ColorsObj.light.textSecondary,
 };
 
-const MANAGEMENT_ROLES = ['ADMIN', 'GM', 'CGM', 'DGM', 'AGM'];
+const MANAGEMENT_ROLES = ['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'];
 
 const FINANCE_TYPES = [
   { value: '', label: 'All Types' },

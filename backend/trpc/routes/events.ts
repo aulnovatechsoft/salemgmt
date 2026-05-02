@@ -3084,10 +3084,22 @@ export const eventsRouter = createTRPCRouter({
       
       const currentTarget = (event[0] as any)[targetField] || 0;
       const currentCollected = (event[0] as any)[collectedField] || 0;
-      const newTotal = currentCollected + input.amountCollected;
       
-      if (newTotal > currentTarget && currentTarget > 0) {
-        console.log(`[FINANCE] Over-collection warning: ${input.financeType} target=${currentTarget}, collected=${currentCollected}, new entry=${input.amountCollected}, total=${newTotal}`);
+      // Sum currently pending entries for this event+type to compare against target
+      const pendingAgg = await db.select({
+        sum: sql<number>`COALESCE(SUM(${financeCollectionEntries.amountCollected}), 0)`,
+      })
+        .from(financeCollectionEntries)
+        .where(and(
+          eq(financeCollectionEntries.eventId, input.eventId),
+          eq(financeCollectionEntries.financeType, input.financeType),
+          eq(financeCollectionEntries.approvalStatus, 'pending'),
+        ));
+      const currentPending = Number(pendingAgg[0]?.sum || 0);
+      const projectedTotal = currentCollected + currentPending + input.amountCollected;
+      
+      if (projectedTotal > currentTarget && currentTarget > 0) {
+        console.log(`[FINANCE] Over-collection warning: ${input.financeType} target=${currentTarget}, approved=${currentCollected}, pending=${currentPending}, new entry=${input.amountCollected}, projected=${projectedTotal}`);
       }
       
       const result = await db.insert(financeCollectionEntries).values({
@@ -3106,12 +3118,10 @@ export const eventsRouter = createTRPCRouter({
         approvalStatus: 'pending',
       }).returning();
       
-      // Update the event's collected amount
-      const updateData: Record<string, number> = {};
-      updateData[collectedField] = newTotal;
-      await db.update(events).set(updateData).where(eq(events.id, input.eventId));
-      
-      console.log(`[FINANCE] Updated ${collectedField} for event ${input.eventId}: ${currentCollected} -> ${newTotal}`);
+      // NOTE: Event's collected total is updated ONLY when the entry is approved
+      // (see approveFinanceCollection). This prevents double-counting and ensures
+      // the running total reflects verified money only.
+      console.log(`[FINANCE] Submitted ${collectedField} entry for event ${input.eventId}: pending +${input.amountCollected} (approved total unchanged at ${currentCollected})`);
       
       await db.insert(auditLogs).values({
         action: 'SUBMIT_FINANCE_COLLECTION',
@@ -3190,12 +3200,12 @@ export const eventsRouter = createTRPCRouter({
         if (reviewer[0].role === 'ADMIN' || reviewer[0].role === 'CMD') {
           userEvents = await db.select({ id: events.id, name: events.name })
             .from(events)
-            .where(sql`${events.taskCategory} LIKE 'FIN_%'`);
+            .where(eq(events.taskCategory, 'Finance'));
         } else {
           userEvents = await db.select({ id: events.id, name: events.name })
             .from(events)
             .where(and(
-              sql`${events.taskCategory} LIKE 'FIN_%'`,
+              eq(events.taskCategory, 'Finance'),
               eq(events.circle, reviewer[0].circle || '')
             ));
         }
@@ -3256,58 +3266,65 @@ export const eventsRouter = createTRPCRouter({
         throw new Error('Only management users can approve finance collections');
       }
       
-      // Get the entry
+      // Pre-read entry + event for authz and notification context
       const entry = await db.select().from(financeCollectionEntries)
         .where(eq(financeCollectionEntries.id, input.entryId)).limit(1);
-      
       if (!entry[0]) throw new Error('Finance collection entry not found');
       if (entry[0].approvalStatus !== 'pending') {
         throw new Error(`Entry already ${entry[0].approvalStatus}`);
       }
-      
-      // Verify reviewer owns the event
       const event = await db.select().from(events).where(eq(events.id, entry[0].eventId)).limit(1);
       if (!event[0]) throw new Error('Event not found');
       if (event[0].assignedTo !== input.reviewerId && !['CMD', 'ADMIN', 'GM', 'CGM'].includes(reviewer[0].role)) {
         throw new Error('You can only approve collections for events you manage');
       }
       
-      // Update entry status
-      await db.update(financeCollectionEntries)
-        .set({
-          approvalStatus: 'approved',
-          reviewedBy: input.reviewerId,
-          reviewedAt: new Date(),
-          reviewRemarks: input.remarks,
-        })
-        .where(eq(financeCollectionEntries.id, input.entryId));
-      
-      // Update event totals
-      const updateFields: Record<string, any> = { updatedAt: new Date() };
-      if (entry[0].financeType === 'FIN_LC') {
-        updateFields.finLcCollected = (event[0].finLcCollected || 0) + entry[0].amountCollected;
-      } else if (entry[0].financeType === 'FIN_LL_FTTH') {
-        updateFields.finLlFtthCollected = (event[0].finLlFtthCollected || 0) + entry[0].amountCollected;
-      } else if (entry[0].financeType === 'FIN_TOWER') {
-        updateFields.finTowerCollected = (event[0].finTowerCollected || 0) + entry[0].amountCollected;
-      } else if (entry[0].financeType === 'FIN_GSM_POSTPAID') {
-        updateFields.finGsmPostpaidCollected = (event[0].finGsmPostpaidCollected || 0) + entry[0].amountCollected;
-      } else if (entry[0].financeType === 'FIN_RENT_BUILDING') {
-        updateFields.finRentBuildingCollected = (event[0].finRentBuildingCollected || 0) + entry[0].amountCollected;
-      }
-      
-      await db.update(events).set(updateFields).where(eq(events.id, entry[0].eventId));
-      
-      // Create audit log
-      await db.insert(auditLogs).values({
-        action: 'APPROVE_FINANCE_COLLECTION',
-        entityType: 'FINANCE',
-        entityId: input.entryId,
-        performedBy: input.reviewerId,
-        details: { eventId: entry[0].eventId, amount: entry[0].amountCollected, financeType: entry[0].financeType },
+      // Atomic + idempotent transition: claim the pending->approved update and only then increment.
+      // The conditional WHERE on approval_status='pending' prevents double-approval races.
+      await db.transaction(async (tx) => {
+        const claimed = await tx.update(financeCollectionEntries)
+          .set({
+            approvalStatus: 'approved',
+            reviewedBy: input.reviewerId,
+            reviewedAt: new Date(),
+            reviewRemarks: input.remarks,
+          })
+          .where(and(
+            eq(financeCollectionEntries.id, input.entryId),
+            eq(financeCollectionEntries.approvalStatus, 'pending'),
+          ))
+          .returning({ id: financeCollectionEntries.id });
+        
+        if (claimed.length === 0) {
+          throw new Error('Entry is no longer pending (already reviewed)');
+        }
+        
+        // SQL-level atomic increment so concurrent approvals can't lose updates
+        const incrementUpdate: Record<string, any> = { updatedAt: new Date() };
+        const amt = entry[0].amountCollected;
+        if (entry[0].financeType === 'FIN_LC') {
+          incrementUpdate.finLcCollected = sql`${events.finLcCollected} + ${amt}`;
+        } else if (entry[0].financeType === 'FIN_LL_FTTH') {
+          incrementUpdate.finLlFtthCollected = sql`${events.finLlFtthCollected} + ${amt}`;
+        } else if (entry[0].financeType === 'FIN_TOWER') {
+          incrementUpdate.finTowerCollected = sql`${events.finTowerCollected} + ${amt}`;
+        } else if (entry[0].financeType === 'FIN_GSM_POSTPAID') {
+          incrementUpdate.finGsmPostpaidCollected = sql`${events.finGsmPostpaidCollected} + ${amt}`;
+        } else if (entry[0].financeType === 'FIN_RENT_BUILDING') {
+          incrementUpdate.finRentBuildingCollected = sql`${events.finRentBuildingCollected} + ${amt}`;
+        }
+        await tx.update(events).set(incrementUpdate).where(eq(events.id, entry[0].eventId));
+        
+        await tx.insert(auditLogs).values({
+          action: 'APPROVE_FINANCE_COLLECTION',
+          entityType: 'FINANCE',
+          entityId: input.entryId,
+          performedBy: input.reviewerId,
+          details: { eventId: entry[0].eventId, amount: entry[0].amountCollected, financeType: entry[0].financeType },
+        });
       });
       
-      // Notify the submitter
+      // Notify the submitter (outside txn — non-critical)
       await db.insert(notifications).values({
         recipientId: entry[0].employeeId,
         type: 'FINANCE_COLLECTION_APPROVED',
@@ -3335,39 +3352,45 @@ export const eventsRouter = createTRPCRouter({
         throw new Error('Only management users can reject finance collections');
       }
       
-      // Get the entry
+      // Pre-read entry + event for authz and notification context
       const entry = await db.select().from(financeCollectionEntries)
         .where(eq(financeCollectionEntries.id, input.entryId)).limit(1);
-      
       if (!entry[0]) throw new Error('Finance collection entry not found');
       if (entry[0].approvalStatus !== 'pending') {
         throw new Error(`Entry already ${entry[0].approvalStatus}`);
       }
-      
-      // Verify reviewer owns the event
       const event = await db.select().from(events).where(eq(events.id, entry[0].eventId)).limit(1);
       if (!event[0]) throw new Error('Event not found');
       if (event[0].assignedTo !== input.reviewerId && !['CMD', 'ADMIN', 'GM', 'CGM'].includes(reviewer[0].role)) {
         throw new Error('You can only reject collections for events you manage');
       }
       
-      // Update entry status
-      await db.update(financeCollectionEntries)
-        .set({
-          approvalStatus: 'rejected',
-          reviewedBy: input.reviewerId,
-          reviewedAt: new Date(),
-          reviewRemarks: input.remarks,
-        })
-        .where(eq(financeCollectionEntries.id, input.entryId));
-      
-      // Create audit log
-      await db.insert(auditLogs).values({
-        action: 'REJECT_FINANCE_COLLECTION',
-        entityType: 'FINANCE',
-        entityId: input.entryId,
-        performedBy: input.reviewerId,
-        details: { eventId: entry[0].eventId, amount: entry[0].amountCollected, reason: input.remarks },
+      // Atomic + idempotent transition: pending->rejected only, no event total mutation
+      await db.transaction(async (tx) => {
+        const claimed = await tx.update(financeCollectionEntries)
+          .set({
+            approvalStatus: 'rejected',
+            reviewedBy: input.reviewerId,
+            reviewedAt: new Date(),
+            reviewRemarks: input.remarks,
+          })
+          .where(and(
+            eq(financeCollectionEntries.id, input.entryId),
+            eq(financeCollectionEntries.approvalStatus, 'pending'),
+          ))
+          .returning({ id: financeCollectionEntries.id });
+        
+        if (claimed.length === 0) {
+          throw new Error('Entry is no longer pending (already reviewed)');
+        }
+        
+        await tx.insert(auditLogs).values({
+          action: 'REJECT_FINANCE_COLLECTION',
+          entityType: 'FINANCE',
+          entityId: input.entryId,
+          performedBy: input.reviewerId,
+          details: { eventId: entry[0].eventId, amount: entry[0].amountCollected, reason: input.remarks },
+        });
       });
       
       // Notify the submitter

@@ -504,6 +504,10 @@ export const salesRouter = createTRPCRouter({
         customerName: financeCollectionEntries.customerName,
         customerContact: financeCollectionEntries.customerContact,
         remarks: financeCollectionEntries.remarks,
+        approvalStatus: financeCollectionEntries.approvalStatus,
+        reviewedBy: financeCollectionEntries.reviewedBy,
+        reviewedAt: financeCollectionEntries.reviewedAt,
+        reviewRemarks: financeCollectionEntries.reviewRemarks,
         createdAt: financeCollectionEntries.createdAt,
         employeeName: employees.name,
         employeeDesignation: employees.designation,
@@ -549,14 +553,27 @@ export const salesRouter = createTRPCRouter({
         collectionConditions = sql`1=0`;
       }
       
-      const results = await db.select({
+      // Approved totals (verified money) — used for "totalCollected" displayed to users
+      const approvedResults = await db.select({
         financeType: financeCollectionEntries.financeType,
         totalAmount: sql<number>`SUM(${financeCollectionEntries.amountCollected})`.as('total_amount'),
         entryCount: sql<number>`COUNT(*)`.as('entry_count'),
       })
       .from(financeCollectionEntries)
-      .where(collectionConditions)
+      .where(and(collectionConditions, eq(financeCollectionEntries.approvalStatus, 'approved')))
       .groupBy(financeCollectionEntries.financeType);
+      
+      // Pending totals (awaiting manager review) — exposed separately for UI breakdown
+      const pendingResults = await db.select({
+        financeType: financeCollectionEntries.financeType,
+        totalAmount: sql<number>`SUM(${financeCollectionEntries.amountCollected})`.as('total_amount'),
+        entryCount: sql<number>`COUNT(*)`.as('entry_count'),
+      })
+      .from(financeCollectionEntries)
+      .where(and(collectionConditions, eq(financeCollectionEntries.approvalStatus, 'pending')))
+      .groupBy(financeCollectionEntries.financeType);
+      
+      const results = approvedResults;
       
       let eventVisibilityCondition;
       if (isAdmin) {
@@ -590,16 +607,18 @@ export const salesRouter = createTRPCRouter({
                           (Number(targets.targetFinGsmPostpaid) || 0) + 
                           (Number(targets.targetFinRentBuilding) || 0);
       
-      const byType: Record<string, { totalCollected: number; entries: number; target: number }> = {
-        FIN_LC: { totalCollected: 0, entries: 0, target: Number(targets.targetFinLc) || 0 },
-        FIN_LL_FTTH: { totalCollected: 0, entries: 0, target: Number(targets.targetFinLlFtth) || 0 },
-        FIN_TOWER: { totalCollected: 0, entries: 0, target: Number(targets.targetFinTower) || 0 },
-        FIN_GSM_POSTPAID: { totalCollected: 0, entries: 0, target: Number(targets.targetFinGsmPostpaid) || 0 },
-        FIN_RENT_BUILDING: { totalCollected: 0, entries: 0, target: Number(targets.targetFinRentBuilding) || 0 },
+      const byType: Record<string, { totalCollected: number; entries: number; target: number; pendingAmount: number; pendingEntries: number }> = {
+        FIN_LC: { totalCollected: 0, entries: 0, target: Number(targets.targetFinLc) || 0, pendingAmount: 0, pendingEntries: 0 },
+        FIN_LL_FTTH: { totalCollected: 0, entries: 0, target: Number(targets.targetFinLlFtth) || 0, pendingAmount: 0, pendingEntries: 0 },
+        FIN_TOWER: { totalCollected: 0, entries: 0, target: Number(targets.targetFinTower) || 0, pendingAmount: 0, pendingEntries: 0 },
+        FIN_GSM_POSTPAID: { totalCollected: 0, entries: 0, target: Number(targets.targetFinGsmPostpaid) || 0, pendingAmount: 0, pendingEntries: 0 },
+        FIN_RENT_BUILDING: { totalCollected: 0, entries: 0, target: Number(targets.targetFinRentBuilding) || 0, pendingAmount: 0, pendingEntries: 0 },
       };
       
       let totalCollected = 0;
       let totalEntries = 0;
+      let totalPending = 0;
+      let totalPendingEntries = 0;
       
       for (const r of results) {
         if (byType[r.financeType]) {
@@ -610,7 +629,16 @@ export const salesRouter = createTRPCRouter({
         totalEntries += Number(r.entryCount) || 0;
       }
       
-      return { totalCollected, totalTarget, entries: totalEntries, byType };
+      for (const r of pendingResults) {
+        if (byType[r.financeType]) {
+          byType[r.financeType].pendingAmount = Number(r.totalAmount) || 0;
+          byType[r.financeType].pendingEntries = Number(r.entryCount) || 0;
+        }
+        totalPending += Number(r.totalAmount) || 0;
+        totalPendingEntries += Number(r.entryCount) || 0;
+      }
+      
+      return { totalCollected, totalTarget, entries: totalEntries, byType, totalPending, totalPendingEntries };
     }),
 
   getSalesAnalytics: publicProcedure

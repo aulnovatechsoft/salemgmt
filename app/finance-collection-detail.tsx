@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { ArrowLeft, IndianRupee, User, MapPin, Calendar, TrendingUp, Building, AlertTriangle, RefreshCw, CreditCard, FileText, Phone } from 'lucide-react-native';
+import { ArrowLeft, IndianRupee, User, MapPin, Calendar, TrendingUp, Building, AlertTriangle, RefreshCw, CreditCard, FileText, Phone, CheckCircle2, Clock, XCircle } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
@@ -49,8 +49,16 @@ export default function FinanceCollectionDetailScreen() {
     return {
       collected: summaryData?.totalCollected || 0,
       entries: summaryData?.entries || 0,
+      pending: (summaryData as any)?.totalPending || 0,
+      pendingEntries: (summaryData as any)?.totalPendingEntries || 0,
     };
   }, [summaryData]);
+
+  const getStatusBadge = (status?: string) => {
+    if (status === 'approved') return { label: 'Approved', color: '#2E7D32', bg: '#E8F5E9', Icon: CheckCircle2 };
+    if (status === 'rejected') return { label: 'Rejected', color: '#C62828', bg: '#FFEBEE', Icon: XCircle };
+    return { label: 'Pending Review', color: '#F57C00', bg: '#FFF3E0', Icon: Clock };
+  };
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -112,7 +120,15 @@ export default function FinanceCollectionDetailScreen() {
                 <IndianRupee size={24} color="#00838F" />
               </View>
               <Text style={styles.summaryValue}>{formatAmount(totals.collected)}</Text>
-              <Text style={styles.summaryLabel}>Total Collected</Text>
+              <Text style={styles.summaryLabel}>Approved</Text>
+            </View>
+            <View style={styles.summaryDivider} />
+            <View style={styles.summaryItem}>
+              <View style={[styles.summaryIcon, { backgroundColor: '#FFF3E0' }]}>
+                <Clock size={24} color="#F57C00" />
+              </View>
+              <Text style={styles.summaryValue}>{formatAmount(totals.pending)}</Text>
+              <Text style={styles.summaryLabel}>Pending ({totals.pendingEntries})</Text>
             </View>
             <View style={styles.summaryDivider} />
             <View style={styles.summaryItem}>
@@ -211,10 +227,22 @@ export default function FinanceCollectionDetailScreen() {
                         </Text>
                       </View>
                     </View>
-                    <View style={[styles.typeBadge, { backgroundColor: typeConfig.bg }]}>
-                      <Text style={[styles.typeText, { color: typeConfig.color }]}>
-                        {typeConfig.label}
-                      </Text>
+                    <View style={{ alignItems: 'flex-end', gap: 6 }}>
+                      <View style={[styles.typeBadge, { backgroundColor: typeConfig.bg }]}>
+                        <Text style={[styles.typeText, { color: typeConfig.color }]}>
+                          {typeConfig.label}
+                        </Text>
+                      </View>
+                      {(() => {
+                        const status = (entry as any).approvalStatus;
+                        const sb = getStatusBadge(status);
+                        return (
+                          <View style={[styles.statusBadge, { backgroundColor: sb.bg }]}>
+                            <sb.Icon size={12} color={sb.color} />
+                            <Text style={[styles.statusText, { color: sb.color }]}>{sb.label}</Text>
+                          </View>
+                        );
+                      })()}
                     </View>
                   </View>
 
@@ -575,6 +603,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.light.text,
     lineHeight: 20,
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  statusText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
   bottomSpacer: {
     height: 40,

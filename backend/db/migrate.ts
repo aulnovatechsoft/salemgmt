@@ -560,6 +560,25 @@ async function createTables() {
     await sql`CREATE INDEX IF NOT EXISTS idx_employee_master_reporting ON employee_master(reporting_pers_no);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_employee_master_linked ON employee_master(linked_employee_id);`;
 
+    // Widen finance amount columns to bigint to safely hold INR amounts > 2.1B
+    // (PostgreSQL ALTER ... TYPE BIGINT is a safe widening for INTEGER values)
+    try {
+      await sql`ALTER TABLE events ALTER COLUMN target_fin_lc TYPE BIGINT`;
+      await sql`ALTER TABLE events ALTER COLUMN target_fin_ll_ftth TYPE BIGINT`;
+      await sql`ALTER TABLE events ALTER COLUMN target_fin_tower TYPE BIGINT`;
+      await sql`ALTER TABLE events ALTER COLUMN target_fin_gsm_postpaid TYPE BIGINT`;
+      await sql`ALTER TABLE events ALTER COLUMN target_fin_rent_building TYPE BIGINT`;
+      await sql`ALTER TABLE events ALTER COLUMN fin_lc_collected TYPE BIGINT`;
+      await sql`ALTER TABLE events ALTER COLUMN fin_ll_ftth_collected TYPE BIGINT`;
+      await sql`ALTER TABLE events ALTER COLUMN fin_tower_collected TYPE BIGINT`;
+      await sql`ALTER TABLE events ALTER COLUMN fin_gsm_postpaid_collected TYPE BIGINT`;
+      await sql`ALTER TABLE events ALTER COLUMN fin_rent_building_collected TYPE BIGINT`;
+      await sql`ALTER TABLE finance_collection_entries ALTER COLUMN amount_collected TYPE BIGINT`;
+      console.log("Finance amount columns widened to BIGINT");
+    } catch (e: any) {
+      console.log("Finance bigint migration skipped (may already be applied):", e?.message || e);
+    }
+
     console.log("All tables created successfully!");
     await sql.end();
   } catch (error) {
