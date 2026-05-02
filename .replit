@@ -51,4 +51,4 @@ build = ["bun", "run", "bunx", "expo", "export", "--platform", "web"]
 
 [userenv.shared]
 BSNL_DATABASE_URL = "postgresql://salesmgmt:Bsnl%40123@117.251.72.195:5433/salesmgmt_bsnl?sslmode=disable"
-EXPO_PUBLIC_API_URL = "http://117.251.72.195"
+EXPO_PUBLIC_API_URL = ""
