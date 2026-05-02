@@ -5,6 +5,19 @@ import { useState, useCallback, useMemo } from 'react';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/contexts/auth';
+import {
+  DonutChart,
+  MultiLineChart,
+  GroupedBarChart,
+  StackedBarChart,
+  ChartLegend,
+  formatIndianNumber,
+} from '@/components/SalesCharts';
+
+const SIM_COLOR = '#1976D2';
+const FTTH_COLOR = '#388E3C';
+const SIM_ACT_COLOR = '#64B5F6';
+const FTTH_ACT_COLOR = '#81C784';
 
 type TabType = 'overview' | 'team' | 'trends';
 
@@ -73,16 +86,13 @@ export default function SalesScreen() {
     setRefreshing(false);
   }, [analyticsQuery, teamQuery, trendsQuery]);
 
-  const formatNumber = (num: number) => {
-    if (num >= 1000) {
-      return (num / 1000).toFixed(1) + 'K';
-    }
-    return num.toString();
-  };
+  const formatNumber = (num: number) => formatIndianNumber(num);
 
   const getInitials = (name: string) => {
-    return name
-      .split(' ')
+    if (!name) return '?';
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return '?';
+    return parts
       .map(n => n[0])
       .join('')
       .toUpperCase()
@@ -159,30 +169,89 @@ export default function SalesScreen() {
           <View style={styles.summaryGrid}>
             <View style={[styles.summaryCard, { backgroundColor: '#E3F2FD' }]}>
               <View style={styles.summaryIconWrapper}>
-                <Smartphone size={20} color="#1976D2" />
+                <Smartphone size={20} color={SIM_COLOR} />
               </View>
               <Text style={styles.summaryValue}>{formatNumber(totals.simsSold)}</Text>
               <Text style={styles.summaryLabel}>SIMs Sold</Text>
-              <View style={styles.activationBadge}>
-                <Text style={styles.activationText}>{totals.simActivationRate}% activated</Text>
-              </View>
+              <Text style={styles.summarySubValue}>{formatNumber(totals.simsActivated)} activated</Text>
             </View>
             <View style={[styles.summaryCard, { backgroundColor: '#E8F5E9' }]}>
               <View style={styles.summaryIconWrapper}>
-                <Wifi size={20} color="#388E3C" />
+                <Wifi size={20} color={FTTH_COLOR} />
               </View>
               <Text style={styles.summaryValue}>{formatNumber(totals.ftthSold)}</Text>
               <Text style={styles.summaryLabel}>FTTH Sold</Text>
-              <View style={styles.activationBadge}>
-                <Text style={styles.activationText}>{totals.ftthActivationRate}% activated</Text>
-              </View>
+              <Text style={styles.summarySubValue}>{formatNumber(totals.ftthActivated)} activated</Text>
             </View>
           </View>
           <View style={styles.totalEntriesCard}>
             <Text style={styles.totalEntriesLabel}>Total Sales Entries</Text>
-            <Text style={styles.totalEntriesValue}>{totals.totalEntries}</Text>
+            <Text style={styles.totalEntriesValue}>{formatNumber(totals.totalEntries)}</Text>
           </View>
         </View>
+
+        {(totals.simsSold > 0 || totals.ftthSold > 0) && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Activation Rate</Text>
+            <View style={styles.donutRow}>
+              <View style={styles.donutCard}>
+                <DonutChart
+                  percent={totals.simsSold > 0 ? totals.simActivationRate : 0}
+                  color={SIM_COLOR}
+                  size={120}
+                  strokeWidth={14}
+                  centerLabel={totals.simsSold > 0 ? `${totals.simActivationRate}%` : '—'}
+                  centerSubLabel="SIM"
+                />
+                <Text style={styles.donutCardLabel}>
+                  {formatNumber(totals.simsActivated)} / {formatNumber(totals.simsSold)}
+                </Text>
+              </View>
+              <View style={styles.donutCard}>
+                <DonutChart
+                  percent={totals.ftthSold > 0 ? totals.ftthActivationRate : 0}
+                  color={FTTH_COLOR}
+                  size={120}
+                  strokeWidth={14}
+                  centerLabel={totals.ftthSold > 0 ? `${totals.ftthActivationRate}%` : '—'}
+                  centerSubLabel="FTTH"
+                />
+                <Text style={styles.donutCardLabel}>
+                  {formatNumber(totals.ftthActivated)} / {formatNumber(totals.ftthSold)}
+                </Text>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {byEmployee.length > 0 && (totals.simsSold > 0 || totals.ftthSold > 0) && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Top Performers (Sold vs Activated)</Text>
+            <View style={styles.chartCard}>
+              <ChartLegend
+                items={[
+                  { label: 'SIM Sold', color: SIM_COLOR },
+                  { label: 'SIM Activated', color: SIM_ACT_COLOR },
+                  { label: 'FTTH Sold', color: FTTH_COLOR },
+                  { label: 'FTTH Activated', color: FTTH_ACT_COLOR },
+                ]}
+              />
+              <GroupedBarChart
+                items={byEmployee.slice(0, 5).map(emp => ({
+                  label: emp.name,
+                  values: [
+                    { value: emp.simsSold, color: SIM_COLOR },
+                    { value: emp.simsActivated, color: SIM_ACT_COLOR },
+                    { value: emp.ftthSold, color: FTTH_COLOR },
+                    { value: emp.ftthActivated, color: FTTH_ACT_COLOR },
+                  ],
+                  trailing: formatIndianNumber(emp.simsSold + emp.ftthSold),
+                }))}
+                rowHeight={56}
+              />
+            </View>
+          </View>
+        )}
 
         {byEmployee.length > 0 && (
           <View style={styles.section}>
@@ -340,6 +409,31 @@ export default function SalesScreen() {
           </View>
         )}
 
+        {data.rankings.length > 0 && (data.grandTotal ?? 0) > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Contribution by Member (Top 10)</Text>
+            <View style={styles.chartCard}>
+              <ChartLegend
+                items={[
+                  { label: 'SIMs', color: SIM_COLOR },
+                  { label: 'FTTH', color: FTTH_COLOR },
+                ]}
+              />
+              <GroupedBarChart
+                items={data.rankings.slice(0, 10).map(m => ({
+                  label: `#${m.rank} ${m.name}`,
+                  values: [
+                    { value: m.simsSold, color: SIM_COLOR },
+                    { value: m.ftthSold, color: FTTH_COLOR },
+                  ],
+                  trailing: `${m.contribution ?? 0}%`,
+                }))}
+                rowHeight={40}
+              />
+            </View>
+          </View>
+        )}
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Team Rankings</Text>
           {data.rankings.map((member) => (
@@ -412,8 +506,40 @@ export default function SalesScreen() {
       );
     }
 
-    const maxSims = Math.max(...data.daily.map(d => d.simsSold), 1);
-    const maxFtth = Math.max(...data.daily.map(d => d.ftthSold), 1);
+    // Build a continuous date series across the full requested window so missing
+    // days render as zero (avoids misleading gaps and the prior `slice(-14)` bug
+    // that ignored the 30/90-day selection). Build keys from local date parts
+    // (NOT toISOString) so positive-offset timezones like IST don't shift the
+    // local day backwards by one when serialised to UTC.
+    const days = parseInt(dateRange);
+    const dailyMap = new Map(data.daily.map(d => [d.date, d]));
+    const toLocalKey = (d: Date) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+    const fullSeries: { date: string; simsSold: number; ftthSold: number; simsActivated: number; ftthActivated: number }[] = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    for (let i = days - 1; i >= 0; i--) {
+      const dt = new Date(today);
+      dt.setDate(dt.getDate() - i);
+      const key = toLocalKey(dt);
+      const found = dailyMap.get(key);
+      fullSeries.push({
+        date: key,
+        simsSold: Number(found?.simsSold) || 0,
+        ftthSold: Number(found?.ftthSold) || 0,
+        simsActivated: Number(found?.simsActivated) || 0,
+        ftthActivated: Number(found?.ftthActivated) || 0,
+      });
+    }
+    const labels = fullSeries.map(d => {
+      const [yy, mm, dd] = d.date.split('-').map(Number);
+      const local = new Date(yy, (mm || 1) - 1, dd || 1);
+      return local.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    });
 
     return (
       <ScrollView
@@ -442,65 +568,57 @@ export default function SalesScreen() {
             <Text style={styles.sectionTitle}>Summary</Text>
             <View style={styles.trendSummaryGrid}>
               <View style={styles.trendSummaryCard}>
-                <Text style={styles.trendSummaryValue}>{data.summary.totalSims}</Text>
+                <Text style={styles.trendSummaryValue}>{formatNumber(data.summary.totalSims)}</Text>
                 <Text style={styles.trendSummaryLabel}>Total SIMs</Text>
-                <Text style={styles.trendSummaryAvg}>Avg: {data.summary.avgDailySims}/day</Text>
+                <Text style={styles.trendSummaryAvg}>Avg: {formatNumber(data.summary.avgDailySims)}/day</Text>
               </View>
               <View style={styles.trendSummaryCard}>
-                <Text style={styles.trendSummaryValue}>{data.summary.totalFtth}</Text>
+                <Text style={styles.trendSummaryValue}>{formatNumber(data.summary.totalFtth)}</Text>
                 <Text style={styles.trendSummaryLabel}>Total FTTH</Text>
-                <Text style={styles.trendSummaryAvg}>Avg: {data.summary.avgDailyFtth}/day</Text>
+                <Text style={styles.trendSummaryAvg}>Avg: {formatNumber(data.summary.avgDailyFtth)}/day</Text>
               </View>
             </View>
           </View>
         )}
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Daily Sales</Text>
-          <View style={styles.chartLegend}>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: Colors.light.primary }]} />
-              <Text style={styles.legendText}>SIM</Text>
-            </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: '#388E3C' }]} />
-              <Text style={styles.legendText}>FTTH</Text>
-            </View>
+          <Text style={styles.sectionTitle}>Daily Sales Trend</Text>
+          <View style={styles.chartCard}>
+            <ChartLegend
+              items={[
+                { label: 'SIMs Sold', color: SIM_COLOR },
+                { label: 'FTTH Sold', color: FTTH_COLOR },
+              ]}
+            />
+            <MultiLineChart
+              labels={labels}
+              series={[
+                { label: 'SIMs Sold', color: SIM_COLOR, values: fullSeries.map(d => d.simsSold) },
+                { label: 'FTTH Sold', color: FTTH_COLOR, values: fullSeries.map(d => d.ftthSold) },
+              ]}
+              height={240}
+            />
           </View>
-          
-          {data.daily.slice(-14).map((day, index) => (
-            <View key={day.date} style={styles.dailyRow}>
-              <Text style={styles.dailyDate}>
-                {new Date(day.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-              </Text>
-              <View style={styles.dailyBars}>
-                <View style={styles.barContainer}>
-                  <View 
-                    style={[
-                      styles.bar, 
-                      { 
-                        width: `${(day.simsSold / maxSims) * 100}%`, 
-                        backgroundColor: Colors.light.primary 
-                      }
-                    ]} 
-                  />
-                  <Text style={styles.barValue}>{day.simsSold}</Text>
-                </View>
-                <View style={styles.barContainer}>
-                  <View 
-                    style={[
-                      styles.bar, 
-                      { 
-                        width: `${(day.ftthSold / maxFtth) * 100}%`, 
-                        backgroundColor: '#388E3C' 
-                      }
-                    ]} 
-                  />
-                  <Text style={styles.barValue}>{day.ftthSold}</Text>
-                </View>
-              </View>
-            </View>
-          ))}
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Daily Activations</Text>
+          <View style={styles.chartCard}>
+            <ChartLegend
+              items={[
+                { label: 'SIM Activated', color: SIM_ACT_COLOR },
+                { label: 'FTTH Activated', color: FTTH_ACT_COLOR },
+              ]}
+            />
+            <StackedBarChart
+              labels={labels}
+              series={[
+                { label: 'SIM Activated', color: SIM_ACT_COLOR, values: fullSeries.map(d => d.simsActivated) },
+                { label: 'FTTH Activated', color: FTTH_ACT_COLOR, values: fullSeries.map(d => d.ftthActivated) },
+              ]}
+              height={200}
+            />
+          </View>
         </View>
 
         <View style={{ height: 100 }} />
@@ -717,6 +835,35 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '600',
     color: Colors.light.text,
+  },
+  summarySubValue: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginTop: 6,
+  },
+  donutRow: {
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-around',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 8,
+  },
+  donutCard: {
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  donutCardLabel: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    fontWeight: '500',
+  },
+  chartCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 12,
   },
   section: {
     padding: 16,

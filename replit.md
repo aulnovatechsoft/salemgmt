@@ -326,6 +326,15 @@ The app runs on port 5000 with a combined frontend/backend server:
 - `bunx expo export --platform web`: Build web version
 - `bun run server.ts`: Start production server
 
+## Sales Reports (View Reports)
+- Entry point: `app/(tabs)/dashboard.tsx` "View Reports" button → `app/sales.tsx`.
+- Three tabs: Overview, Team, Trends. All tabs use SVG-based reusable charts in `components/SalesCharts.tsx` (DonutChart, MultiLineChart, GroupedBarChart, StackedBarChart, ChartLegend, formatIndianNumber). Built on existing `react-native-svg` 15.12.1 — no new dependency.
+- Overview: Sales Summary cards (raw activated counts, no misleading 100% badge), Activation Rate donuts (renders "—" when zero sold instead of false 0%), Top Performers grouped horizontal bar chart (Sold vs Activated × SIM/FTTH).
+- Trends: Continuous date series across the full 7/30/90-day window (fixes prior `slice(-14)` bug that ignored the selection); missing days render as 0. Date keys built from local date parts (NOT `toISOString()`) to avoid IST timezone shift. Multi-line area chart for sold; stacked bar chart for activations.
+- Team: Contribution-by-Member top-10 grouped horizontal bar chart with contribution % trailing label, plus existing rankings list.
+- Numbers formatted in Indian style (Cr / L / K) via `formatIndianNumber`.
+- Production-grade safety: chart primitives sanitize NaN/Infinity inputs (`safeNum`/`safeArr`), clamp percentages, guard divisors, and expose `accessibilityLabel` summaries for screen readers.
+
 ## Deployment
 Configured for autoscale deployment:
 - Build: Exports web version using Expo
