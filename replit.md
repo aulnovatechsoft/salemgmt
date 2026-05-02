@@ -326,14 +326,33 @@ The app runs on port 5000 with a combined frontend/backend server:
 - `bunx expo export --platform web`: Build web version
 - `bun run server.ts`: Start production server
 
-## Sales Reports (View Reports)
+## Reports (View Reports)
 - Entry point: `app/(tabs)/dashboard.tsx` "View Reports" button → `app/sales.tsx`.
-- Three tabs: Overview, Team, Trends. All tabs use SVG-based reusable charts in `components/SalesCharts.tsx` (DonutChart, MultiLineChart, GroupedBarChart, StackedBarChart, ChartLegend, formatIndianNumber). Built on existing `react-native-svg` 15.12.1 — no new dependency.
-- Overview: Sales Summary cards (raw activated counts, no misleading 100% badge), Activation Rate donuts (renders "—" when zero sold instead of false 0%), Top Performers grouped horizontal bar chart (Sold vs Activated × SIM/FTTH).
-- Trends: Continuous date series across the full 7/30/90-day window (fixes prior `slice(-14)` bug that ignored the selection); missing days render as 0. Date keys built from local date parts (NOT `toISOString()`) to avoid IST timezone shift. Multi-line area chart for sold; stacked bar chart for activations.
-- Team: Contribution-by-Member top-10 grouped horizontal bar chart with contribution % trailing label, plus existing rankings list.
-- Numbers formatted in Indian style (Cr / L / K) via `formatIndianNumber`.
-- Production-grade safety: chart primitives sanitize NaN/Infinity inputs (`safeNum`/`safeArr`), clamp percentages, guard divisors, and expose `accessibilityLabel` summaries for screen readers.
+- Top-level **Category selector** (S&M / O&M / Finance) above three sub-tabs (Overview / Team / Trends). Each category × tab pair queries its own tRPC procedure.
+- All charts are SVG-based primitives in `components/SalesCharts.tsx` (DonutChart, MultiLineChart, GroupedBarChart, StackedBarChart, ChartLegend, formatIndianNumber). Built on existing `react-native-svg` 15.12.1 — no new dependency.
+
+### S&M (Sales & Marketing) — `trpc.sales.getSalesAnalytics / getTeamPerformance / getSalesTrends`
+- Covers all four S&M sub-tasks: SIM, FTTH, **Lease Circuit (LC)**, and **EB**. Backend aggregations in `backend/trpc/routes/sales.ts` include `leaseSold` + `ebSold` in `totals`, `byEmployee`, `byEvent`, `daily`, `summary`, and ranking `orderBy`.
+- Overview: 4-card summary (SIM / FTTH / LC / EB), Activation-Rate donuts for SIM and FTTH (renders "—" when zero sold), Top Performers grouped bar across all 4 series.
+- Team: Contribution-by-Member top-10 grouped bar (4 series) + per-member breakdown rows.
+- Trends: 4-card summary, multi-line trend (SIM/FTTH/LC/EB), stacked bar for activations. Continuous date series across the full 7/30/90 window (fixes earlier `slice(-14)` bug); date keys built from local parts (NOT `toISOString()`) to avoid IST timezone shift; missing days render as 0.
+
+### O&M (Operations & Maintenance) — `trpc.sales.getOperationsAnalytics`
+- Aggregates `maintenance_entries` by `taskType` (BTS_DOWN / FTTH_DOWN / ROUTE_FAIL / OFC_FAIL) using `SUM(increment)`.
+- Overview: 4-card summary by task type, Top Performers grouped bar (per-type series), Top performer ranking list.
+- Team: Top-10 contribution grouped bar + full ranking list with per-type counts.
+- Trends: Multi-line and stacked-bar daily trend per task type with continuous date series.
+
+### Finance — `trpc.sales.getFinanceAnalytics`
+- Aggregates `finance_collection_entries` per `financeType` (FIN_LC / FIN_LL_FTTH / FIN_TOWER / FIN_GSM_POSTPAID / FIN_RENT_BUILDING). Daily series and per-collector totals filter to **approved-only** collections; status totals (approved/pending/rejected) span all entries in the window.
+- Overview: 3-card approval-status summary (₹ Approved / Pending / Rejected with entry counts), per-type approved horizontal bar (Indian-rupee formatted), Top Collectors list.
+- Team: Top-10 contribution grouped bar across 5 finance types + full ranking list with collector totals.
+- Trends: Multi-line and stacked-bar daily approved-collection trend per type.
+
+### Cross-Cutting
+- All new procedures reuse `getVisibleEmployeeIdsSubquery(persNo)` for hierarchical scope (admin sees all, others see self + subordinates). Optional `circle` filter applies on top.
+- Numbers formatted in Indian style (Cr / L / K) via `formatIndianNumber`; rupee values prefixed with ₹.
+- Production-grade safety: chart primitives sanitize NaN/Infinity inputs (`safeNum`/`safeArr`), clamp percentages, guard divisors, and expose `accessibilityLabel` summaries for screen readers. Each tab's tRPC query is `enabled` only when its category is active to avoid unnecessary fetches.
 
 ## Deployment
 Configured for autoscale deployment:
