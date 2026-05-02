@@ -219,7 +219,7 @@ export default function EventSalesScreen() {
   const categories = eventData?.category ? eventData.category.split(',').map((c: string) => c.trim()) : [];
   const hasSIM = categories.includes('SIM') && (!hasSpecificAssignment || myAssignedTypes.includes('SIM'));
   const hasFTTH = categories.includes('FTTH') && (!hasSpecificAssignment || myAssignedTypes.includes('FTTH'));
-  const hasLC = categories.includes('Lease Circuit') && (!hasSpecificAssignment || myAssignedTypes.includes('LEASE_CIRCUIT'));
+  const hasLC = (categories.includes('LEASE_CIRCUIT') || categories.includes('Lease Circuit')) && (!hasSpecificAssignment || myAssignedTypes.includes('LEASE_CIRCUIT'));
   const hasEB = categories.includes('EB') && (!hasSpecificAssignment || myAssignedTypes.includes('EB'));
   const hasMaintenanceCategories = categories.some((c: string) => 
     ['BTS-Down', 'Route-Fail', 'FTTH-Down', 'OFC-Fail'].includes(c)

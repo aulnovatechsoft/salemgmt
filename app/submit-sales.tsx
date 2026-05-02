@@ -235,7 +235,7 @@ export default function SubmitSalesScreen() {
   const selectedCategories = selectedEvent?.category ? selectedEvent.category.split(',').map((c: string) => c.trim()) : [];
   const hasSIM = selectedCategories.includes('SIM') && (!hasSpecificAssignment || myAssignedTypes.includes('SIM'));
   const hasFTTH = selectedCategories.includes('FTTH') && (!hasSpecificAssignment || myAssignedTypes.includes('FTTH'));
-  const hasLC = selectedCategories.includes('Lease Circuit') && (!hasSpecificAssignment || myAssignedTypes.includes('LEASE_CIRCUIT'));
+  const hasLC = (selectedCategories.includes('LEASE_CIRCUIT') || selectedCategories.includes('Lease Circuit')) && (!hasSpecificAssignment || myAssignedTypes.includes('LEASE_CIRCUIT'));
   const hasEB = selectedCategories.includes('EB') && (!hasSpecificAssignment || myAssignedTypes.includes('EB'));
 
   return (
