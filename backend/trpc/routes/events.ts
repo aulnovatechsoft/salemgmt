@@ -3016,7 +3016,7 @@ export const eventsRouter = createTRPCRouter({
       eventId: z.string().uuid(),
       employeeId: z.string().uuid(),
       financeType: z.string(),
-      amountCollected: z.number().min(1),
+      amountCollected: z.number().int('Amount must be an integer (paise/rupees)').min(1).max(Number.MAX_SAFE_INTEGER),
       paymentMode: z.string(),
       transactionReference: z.string().optional(),
       customerName: z.string().optional(),
@@ -3135,23 +3135,27 @@ export const eventsRouter = createTRPCRouter({
       const submitter = await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1);
       const submitterName = submitter[0]?.name || 'Unknown';
       
-      // Send notification to event creator for review
+      // Send notification to event creator for review (best-effort; never fail the mutation if this errors)
       if (event[0].assignedTo && event[0].assignedTo !== input.employeeId) {
-        await db.insert(notifications).values({
-          recipientId: event[0].assignedTo,
-          type: 'FINANCE_COLLECTION_SUBMITTED',
-          title: 'Finance Collection Pending Review',
-          message: `${submitterName} submitted ₹${input.amountCollected.toLocaleString('en-IN')} collection (${input.financeType.replace('FIN_', '').replace(/_/g, ' ')}) for "${event[0].name}". Review required.`,
-          entityType: 'EVENT',
-          entityId: input.eventId,
-          metadata: { 
-            entryId: result[0].id, 
-            financeType: input.financeType, 
-            amount: input.amountCollected,
-            submitterName,
-            paymentMode: input.paymentMode 
-          },
-        });
+        try {
+          await db.insert(notifications).values({
+            recipientId: event[0].assignedTo,
+            type: 'FINANCE_COLLECTION_SUBMITTED',
+            title: 'Finance Collection Pending Review',
+            message: `${submitterName} submitted ₹${input.amountCollected.toLocaleString('en-IN')} collection (${input.financeType.replace('FIN_', '').replace(/_/g, ' ')}) for "${event[0].name}". Review required.`,
+            entityType: 'EVENT',
+            entityId: input.eventId,
+            metadata: { 
+              entryId: result[0].id, 
+              financeType: input.financeType, 
+              amount: input.amountCollected,
+              submitterName,
+              paymentMode: input.paymentMode 
+            },
+          });
+        } catch (notifyErr: any) {
+          console.error(`[FINANCE] Notification insert failed for submit (entry ${result[0].id}):`, notifyErr?.message || notifyErr);
+        }
       }
       
       return result[0];
@@ -3210,9 +3214,13 @@ export const eventsRouter = createTRPCRouter({
             ));
         }
       } else {
+        // DGM/AGM: only events they own AND that are Finance category
         userEvents = await db.select({ id: events.id, name: events.name })
           .from(events)
-          .where(eq(events.assignedTo, input.reviewerId));
+          .where(and(
+            eq(events.taskCategory, 'Finance'),
+            eq(events.assignedTo, input.reviewerId),
+          ));
       }
       
       if (userEvents.length === 0) return [];
@@ -3324,16 +3332,20 @@ export const eventsRouter = createTRPCRouter({
         });
       });
       
-      // Notify the submitter (outside txn — non-critical)
-      await db.insert(notifications).values({
-        recipientId: entry[0].employeeId,
-        type: 'FINANCE_COLLECTION_APPROVED',
-        title: 'Collection Approved',
-        message: `Your ₹${entry[0].amountCollected.toLocaleString('en-IN')} collection for "${event[0].name}" has been approved.`,
-        entityType: 'EVENT',
-        entityId: entry[0].eventId,
-        metadata: { entryId: input.entryId, amount: entry[0].amountCollected },
-      });
+      // Notify the submitter (outside txn, best-effort — never undo the approval if notify fails)
+      try {
+        await db.insert(notifications).values({
+          recipientId: entry[0].employeeId,
+          type: 'FINANCE_COLLECTION_APPROVED',
+          title: 'Collection Approved',
+          message: `Your ₹${entry[0].amountCollected.toLocaleString('en-IN')} collection for "${event[0].name}" has been approved.`,
+          entityType: 'EVENT',
+          entityId: entry[0].eventId,
+          metadata: { entryId: input.entryId, amount: entry[0].amountCollected },
+        });
+      } catch (notifyErr: any) {
+        console.error(`[FINANCE] Notification insert failed for approval (entry ${input.entryId}):`, notifyErr?.message || notifyErr);
+      }
       
       return { success: true };
     }),
@@ -3393,16 +3405,20 @@ export const eventsRouter = createTRPCRouter({
         });
       });
       
-      // Notify the submitter
-      await db.insert(notifications).values({
-        recipientId: entry[0].employeeId,
-        type: 'FINANCE_COLLECTION_REJECTED',
-        title: 'Collection Rejected',
-        message: `Your ₹${entry[0].amountCollected.toLocaleString('en-IN')} collection for "${event[0].name}" was rejected. Reason: ${input.remarks}`,
-        entityType: 'EVENT',
-        entityId: entry[0].eventId,
-        metadata: { entryId: input.entryId, amount: entry[0].amountCollected, reason: input.remarks },
-      });
+      // Notify the submitter (best-effort; never undo the rejection if notify fails)
+      try {
+        await db.insert(notifications).values({
+          recipientId: entry[0].employeeId,
+          type: 'FINANCE_COLLECTION_REJECTED',
+          title: 'Collection Rejected',
+          message: `Your ₹${entry[0].amountCollected.toLocaleString('en-IN')} collection for "${event[0].name}" was rejected. Reason: ${input.remarks}`,
+          entityType: 'EVENT',
+          entityId: entry[0].eventId,
+          metadata: { entryId: input.entryId, amount: entry[0].amountCollected, reason: input.remarks },
+        });
+      } catch (notifyErr: any) {
+        console.error(`[FINANCE] Notification insert failed for rejection (entry ${input.entryId}):`, notifyErr?.message || notifyErr);
+      }
       
       return { success: true };
     }),

@@ -561,23 +561,34 @@ async function createTables() {
     await sql`CREATE INDEX IF NOT EXISTS idx_employee_master_linked ON employee_master(linked_employee_id);`;
 
     // Widen finance amount columns to bigint to safely hold INR amounts > 2.1B
-    // (PostgreSQL ALTER ... TYPE BIGINT is a safe widening for INTEGER values)
-    try {
-      await sql`ALTER TABLE events ALTER COLUMN target_fin_lc TYPE BIGINT`;
-      await sql`ALTER TABLE events ALTER COLUMN target_fin_ll_ftth TYPE BIGINT`;
-      await sql`ALTER TABLE events ALTER COLUMN target_fin_tower TYPE BIGINT`;
-      await sql`ALTER TABLE events ALTER COLUMN target_fin_gsm_postpaid TYPE BIGINT`;
-      await sql`ALTER TABLE events ALTER COLUMN target_fin_rent_building TYPE BIGINT`;
-      await sql`ALTER TABLE events ALTER COLUMN fin_lc_collected TYPE BIGINT`;
-      await sql`ALTER TABLE events ALTER COLUMN fin_ll_ftth_collected TYPE BIGINT`;
-      await sql`ALTER TABLE events ALTER COLUMN fin_tower_collected TYPE BIGINT`;
-      await sql`ALTER TABLE events ALTER COLUMN fin_gsm_postpaid_collected TYPE BIGINT`;
-      await sql`ALTER TABLE events ALTER COLUMN fin_rent_building_collected TYPE BIGINT`;
-      await sql`ALTER TABLE finance_collection_entries ALTER COLUMN amount_collected TYPE BIGINT`;
-      console.log("Finance amount columns widened to BIGINT");
-    } catch (e: any) {
-      console.log("Finance bigint migration skipped (may already be applied):", e?.message || e);
+    // (PostgreSQL ALTER ... TYPE BIGINT is a safe widening for INTEGER values).
+    // Each ALTER is wrapped in its own try/catch so a missing column on a fresh DB
+    // (where finance columns may not exist yet) doesn't abort the rest.
+    const financeBigintAlters: { table: string; column: string }[] = [
+      { table: 'events', column: 'target_fin_lc' },
+      { table: 'events', column: 'target_fin_ll_ftth' },
+      { table: 'events', column: 'target_fin_tower' },
+      { table: 'events', column: 'target_fin_gsm_postpaid' },
+      { table: 'events', column: 'target_fin_rent_building' },
+      { table: 'events', column: 'fin_lc_collected' },
+      { table: 'events', column: 'fin_ll_ftth_collected' },
+      { table: 'events', column: 'fin_tower_collected' },
+      { table: 'events', column: 'fin_gsm_postpaid_collected' },
+      { table: 'events', column: 'fin_rent_building_collected' },
+      { table: 'finance_collection_entries', column: 'amount_collected' },
+    ];
+    let widened = 0;
+    let skipped = 0;
+    for (const { table, column } of financeBigintAlters) {
+      try {
+        await sql.unsafe(`ALTER TABLE ${table} ALTER COLUMN ${column} TYPE BIGINT`);
+        widened++;
+      } catch (e: any) {
+        skipped++;
+        console.log(`  - ${table}.${column}: skipped (${e?.message || e})`);
+      }
     }
+    console.log(`Finance bigint migration: ${widened} widened, ${skipped} skipped`);
 
     console.log("All tables created successfully!");
     await sql.end();

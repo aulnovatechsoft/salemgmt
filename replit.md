@@ -29,10 +29,12 @@ The 5 Finance subtasks (LC, LL/FTTH, Tower, GSM PostPaid, Rent of Building) foll
 - **Approve** (`approveFinanceCollection`): runs in a single DB transaction with two safeguards: (1) conditional `WHERE approval_status='pending'` so concurrent approvals can't double-claim, (2) SQL atomic `SET col = col + amount` so concurrent approvals on different entries can't lose increments.
 - **Reject** (`rejectFinanceCollection`): same conditional/atomic transaction pattern. No-op on event totals (since submit didn't add).
 - **Summary** (`sales.getFinanceSummary`): returns `totalCollected` (approved only), `totalPending`, `totalPendingEntries`, and per-type `byType[].pendingAmount`. Rejected entries excluded from totals.
-- **Pending review queue** (`getPendingFinanceCollections`): filters events by `taskCategory = 'Finance'` (literal value, not `LIKE 'FIN_%'`). CMD/ADMIN see all circles, GM/CGM see their circle, DGM/AGM see only their own events.
+- **Pending review queue** (`getPendingFinanceCollections`): filters events by `taskCategory = 'Finance'` (literal value, not `LIKE 'FIN_%'`). CMD/ADMIN see all circles, GM/CGM see their circle, DGM/AGM see only their own Finance events (the `taskCategory='Finance'` filter is applied to **every** branch — top-mgmt and DGM/AGM alike — so non-Finance events never leak into the review queue).
+- **Notification resilience**: every `notifications.insert` for finance submit/approve/reject is wrapped in `try/catch` and runs **outside** the core transaction. Notification failures are logged but never undo a committed approval/rejection or fail the API call to the user.
+- **Input hardening**: `amountCollected` is `z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)` to reject floats, zero/negative amounts, and values that would lose precision before BIGINT write.
 - **Auth roles allowed to review**: CMD, ADMIN, GM, CGM, DGM, AGM (frontend `MANAGEMENT_ROLES` and backend gates kept in sync).
 - **Amount precision**: `amount_collected`, `target_fin_*`, `fin_*_collected` are PostgreSQL `BIGINT` (drizzle `bigint(mode:'number')`). Safe up to `Number.MAX_SAFE_INTEGER` (~9×10¹⁵ INR), needed because BSNL outstanding totals already exceed 35,720 Cr.
-- **Migration**: `backend/db/migrate.ts` includes idempotent `ALTER TABLE ... TYPE BIGINT` for fresh deploys.
+- **Migration**: `backend/db/migrate.ts` widens each finance column individually inside its own `try/catch`, so a missing column on a fresh DB doesn't abort the rest of the bigint migration; the loop reports `widened` vs `skipped` counts on startup.
 
 ## O&M Submission Flow (P1, architect-aligned)
 - `submitMaintenanceEntry` is the **only** server-side write path for positive O&M increments — `authedProcedure` with the same transaction pattern as `updateMemberTaskProgress` (lock event row + `.for('update')` on the target's assignment row).
