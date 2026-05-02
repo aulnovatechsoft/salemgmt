@@ -44,6 +44,11 @@ export default function EventSalesScreen() {
   const [showCustomerTypePicker, setShowCustomerTypePicker] = useState(false);
   const [isCapturingLocation, setIsCapturingLocation] = useState(false);
   const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
+  // Sticky flag: once a submission succeeds we keep the button disabled
+  // until the screen unmounts. This avoids the "did I press it or not?"
+  // flash on web (where Alert.alert ignores onPress callbacks) and on fast
+  // backends (where mutation.isPending flips back before navigation lands).
+  const [hasSubmitted, setHasSubmitted] = useState(false);
 
   const { data: eventData } = trpc.events.getEventWithDetails.useQuery(
     { id: eventId || '' },
@@ -52,13 +57,21 @@ export default function EventSalesScreen() {
 
   const submitSalesMutation = trpc.events.submitEventSales.useMutation({
     onSuccess: () => {
+      setHasSubmitted(true);
       utils.events.getEventWithDetails.invalidate();
       utils.events.getMyEvents.invalidate();
       utils.events.getAll.invalidate();
       utils.events.getMyAssignedTasks.invalidate();
+      // Navigate back unconditionally on the next tick so web (where
+      // Alert.alert ignores onPress) still returns to the previous screen.
+      // On native the Alert is non-blocking from JS's perspective, so the
+      // back navigation queues right behind the alert dismissal.
       Alert.alert('Success', 'Sales entry submitted successfully', [
         { text: 'OK', onPress: () => router.back() },
       ]);
+      setTimeout(() => {
+        if (router.canGoBack()) router.back();
+      }, 50);
     },
     onError: (error) => {
       Alert.alert('Error', error.message || 'Failed to submit sales entry');
@@ -688,14 +701,20 @@ export default function EventSalesScreen() {
           <TouchableOpacity 
             style={[
               styles.submitButton,
-              (submitSalesMutation.isPending || isUploadingPhotos || photos.length === 0 || !currentLocation) && styles.submitButtonDisabled,
+              (hasSubmitted || submitSalesMutation.isPending || isUploadingPhotos || photos.length === 0 || !currentLocation) && styles.submitButtonDisabled,
             ]}
             onPress={handleSubmit}
-            disabled={submitSalesMutation.isPending || isUploadingPhotos || photos.length === 0 || !currentLocation}
+            disabled={hasSubmitted || submitSalesMutation.isPending || isUploadingPhotos || photos.length === 0 || !currentLocation}
           >
-            {isUploadingPhotos && <ActivityIndicator color="#fff" style={{ marginRight: 8 }} />}
+            {(isUploadingPhotos || submitSalesMutation.isPending) && <ActivityIndicator color="#fff" style={{ marginRight: 8 }} />}
             <Text style={styles.submitButtonText}>
-              {isUploadingPhotos ? 'Uploading Photos...' : submitSalesMutation.isPending ? 'Submitting...' : 'Submit Sales Entry'}
+              {hasSubmitted
+                ? 'Submitted ✓'
+                : isUploadingPhotos
+                  ? 'Uploading Photos...'
+                  : submitSalesMutation.isPending
+                    ? 'Submitting...'
+                    : 'Submit Sales Entry'}
             </Text>
           </TouchableOpacity>
         </View>

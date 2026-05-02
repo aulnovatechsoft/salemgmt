@@ -42,6 +42,11 @@ export default function SubmitMaintenanceScreen() {
   const [currentLocation, setCurrentLocation] = useState<{ latitude: string; longitude: string } | null>(null);
   const [isCapturingLocation, setIsCapturingLocation] = useState(false);
   const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
+  // Sticky flag: once submission succeeds we keep the button disabled until
+  // navigation. Avoids the "did I press it?" flash on web where Alert.alert
+  // ignores onPress callbacks, and on fast networks where isPending flips
+  // back before router.back() resolves.
+  const [hasSubmitted, setHasSubmitted] = useState(false);
 
   const isValidTaskType = taskType === 'BTS_DOWN' || taskType === 'FTTH_DOWN' || taskType === 'ROUTE_FAIL' || taskType === 'OFC_FAIL';
 
@@ -52,6 +57,7 @@ export default function SubmitMaintenanceScreen() {
 
   const submitMutation = trpc.events.submitMaintenanceEntry.useMutation({
     onSuccess: (res) => {
+      setHasSubmitted(true);
       utils.events.getEventWithDetails.invalidate();
       utils.events.getMyEvents.invalidate();
       utils.events.getAll.invalidate();
@@ -60,6 +66,12 @@ export default function SubmitMaintenanceScreen() {
       Alert.alert('Submitted', `Maintenance entry recorded.${warn}`, [
         { text: 'OK', onPress: () => router.back() },
       ]);
+      // Web fallback: Alert.alert ignores onPress on the web, so navigate
+      // back ourselves on the next tick. On native the Alert is non-blocking
+      // and this just queues right behind the user's OK tap.
+      setTimeout(() => {
+        if (router.canGoBack()) router.back();
+      }, 50);
     },
     onError: (error) => {
       Alert.alert('Error', error.message || 'Failed to submit maintenance entry');
@@ -359,14 +371,20 @@ export default function SubmitMaintenanceScreen() {
           <TouchableOpacity
             style={[
               styles.submitButton,
-              (submitMutation.isPending || isUploadingPhotos || photos.length === 0 || !currentLocation || !siteId.trim()) && styles.submitButtonDisabled,
+              (hasSubmitted || submitMutation.isPending || isUploadingPhotos || photos.length === 0 || !currentLocation || !siteId.trim()) && styles.submitButtonDisabled,
             ]}
             onPress={handleSubmit}
-            disabled={submitMutation.isPending || isUploadingPhotos || photos.length === 0 || !currentLocation || !siteId.trim()}
+            disabled={hasSubmitted || submitMutation.isPending || isUploadingPhotos || photos.length === 0 || !currentLocation || !siteId.trim()}
           >
             {(isUploadingPhotos || submitMutation.isPending) && <ActivityIndicator color="#fff" style={{ marginRight: 8 }} />}
             <Text style={styles.submitButtonText}>
-              {isUploadingPhotos ? 'Uploading Photos…' : submitMutation.isPending ? 'Submitting…' : `Submit ${taskLabel} Entry`}
+              {hasSubmitted
+                ? 'Submitted ✓'
+                : isUploadingPhotos
+                  ? 'Uploading Photos…'
+                  : submitMutation.isPending
+                    ? 'Submitting…'
+                    : `Submit ${taskLabel} Entry`}
             </Text>
           </TouchableOpacity>
         </View>
