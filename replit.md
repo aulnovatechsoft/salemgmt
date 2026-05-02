@@ -234,10 +234,29 @@ The complete resource management flow tracks SIM and FTTH from circle inventory 
 - Only event creator can modify event's allocated resources
 
 ### 3. Team Distribution (Event Manager)
-- Event manager distributes allocated resources to team members
-- Each team member gets simTarget and ftthTarget in eventAssignments
-- System validates: sum of team targets ≤ event's allocated resources
-- UI shows "Available to Distribute" count in team assignment modal
+- Event manager distributes event targets to team members. One task can be
+  given to many members; auto-distribution covers all 8 task types
+  (SIM, FTTH, LEASE_CIRCUIT, EB, BTS_DOWN, FTTH_DOWN, ROUTE_FAIL, OFC_FAIL).
+- **Fair-split algorithm** (`distributeFairly` in `backend/trpc/routes/events.ts`):
+  for each task type, share = `floor(total / N)` with the first `total % N`
+  members receiving `+1`. Sum across the team always equals the event total
+  (no over-allocation from `Math.ceil` rounding, no under-allocation from
+  `Math.floor` truncation), regardless of odd/even totals or odd/even team
+  size. Order is deterministic (sort by employeeId).
+- Each team-member row in `event_assignments` carries a target column per
+  task type plus an `assignedTaskTypes` array.
+- `events.assignTeamMember` validates each requested per-member target
+  against the corresponding `event.target*` (not the inventory `allocated*`),
+  so maintenance task types — which have no inventory — can also be
+  distributed.
+- `events.redistributeTargets` (creator/manager only) re-runs the fair split
+  over the current team. It clamps each member's new share UP to whatever
+  they have already sold/completed, then trims the resulting excess back
+  down from members with slack so the team total still equals the event
+  total. If sold/completed across the team genuinely exceeds the event
+  target, the leftover is returned in an `overflow` map and audit-logged.
+  Wrapped in a transaction with `SELECT … FOR UPDATE` on the event row so
+  concurrent assigns can't race.
 
 ### 4. Sales Entry (Team Members)
 - Team members record sales via submit sales entry

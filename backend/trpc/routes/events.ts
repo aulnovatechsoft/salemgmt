@@ -16,6 +16,30 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
 }
+
+/**
+ * Fair integer distribution: split `total` across `count` recipients so the
+ * shares sum exactly to `total`. The first `total % count` recipients get
+ * `floor(total/count) + 1`; the rest get `floor(total/count)`.
+ *
+ * Examples:
+ *   distributeFairly(10, 3)  -> [4, 3, 3]      (sum 10)
+ *   distributeFairly(10, 4)  -> [3, 3, 2, 2]   (sum 10)
+ *   distributeFairly(7, 4)   -> [2, 2, 2, 1]   (sum 7)
+ *   distributeFairly(0, 5)   -> [0, 0, 0, 0, 0]
+ *   distributeFairly(5, 0)   -> []  (caller must guard)
+ *
+ * Negative or non-integer totals are clamped to a non-negative integer.
+ */
+function distributeFairly(total: number, count: number): number[] {
+  if (!Number.isFinite(count) || count <= 0) return [];
+  const safeTotal = Math.max(0, Math.floor(Number.isFinite(total) ? total : 0));
+  const base = Math.floor(safeTotal / count);
+  const remainder = safeTotal % count;
+  const out = new Array<number>(count);
+  for (let i = 0; i < count; i++) out[i] = i < remainder ? base + 1 : base;
+  return out;
+}
 import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations, financeCollectionEntries, notifications, maintenanceEntries, simSaleLines, ftthSaleLines, lcSaleLines, ebSaleLines } from "@/backend/db";
 import { 
   notifyEventAssignment, 
@@ -970,57 +994,100 @@ export const eventsRouter = createTRPCRouter({
 
       if (input.teamAssignments) {
         try {
-          const assignments = JSON.parse(input.teamAssignments) as Array<{
+          const rawAssignments = JSON.parse(input.teamAssignments) as Array<{
             employeePurseId: string;
             employeeName: string;
             linkedEmployeeId: string | null;
             taskIds: string[];
           }>;
-          
-          
-          for (const assignment of assignments) {
-            const hasSim = assignment.taskIds.includes('SIM');
-            const hasFtth = assignment.taskIds.includes('FTTH');
-            const hasLease = assignment.taskIds.includes('LEASE_CIRCUIT');
-            const hasEb = assignment.taskIds.includes('EB');
-            
-            let employeeId = assignment.linkedEmployeeId;
-            
+
+          // Resolve every assignment to a real employeeId first, then deduplicate
+          // and sort deterministically so the fair-split share order is stable
+          // and reproducible across reruns.
+          const resolved: Array<{ employeeId: string; taskIds: string[] }> = [];
+          const seen = new Set<string>();
+          for (const a of rawAssignments) {
+            let employeeId = a.linkedEmployeeId;
             if (!employeeId) {
               const masterRecord = await db.select().from(employeeMaster)
-                .where(eq(employeeMaster.persNo, assignment.employeePurseId));
+                .where(eq(employeeMaster.persNo, a.employeePurseId));
               employeeId = masterRecord[0]?.linkedEmployeeId || null;
             }
-            
-            if (employeeId) {
-              const existingAssignment = await db.select().from(eventAssignments)
-                .where(and(
-                  eq(eventAssignments.eventId, result[0].id),
-                  eq(eventAssignments.employeeId, employeeId)
-                ));
-              
-              const simTarget = hasSim ? Math.ceil(input.targetSim / (assignments.filter(a => a.taskIds.includes('SIM')).length || 1)) : 0;
-              const ftthTarget = hasFtth ? Math.ceil(input.targetFtth / (assignments.filter(a => a.taskIds.includes('FTTH')).length || 1)) : 0;
-              const leaseTarget = hasLease ? Math.ceil((input.targetLease || 0) / (assignments.filter(a => a.taskIds.includes('LEASE_CIRCUIT')).length || 1)) : 0;
-              const ebTarget = hasEb ? Math.ceil((input.targetEb || 0) / (assignments.filter(a => a.taskIds.includes('EB')).length || 1)) : 0;
-              const assignedTaskTypes = assignment.taskIds;
-              
-              if (!existingAssignment[0]) {
-                await db.insert(eventAssignments).values({
-                  eventId: result[0].id,
-                  employeeId: employeeId,
-                  simTarget: simTarget,
-                  ftthTarget: ftthTarget,
-                  leaseTarget: leaseTarget,
-                  ebTarget: ebTarget,
-                  assignedTaskTypes: assignedTaskTypes,
-                  assignedBy: input.createdBy,
-                });
-              } else {
-                await db.update(eventAssignments)
-                  .set({ simTarget, ftthTarget, leaseTarget, ebTarget, assignedTaskTypes, updatedAt: new Date() })
-                  .where(eq(eventAssignments.id, existingAssignment[0].id));
-              }
+            if (!employeeId || seen.has(employeeId)) continue;
+            seen.add(employeeId);
+            resolved.push({ employeeId, taskIds: Array.from(new Set(a.taskIds)) });
+          }
+          resolved.sort((x, y) => x.employeeId.localeCompare(y.employeeId));
+
+          // Build per-task-type assignee lists and fair shares so each task's
+          // shares sum exactly to the event's target (no over- or
+          // under-allocation regardless of odd/even totals or team sizes).
+          type TaskKey = 'SIM' | 'FTTH' | 'LEASE_CIRCUIT' | 'EB' | 'BTS_DOWN' | 'FTTH_DOWN' | 'ROUTE_FAIL' | 'OFC_FAIL';
+          const TASK_TOTALS: Record<TaskKey, number> = {
+            SIM: input.targetSim,
+            FTTH: input.targetFtth,
+            LEASE_CIRCUIT: input.targetLease || 0,
+            EB: input.targetEb || 0,
+            BTS_DOWN: input.targetBtsDown || 0,
+            FTTH_DOWN: input.targetFtthDown || 0,
+            ROUTE_FAIL: input.targetRouteFail || 0,
+            OFC_FAIL: input.targetOfcFail || 0,
+          };
+          const TASK_KEYS: TaskKey[] = ['SIM', 'FTTH', 'LEASE_CIRCUIT', 'EB', 'BTS_DOWN', 'FTTH_DOWN', 'ROUTE_FAIL', 'OFC_FAIL'];
+
+          // For each task type: array of indices into `resolved` that have it.
+          const taskAssignees: Record<TaskKey, number[]> = {
+            SIM: [], FTTH: [], LEASE_CIRCUIT: [], EB: [],
+            BTS_DOWN: [], FTTH_DOWN: [], ROUTE_FAIL: [], OFC_FAIL: [],
+          };
+          resolved.forEach((r, idx) => {
+            for (const tk of TASK_KEYS) if (r.taskIds.includes(tk)) taskAssignees[tk].push(idx);
+          });
+
+          // Compute the share each member gets per task type.
+          const shares: Record<TaskKey, Map<number, number>> = {
+            SIM: new Map(), FTTH: new Map(), LEASE_CIRCUIT: new Map(), EB: new Map(),
+            BTS_DOWN: new Map(), FTTH_DOWN: new Map(), ROUTE_FAIL: new Map(), OFC_FAIL: new Map(),
+          };
+          for (const tk of TASK_KEYS) {
+            const idxs = taskAssignees[tk];
+            const split = distributeFairly(TASK_TOTALS[tk], idxs.length);
+            idxs.forEach((memberIdx, i) => shares[tk].set(memberIdx, split[i] ?? 0));
+          }
+
+          // Persist one row per resolved assignee. Targets for task types the
+          // member is NOT assigned to are 0 by default.
+          for (let i = 0; i < resolved.length; i++) {
+            const { employeeId, taskIds } = resolved[i];
+            const targets = {
+              simTarget: shares.SIM.get(i) ?? 0,
+              ftthTarget: shares.FTTH.get(i) ?? 0,
+              leaseTarget: shares.LEASE_CIRCUIT.get(i) ?? 0,
+              ebTarget: shares.EB.get(i) ?? 0,
+              btsDownTarget: shares.BTS_DOWN.get(i) ?? 0,
+              ftthDownTarget: shares.FTTH_DOWN.get(i) ?? 0,
+              routeFailTarget: shares.ROUTE_FAIL.get(i) ?? 0,
+              ofcFailTarget: shares.OFC_FAIL.get(i) ?? 0,
+            };
+
+            const existingAssignment = await db.select().from(eventAssignments)
+              .where(and(
+                eq(eventAssignments.eventId, result[0].id),
+                eq(eventAssignments.employeeId, employeeId)
+              ));
+
+            if (!existingAssignment[0]) {
+              await db.insert(eventAssignments).values({
+                eventId: result[0].id,
+                employeeId,
+                ...targets,
+                assignedTaskTypes: taskIds,
+                assignedBy: input.createdBy,
+              });
+            } else {
+              await db.update(eventAssignments)
+                .set({ ...targets, assignedTaskTypes: taskIds, updatedAt: new Date() })
+                .where(eq(eventAssignments.id, existingAssignment[0].id));
             }
           }
         } catch (e) {
@@ -1619,6 +1686,10 @@ export const eventsRouter = createTRPCRouter({
       ftthTarget: z.number().min(0),
       leaseTarget: z.number().min(0).optional(),
       ebTarget: z.number().min(0).optional(),
+      btsDownTarget: z.number().min(0).optional(),
+      ftthDownTarget: z.number().min(0).optional(),
+      routeFailTarget: z.number().min(0).optional(),
+      ofcFailTarget: z.number().min(0).optional(),
       assignedTaskTypes: z.array(z.string()).optional(),
       assignedBy: z.string().uuid(),
     }))
@@ -1629,6 +1700,10 @@ export const eventsRouter = createTRPCRouter({
       
       const leaseTarget = input.leaseTarget ?? 0;
       const ebTarget = input.ebTarget ?? 0;
+      const btsDownTarget = input.btsDownTarget ?? 0;
+      const ftthDownTarget = input.ftthDownTarget ?? 0;
+      const routeFailTarget = input.routeFailTarget ?? 0;
+      const ofcFailTarget = input.ofcFailTarget ?? 0;
       
       let assignedTaskTypes = input.assignedTaskTypes;
       if (!assignedTaskTypes) {
@@ -1637,6 +1712,10 @@ export const eventsRouter = createTRPCRouter({
         if (input.ftthTarget > 0) assignedTaskTypes.push('FTTH');
         if (leaseTarget > 0) assignedTaskTypes.push('LEASE_CIRCUIT');
         if (ebTarget > 0) assignedTaskTypes.push('EB');
+        if (btsDownTarget > 0) assignedTaskTypes.push('BTS_DOWN');
+        if (ftthDownTarget > 0) assignedTaskTypes.push('FTTH_DOWN');
+        if (routeFailTarget > 0) assignedTaskTypes.push('ROUTE_FAIL');
+        if (ofcFailTarget > 0) assignedTaskTypes.push('OFC_FAIL');
       }
       
       const allAssignments = await db.select().from(eventAssignments)
@@ -1645,36 +1724,32 @@ export const eventsRouter = createTRPCRouter({
       const existing = allAssignments.find(a => a.employeeId === input.employeeId);
       
       const otherAssignments = allAssignments.filter(a => a.employeeId !== input.employeeId);
-      const currentSimDistributed = otherAssignments.reduce((sum, a) => sum + a.simTarget, 0);
-      const currentFtthDistributed = otherAssignments.reduce((sum, a) => sum + a.ftthTarget, 0);
-      const currentLeaseDistributed = otherAssignments.reduce((sum, a) => sum + a.leaseTarget, 0);
-      const currentEbDistributed = otherAssignments.reduce((sum, a) => sum + a.ebTarget, 0);
-      
-      const newTotalSim = currentSimDistributed + input.simTarget;
-      const newTotalFtth = currentFtthDistributed + input.ftthTarget;
-      const newTotalLease = currentLeaseDistributed + leaseTarget;
-      const newTotalEb = currentEbDistributed + ebTarget;
-      
-      if (newTotalSim > event[0].allocatedSim) {
-        const available = event[0].allocatedSim - currentSimDistributed;
-        throw new Error(`Cannot assign ${input.simTarget} SIMs. Only ${available} SIMs available for distribution.`);
-      }
-      
-      if (newTotalFtth > event[0].allocatedFtth) {
-        const available = event[0].allocatedFtth - currentFtthDistributed;
-        throw new Error(`Cannot assign ${input.ftthTarget} FTTH. Only ${available} FTTH available for distribution.`);
-      }
-      
-      const maxLease = event[0].targetLease || 0;
-      if (maxLease > 0 && newTotalLease > maxLease) {
-        const available = maxLease - currentLeaseDistributed;
-        throw new Error(`Cannot assign ${leaseTarget} Lease Circuit. Only ${available} available for distribution.`);
-      }
-      
-      const maxEb = event[0].targetEb || 0;
-      if (maxEb > 0 && newTotalEb > maxEb) {
-        const available = maxEb - currentEbDistributed;
-        throw new Error(`Cannot assign ${ebTarget} EB. Only ${available} available for distribution.`);
+      const sumOther = (k: keyof typeof otherAssignments[number]) =>
+        otherAssignments.reduce((sum, a) => sum + (Number((a as any)[k]) || 0), 0);
+
+      // Validate each task target against the event's TARGET (not the
+      // resource allocation). Targets define how much work to do; allocations
+      // are inventory consumed during execution. Mixing them caused
+      // assignments to be silently capped or rejected at edit time.
+      const checks: Array<{ label: string; eventTotal: number; current: number; requested: number }> = [
+        { label: 'SIM',           eventTotal: event[0].targetSim,                current: sumOther('simTarget'),       requested: input.simTarget },
+        { label: 'FTTH',          eventTotal: event[0].targetFtth,               current: sumOther('ftthTarget'),      requested: input.ftthTarget },
+        { label: 'Lease Circuit', eventTotal: event[0].targetLease ?? 0,         current: sumOther('leaseTarget'),     requested: leaseTarget },
+        { label: 'EB',            eventTotal: event[0].targetEb ?? 0,            current: sumOther('ebTarget'),        requested: ebTarget },
+        { label: 'BTS-Down',      eventTotal: event[0].targetBtsDown ?? 0,       current: sumOther('btsDownTarget'),   requested: btsDownTarget },
+        { label: 'FTTH-Down',     eventTotal: event[0].targetFtthDown ?? 0,      current: sumOther('ftthDownTarget'),  requested: ftthDownTarget },
+        { label: 'Route-Fail',    eventTotal: event[0].targetRouteFail ?? 0,     current: sumOther('routeFailTarget'), requested: routeFailTarget },
+        { label: 'OFC-Fail',      eventTotal: event[0].targetOfcFail ?? 0,       current: sumOther('ofcFailTarget'),   requested: ofcFailTarget },
+      ];
+      for (const c of checks) {
+        if (c.requested === 0) continue;
+        if (c.eventTotal === 0) {
+          throw new Error(`Cannot assign ${c.requested} ${c.label}: event has no ${c.label} target set.`);
+        }
+        if (c.current + c.requested > c.eventTotal) {
+          const available = Math.max(0, c.eventTotal - c.current);
+          throw new Error(`Cannot assign ${c.requested} ${c.label}. Only ${available} ${c.label} available for distribution (event target ${c.eventTotal}, already distributed ${c.current}).`);
+        }
       }
       
       if (existing) {
@@ -1682,9 +1757,13 @@ export const eventsRouter = createTRPCRouter({
           .set({
             simTarget: input.simTarget,
             ftthTarget: input.ftthTarget,
-            leaseTarget: leaseTarget,
-            ebTarget: ebTarget,
-            assignedTaskTypes: assignedTaskTypes,
+            leaseTarget,
+            ebTarget,
+            btsDownTarget,
+            ftthDownTarget,
+            routeFailTarget,
+            ofcFailTarget,
+            assignedTaskTypes,
             updatedAt: new Date(),
           })
           .where(eq(eventAssignments.id, existing.id));
@@ -1694,9 +1773,13 @@ export const eventsRouter = createTRPCRouter({
           employeeId: input.employeeId,
           simTarget: input.simTarget,
           ftthTarget: input.ftthTarget,
-          leaseTarget: leaseTarget,
-          ebTarget: ebTarget,
-          assignedTaskTypes: assignedTaskTypes,
+          leaseTarget,
+          ebTarget,
+          btsDownTarget,
+          ftthDownTarget,
+          routeFailTarget,
+          ofcFailTarget,
+          assignedTaskTypes,
           assignedBy: input.assignedBy,
         });
         
@@ -1713,7 +1796,13 @@ export const eventsRouter = createTRPCRouter({
         entityType: 'EVENT',
         entityId: input.eventId,
         performedBy: input.assignedBy,
-        details: { employeeId: input.employeeId, simTarget: input.simTarget, ftthTarget: input.ftthTarget, leaseTarget, ebTarget, assignedTaskTypes },
+        details: {
+          employeeId: input.employeeId,
+          simTarget: input.simTarget, ftthTarget: input.ftthTarget,
+          leaseTarget, ebTarget,
+          btsDownTarget, ftthDownTarget, routeFailTarget, ofcFailTarget,
+          assignedTaskTypes,
+        },
       });
 
       // Send notification to assigned team member (only for new assignments)
@@ -1736,6 +1825,168 @@ export const eventsRouter = createTRPCRouter({
       }
 
       return { success: true };
+    }),
+
+  /**
+   * Re-balance targets across the current team using the same fair-split
+   * algorithm used at create time. Useful after team composition changes
+   * (members added/removed, task-type toggles changed, etc.) so the sum of
+   * per-member targets always matches the event total exactly.
+   *
+   * Only the event creator or assignedTo manager may run this. Sold/completed
+   * counters are preserved; only target columns are updated.
+   */
+  redistributeTargets: authedProcedure
+    .input(z.object({
+      eventId: z.string().uuid(),
+      performedBy: z.string().uuid(),
+    }))
+    .mutation(async ({ input }) => {
+      // Run inside a serializable-ish read+write window: SELECT FOR UPDATE on
+      // the event row blocks concurrent assignTeamMember / redistribute calls
+      // from racing on stale assignment state.
+      return await db.transaction(async (tx) => {
+        const eventRows = await tx.execute(
+          sql`SELECT * FROM ${events} WHERE ${events.id} = ${input.eventId} FOR UPDATE`
+        );
+        const eventRow = (eventRows as any).rows?.[0] ?? (eventRows as any)[0];
+        if (!eventRow) throw new Error('Event not found');
+
+        // Authorisation: creator or current assignedTo manager only.
+        if (input.performedBy !== eventRow.created_by && input.performedBy !== eventRow.assigned_to) {
+          throw new Error('Only the event creator or assigned manager can redistribute targets.');
+        }
+
+        const assignments = await tx.select().from(eventAssignments)
+          .where(eq(eventAssignments.eventId, input.eventId));
+
+        if (assignments.length === 0) {
+          return { success: true, updated: 0, overflow: {} as Record<string, number> };
+        }
+
+        // Deterministic order so re-running produces identical shares.
+        const ordered = [...assignments].sort((a, b) => a.employeeId.localeCompare(b.employeeId));
+
+        type TaskKey = 'SIM' | 'FTTH' | 'LEASE_CIRCUIT' | 'EB' | 'BTS_DOWN' | 'FTTH_DOWN' | 'ROUTE_FAIL' | 'OFC_FAIL';
+        const TASK_KEYS: TaskKey[] = ['SIM', 'FTTH', 'LEASE_CIRCUIT', 'EB', 'BTS_DOWN', 'FTTH_DOWN', 'ROUTE_FAIL', 'OFC_FAIL'];
+        const TASK_TOTALS: Record<TaskKey, number> = {
+          SIM:           Number(eventRow.target_sim ?? 0),
+          FTTH:          Number(eventRow.target_ftth ?? 0),
+          LEASE_CIRCUIT: Number(eventRow.target_lease ?? 0),
+          EB:            Number(eventRow.target_eb ?? 0),
+          BTS_DOWN:      Number(eventRow.target_bts_down ?? 0),
+          FTTH_DOWN:     Number(eventRow.target_ftth_down ?? 0),
+          ROUTE_FAIL:    Number(eventRow.target_route_fail ?? 0),
+          OFC_FAIL:      Number(eventRow.target_ofc_fail ?? 0),
+        };
+
+        // Member opts in to a task type if (a) it's in their assignedTaskTypes
+        // OR (b) they currently hold a non-zero target for it (legacy rows
+        // without assignedTaskTypes still honour their existing assignment).
+        const memberHas = (a: typeof ordered[number], tk: TaskKey): boolean => {
+          const tt = (a.assignedTaskTypes || []) as string[];
+          if (tt.includes(tk)) return true;
+          switch (tk) {
+            case 'SIM':           return a.simTarget > 0;
+            case 'FTTH':          return a.ftthTarget > 0;
+            case 'LEASE_CIRCUIT': return a.leaseTarget > 0;
+            case 'EB':            return a.ebTarget > 0;
+            case 'BTS_DOWN':      return a.btsDownTarget > 0;
+            case 'FTTH_DOWN':     return a.ftthDownTarget > 0;
+            case 'ROUTE_FAIL':    return a.routeFailTarget > 0;
+            case 'OFC_FAIL':      return a.ofcFailTarget > 0;
+          }
+        };
+
+        const soldOf = (a: typeof ordered[number], tk: TaskKey): number => {
+          switch (tk) {
+            case 'SIM':           return a.simSold;
+            case 'FTTH':          return a.ftthSold;
+            case 'LEASE_CIRCUIT': return a.leaseCompleted;
+            case 'EB':            return a.ebCompleted;
+            case 'BTS_DOWN':      return a.btsDownCompleted;
+            case 'FTTH_DOWN':     return a.ftthDownCompleted;
+            case 'ROUTE_FAIL':    return a.routeFailCompleted;
+            case 'OFC_FAIL':      return a.ofcFailCompleted;
+          }
+        };
+
+        // Final per-task per-member shares after fair-split, clamp-up to sold,
+        // and excess trimming from members with slack.
+        const shares: Record<TaskKey, Map<number, number>> = {
+          SIM: new Map(), FTTH: new Map(), LEASE_CIRCUIT: new Map(), EB: new Map(),
+          BTS_DOWN: new Map(), FTTH_DOWN: new Map(), ROUTE_FAIL: new Map(), OFC_FAIL: new Map(),
+        };
+        // Per-task remaining overflow we couldn't trim away (sold > event total).
+        const overflow: Record<string, number> = {};
+
+        for (const tk of TASK_KEYS) {
+          const idxs: number[] = [];
+          ordered.forEach((a, i) => { if (memberHas(a, tk)) idxs.push(i); });
+          if (idxs.length === 0) continue;
+
+          // Initial fair split summing to TASK_TOTALS[tk].
+          const initial = distributeFairly(TASK_TOTALS[tk], idxs.length);
+          // Per-member working share, clamped UP to their sold/completed floor.
+          const work = idxs.map((m, j) => Math.max(initial[j] ?? 0, soldOf(ordered[m], tk)));
+          let sum = work.reduce((s, v) => s + v, 0);
+          let excess = sum - TASK_TOTALS[tk];
+
+          // Trim excess from members whose share > floor (round-robin, -1 each
+          // pass) until we hit the event total or no slack remains.
+          if (excess > 0) {
+            let safety = excess + idxs.length; // bounded by slack pool size
+            while (excess > 0 && safety-- > 0) {
+              let trimmedThisPass = 0;
+              for (let j = 0; j < work.length && excess > 0; j++) {
+                const floor = soldOf(ordered[idxs[j]], tk);
+                if (work[j] > floor) {
+                  work[j] -= 1;
+                  excess -= 1;
+                  trimmedThisPass++;
+                }
+              }
+              if (trimmedThisPass === 0) break; // no member has slack
+            }
+            if (excess > 0) {
+              // Sold totals genuinely exceed the event target — surface to UI
+              // and audit log so the manager knows the goal was over-shot.
+              overflow[tk] = excess;
+            }
+          }
+
+          idxs.forEach((m, j) => shares[tk].set(m, work[j]));
+        }
+
+        let updated = 0;
+        for (let i = 0; i < ordered.length; i++) {
+          const a = ordered[i];
+          const newTargets = {
+            simTarget:       shares.SIM.get(i) ?? 0,
+            ftthTarget:      shares.FTTH.get(i) ?? 0,
+            leaseTarget:     shares.LEASE_CIRCUIT.get(i) ?? 0,
+            ebTarget:        shares.EB.get(i) ?? 0,
+            btsDownTarget:   shares.BTS_DOWN.get(i) ?? 0,
+            ftthDownTarget:  shares.FTTH_DOWN.get(i) ?? 0,
+            routeFailTarget: shares.ROUTE_FAIL.get(i) ?? 0,
+            ofcFailTarget:   shares.OFC_FAIL.get(i) ?? 0,
+          };
+          await tx.update(eventAssignments)
+            .set({ ...newTargets, updatedAt: new Date() })
+            .where(eq(eventAssignments.id, a.id));
+          updated++;
+        }
+
+        await tx.insert(auditLogs).values({
+          action: 'REDISTRIBUTE_TARGETS',
+          entityType: 'EVENT',
+          entityId: input.eventId,
+          performedBy: input.performedBy,
+          details: { teamSize: ordered.length, totals: TASK_TOTALS, overflow },
+        });
+
+        return { success: true, updated, overflow };
+      });
     }),
 
   removeTeamMember: publicProcedure
