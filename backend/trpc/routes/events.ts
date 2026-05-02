@@ -3220,259 +3220,333 @@ export const eventsRouter = createTRPCRouter({
       return result[0];
     }),
 
-  updateTaskProgress: publicProcedure
+  // Event-level progress (assignee posting their own work). Production-grade:
+  //   - authedProcedure: actor derived from session, never trusted from input
+  //   - SELECT ... FOR UPDATE on the event row to serialise concurrent +/- taps
+  //   - Typed errors instead of silent clamping, so the UI can explain what went wrong
+  //   - Audit log written inside the same transaction
+  updateTaskProgress: authedProcedure
     .input(z.object({
       eventId: z.string().uuid(),
       taskType: z.enum(['SIM', 'FTTH', 'EB', 'LEASE', 'BTS_DOWN', 'FTTH_DOWN', 'ROUTE_FAIL', 'OFC_FAIL']),
       increment: z.number().int().default(1),
-      updatedBy: z.string().uuid(),
+      // Legacy field — IGNORED on server; actor is derived from the session.
+      updatedBy: z.string().uuid().optional(),
     }))
-    .mutation(async ({ input }) => {
-      
-      const event = await db.select().from(events).where(eq(events.id, input.eventId));
-      if (!event[0]) throw new Error("Event not found");
-      
-      // Verify user is assigned to this task
-      const employee = await db.select().from(employees).where(eq(employees.id, input.updatedBy));
-      if (!employee[0]) throw new Error("Employee not found");
-      
-      const employeePersNo = employee[0].persNo;
-      const assignedTeam = (event[0].assignedTeam as string[]) || [];
-      
-      // Check if employee is in the assigned team (via persNo) or has an assignment record
-      const hasAssignment = await db.select().from(eventAssignments)
-        .where(and(
-          eq(eventAssignments.eventId, input.eventId),
-          eq(eventAssignments.employeeId, input.updatedBy)
-        ));
-      
-      const isInAssignedTeam = employeePersNo && assignedTeam.includes(employeePersNo);
-      const hasAssignmentRecord = hasAssignment.length > 0;
-      
-      if (!isInAssignedTeam && !hasAssignmentRecord) {
-        throw new Error("You are not assigned to this task. Only assigned team members can update progress.");
+    .mutation(async ({ ctx, input }) => {
+      const actorId = ctx.employeeId;
+
+      if (input.taskType === 'SIM' || input.taskType === 'FTTH') {
+        throw new Error("SIM and FTTH progress is tracked through sales submissions, not direct increments.");
       }
 
-      if (hasAssignmentRecord) {
-        const assignedTypes = (hasAssignment[0].assignedTaskTypes as string[]) || [];
-        if (assignedTypes.length > 0) {
-          const taskTypeToAssignedType: Record<string, string> = {
-            'SIM': 'SIM', 'FTTH': 'FTTH', 'EB': 'EB', 'LEASE': 'LEASE_CIRCUIT',
-            'BTS_DOWN': 'BTS_DOWN', 'FTTH_DOWN': 'FTTH_DOWN', 'ROUTE_FAIL': 'ROUTE_FAIL', 'OFC_FAIL': 'OFC_FAIL',
-          };
-          const requiredType = taskTypeToAssignedType[input.taskType];
-          if (requiredType && !assignedTypes.includes(requiredType)) {
-            throw new Error(`You are not assigned to ${input.taskType} tasks`);
+      const completedColMap: Record<string, string> = {
+        EB: 'ebCompleted', LEASE: 'leaseCompleted',
+        BTS_DOWN: 'btsDownCompleted', FTTH_DOWN: 'ftthDownCompleted',
+        ROUTE_FAIL: 'routeFailCompleted', OFC_FAIL: 'ofcFailCompleted',
+      };
+      const targetColMap: Record<string, string> = {
+        EB: 'targetEb', LEASE: 'targetLease',
+        BTS_DOWN: 'targetBtsDown', FTTH_DOWN: 'targetFtthDown',
+        ROUTE_FAIL: 'targetRouteFail', OFC_FAIL: 'targetOfcFail',
+      };
+      const eventCompletedSnake: Record<string, string> = {
+        ebCompleted: 'eb_completed', leaseCompleted: 'lease_completed',
+        btsDownCompleted: 'bts_down_completed', ftthDownCompleted: 'ftth_down_completed',
+        routeFailCompleted: 'route_fail_completed', ofcFailCompleted: 'ofc_fail_completed',
+      };
+      const eventTargetSnake: Record<string, string> = {
+        targetEb: 'target_eb', targetLease: 'target_lease',
+        targetBtsDown: 'target_bts_down', targetFtthDown: 'target_ftth_down',
+        targetRouteFail: 'target_route_fail', targetOfcFail: 'target_ofc_fail',
+      };
+
+      const completedColumn = completedColMap[input.taskType];
+      const targetColumn = targetColMap[input.taskType];
+      if (!completedColumn || !targetColumn) throw new Error("Invalid task type");
+
+      return await db.transaction(async (tx) => {
+        // Lock the event row first — this serialises every concurrent
+        // updateTaskProgress / updateMemberTaskProgress / redistributeTargets
+        // call against the same event so the read-modify-write window is safe.
+        const eventRows = await tx.execute(
+          sql`SELECT * FROM ${events} WHERE ${events.id} = ${input.eventId} FOR UPDATE`
+        );
+        const eventRow = (eventRows as any).rows?.[0] ?? (eventRows as any)[0];
+        if (!eventRow) throw new Error("Event not found");
+
+        if (eventRow.status === 'completed' || eventRow.status === 'cancelled') {
+          throw new Error(`Cannot update progress on a ${eventRow.status} event.`);
+        }
+
+        const [actor] = await tx.select().from(employees).where(eq(employees.id, actorId));
+        if (!actor) throw new Error("Employee not found");
+
+        const assignedTeam = (eventRow.assigned_team || []) as string[];
+        const [assignmentRow] = await tx.select().from(eventAssignments)
+          .where(and(
+            eq(eventAssignments.eventId, input.eventId),
+            eq(eventAssignments.employeeId, actorId)
+          ));
+
+        const isInAssignedTeam = !!actor.persNo && assignedTeam.includes(actor.persNo);
+        const hasAssignmentRecord = !!assignmentRow;
+        if (!isInAssignedTeam && !hasAssignmentRecord) {
+          throw new Error("You are not assigned to this task. Only assigned team members can update progress.");
+        }
+
+        if (hasAssignmentRecord) {
+          const assignedTypes = (assignmentRow.assignedTaskTypes as string[]) || [];
+          if (assignedTypes.length > 0) {
+            const taskTypeToAssignedType: Record<string, string> = {
+              EB: 'EB', LEASE: 'LEASE_CIRCUIT',
+              BTS_DOWN: 'BTS_DOWN', FTTH_DOWN: 'FTTH_DOWN',
+              ROUTE_FAIL: 'ROUTE_FAIL', OFC_FAIL: 'OFC_FAIL',
+            };
+            const requiredType = taskTypeToAssignedType[input.taskType];
+            if (requiredType && !assignedTypes.includes(requiredType)) {
+              throw new Error(`You are not assigned to ${input.taskType} tasks`);
+            }
           }
         }
-      }
-      
-      const columnMap: Record<string, keyof typeof events> = {
-        'EB': 'ebCompleted',
-        'LEASE': 'leaseCompleted',
-        'BTS_DOWN': 'btsDownCompleted',
-        'FTTH_DOWN': 'ftthDownCompleted',
-        'ROUTE_FAIL': 'routeFailCompleted',
-        'OFC_FAIL': 'ofcFailCompleted',
-      };
-      
-      const targetMap: Record<string, keyof typeof events> = {
-        'EB': 'targetEb',
-        'LEASE': 'targetLease',
-        'BTS_DOWN': 'targetBtsDown',
-        'FTTH_DOWN': 'targetFtthDown',
-        'ROUTE_FAIL': 'targetRouteFail',
-        'OFC_FAIL': 'targetOfcFail',
-      };
-      
-      if (input.taskType === 'SIM' || input.taskType === 'FTTH') {
-        throw new Error("SIM and FTTH progress is tracked through sales entries");
-      }
-      
-      const completedColumn = columnMap[input.taskType];
-      const targetColumn = targetMap[input.taskType];
-      
-      if (!completedColumn || !targetColumn) {
-        throw new Error("Invalid task type");
-      }
-      
-      const currentCompleted = (event[0] as any)[completedColumn] || 0;
-      const target = (event[0] as any)[targetColumn] || 0;
-      
-      // Support both increment (+1) and decrement (-1) for undo
-      let newCompleted = currentCompleted + input.increment;
-      // Ensure value stays within bounds (0 to target)
-      newCompleted = Math.max(0, Math.min(newCompleted, target));
-      
-      const result = await db.update(events)
-        .set({ [completedColumn]: newCompleted, updatedAt: new Date() } as any)
-        .where(eq(events.id, input.eventId))
-        .returning();
-      
-      // Auto-update submission status to 'in_progress' if work is being done
-      if (hasAssignmentRecord && hasAssignment[0].submissionStatus === 'not_started' && input.increment > 0) {
-        await db.update(eventAssignments)
-          .set({ submissionStatus: 'in_progress', updatedAt: new Date() })
-          .where(eq(eventAssignments.id, hasAssignment[0].id));
-      }
-      
-      await db.insert(auditLogs).values({
-        action: 'UPDATE_TASK_PROGRESS',
-        entityType: 'EVENT',
-        entityId: input.eventId,
-        performedBy: input.updatedBy,
-        timestamp: new Date(),
-        details: { taskType: input.taskType, increment: input.increment, newCompleted },
+
+        const currentCompleted = Number(eventRow[eventCompletedSnake[completedColumn]] ?? 0);
+        const target = Number(eventRow[eventTargetSnake[targetColumn]] ?? 0);
+        const newCompleted = currentCompleted + input.increment;
+
+        if (newCompleted < 0) {
+          throw new Error("Cannot decrement below zero — the count is already at 0.");
+        }
+        if (input.increment > 0 && target > 0 && newCompleted > target) {
+          const remaining = Math.max(0, target - currentCompleted);
+          throw new Error(
+            `Cannot record ${input.increment} more ${input.taskType} — only ${remaining} remaining of target ${target}. ` +
+            `Ask the event manager to raise the target.`
+          );
+        }
+
+        const [updatedEvent] = await tx.update(events)
+          .set({ [completedColumn]: newCompleted, updatedAt: new Date() } as any)
+          .where(eq(events.id, input.eventId))
+          .returning();
+
+        if (hasAssignmentRecord && assignmentRow.submissionStatus === 'not_started' && input.increment > 0) {
+          await tx.update(eventAssignments)
+            .set({ submissionStatus: 'in_progress', updatedAt: new Date() })
+            .where(eq(eventAssignments.id, assignmentRow.id));
+        }
+
+        await tx.insert(auditLogs).values({
+          action: 'UPDATE_TASK_PROGRESS',
+          entityType: 'EVENT',
+          entityId: input.eventId,
+          performedBy: actorId,
+          timestamp: new Date(),
+          details: { taskType: input.taskType, increment: input.increment, newCompleted },
+        });
+
+        return updatedEvent;
       });
-      
-      return result[0];
     }),
 
-  updateMemberTaskProgress: publicProcedure
+  // Per-member O&M / EB / LEASE progress (manager updating on behalf, OR
+  // member updating themselves). Production-grade:
+  //   - authedProcedure: actor derived from session, never trusted from input
+  //   - Authorisation: actor must be the target member, the event creator,
+  //     or the event's assignedTo manager
+  //   - Transaction with SELECT ... FOR UPDATE on the event row AND on the
+  //     target member's event_assignments row, so two concurrent +/- taps can
+  //     never lose an update or blow through the per-member target
+  //   - Lazy fallback target uses the SAME distributeFairly helper as create
+  //     and redistributeTargets, with deterministic ordering by employeeId
+  //   - Typed errors instead of silent clamping (UI knows why nothing moved)
+  //   - maintenance_entries / event_sales_entries audit row written INSIDE the
+  //     transaction; if it fails the counter increment rolls back too
+  updateMemberTaskProgress: authedProcedure
     .input(z.object({
       eventId: z.string().uuid(),
-      employeeId: z.string().uuid(),
+      employeeId: z.string().uuid(),       // target member (subject of the update)
       taskType: z.enum(['EB', 'LEASE', 'BTS_DOWN', 'FTTH_DOWN', 'ROUTE_FAIL', 'OFC_FAIL']),
       increment: z.number().int().default(1),
-      updatedBy: z.string().uuid(),
+      // Legacy field — IGNORED on server; actor is derived from the session.
+      updatedBy: z.string().uuid().optional(),
     }))
-    .mutation(async ({ input }) => {
-      const memberCompletedMap: Record<string, keyof typeof eventAssignments.$inferSelect> = {
-        'EB': 'ebCompleted',
-        'LEASE': 'leaseCompleted',
-        'BTS_DOWN': 'btsDownCompleted',
-        'FTTH_DOWN': 'ftthDownCompleted',
-        'ROUTE_FAIL': 'routeFailCompleted',
-        'OFC_FAIL': 'ofcFailCompleted',
+    .mutation(async ({ ctx, input }) => {
+      const actorId = ctx.employeeId;
+
+      const memberCompletedMap: Record<string, string> = {
+        EB: 'ebCompleted', LEASE: 'leaseCompleted',
+        BTS_DOWN: 'btsDownCompleted', FTTH_DOWN: 'ftthDownCompleted',
+        ROUTE_FAIL: 'routeFailCompleted', OFC_FAIL: 'ofcFailCompleted',
       };
-      
-      const memberTargetMap: Record<string, keyof typeof eventAssignments.$inferSelect> = {
-        'EB': 'ebTarget',
-        'LEASE': 'leaseTarget',
-        'BTS_DOWN': 'btsDownTarget',
-        'FTTH_DOWN': 'ftthDownTarget',
-        'ROUTE_FAIL': 'routeFailTarget',
-        'OFC_FAIL': 'ofcFailTarget',
+      const memberTargetMap: Record<string, string> = {
+        EB: 'ebTarget', LEASE: 'leaseTarget',
+        BTS_DOWN: 'btsDownTarget', FTTH_DOWN: 'ftthDownTarget',
+        ROUTE_FAIL: 'routeFailTarget', OFC_FAIL: 'ofcFailTarget',
       };
-      
-      const eventCompletedMap: Record<string, keyof typeof events.$inferSelect> = {
-        'EB': 'ebCompleted',
-        'LEASE': 'leaseCompleted',
-        'BTS_DOWN': 'btsDownCompleted',
-        'FTTH_DOWN': 'ftthDownCompleted',
-        'ROUTE_FAIL': 'routeFailCompleted',
-        'OFC_FAIL': 'ofcFailCompleted',
+      const eventCompletedMap: Record<string, string> = {
+        EB: 'ebCompleted', LEASE: 'leaseCompleted',
+        BTS_DOWN: 'btsDownCompleted', FTTH_DOWN: 'ftthDownCompleted',
+        ROUTE_FAIL: 'routeFailCompleted', OFC_FAIL: 'ofcFailCompleted',
       };
-      
       const eventStartedAtMap: Record<string, string> = {
-        'EB': 'ebStartedAt',
-        'LEASE': 'leaseStartedAt',
-        'BTS_DOWN': 'btsDownStartedAt',
-        'FTTH_DOWN': 'ftthDownStartedAt',
-        'ROUTE_FAIL': 'routeFailStartedAt',
-        'OFC_FAIL': 'ofcFailStartedAt',
+        EB: 'ebStartedAt', LEASE: 'leaseStartedAt',
+        BTS_DOWN: 'btsDownStartedAt', FTTH_DOWN: 'ftthDownStartedAt',
+        ROUTE_FAIL: 'routeFailStartedAt', OFC_FAIL: 'ofcFailStartedAt',
       };
-      
+      const eventTargetMap: Record<string, string> = {
+        EB: 'targetEb', LEASE: 'targetLease',
+        BTS_DOWN: 'targetBtsDown', FTTH_DOWN: 'targetFtthDown',
+        ROUTE_FAIL: 'targetRouteFail', OFC_FAIL: 'targetOfcFail',
+      };
+
+      // snake_case lookups for the raw FOR-UPDATE event row
+      const eventStartedAtSnake: Record<string, string> = {
+        ebStartedAt: 'eb_started_at',
+        leaseStartedAt: 'lease_started_at',
+        btsDownStartedAt: 'bts_down_started_at',
+        ftthDownStartedAt: 'ftth_down_started_at',
+        routeFailStartedAt: 'route_fail_started_at',
+        ofcFailStartedAt: 'ofc_fail_started_at',
+      };
+      const eventTargetSnake: Record<string, string> = {
+        targetEb: 'target_eb',
+        targetLease: 'target_lease',
+        targetBtsDown: 'target_bts_down',
+        targetFtthDown: 'target_ftth_down',
+        targetRouteFail: 'target_route_fail',
+        targetOfcFail: 'target_ofc_fail',
+      };
+
       const completedColumn = memberCompletedMap[input.taskType];
       const targetColumn = memberTargetMap[input.taskType];
       const eventCompletedColumn = eventCompletedMap[input.taskType];
       const eventStartedAtColumn = eventStartedAtMap[input.taskType];
+      const eventTargetColumn = eventTargetMap[input.taskType];
 
-      const event = await db.select().from(events).where(eq(events.id, input.eventId));
-      if (!event[0]) throw new Error("Event not found");
+      return await db.transaction(async (tx) => {
+        // 1) Lock the event row.
+        const eventRows = await tx.execute(
+          sql`SELECT * FROM ${events} WHERE ${events.id} = ${input.eventId} FOR UPDATE`
+        );
+        const eventRow = (eventRows as any).rows?.[0] ?? (eventRows as any)[0];
+        if (!eventRow) throw new Error("Event not found");
 
-      const assignment = await db.select().from(eventAssignments)
-        .where(and(
-          eq(eventAssignments.eventId, input.eventId),
-          eq(eventAssignments.employeeId, input.employeeId)
-        ));
-      if (!assignment[0]) throw new Error("Team member assignment not found");
-
-      const assignedTypes = (assignment[0].assignedTaskTypes as string[]) || [];
-      if (assignedTypes.length > 0) {
-        const taskTypeToAssignedType: Record<string, string> = {
-          'EB': 'EB',
-          'LEASE': 'LEASE_CIRCUIT',
-          'BTS_DOWN': 'BTS_DOWN',
-          'FTTH_DOWN': 'FTTH_DOWN',
-          'ROUTE_FAIL': 'ROUTE_FAIL',
-          'OFC_FAIL': 'OFC_FAIL',
-        };
-        const requiredType = taskTypeToAssignedType[input.taskType];
-        if (requiredType && !assignedTypes.includes(requiredType)) {
-          throw new Error(`You are not assigned to ${input.taskType} tasks. Your assigned types: ${assignedTypes.join(', ')}`);
+        if (eventRow.status === 'completed' || eventRow.status === 'cancelled') {
+          throw new Error(`Cannot update progress on a ${eventRow.status} event.`);
         }
-      }
 
-      const currentMemberCompleted = (assignment[0] as any)[completedColumn] || 0;
-      let memberTarget = (assignment[0] as any)[targetColumn] || 0;
+        // 2) Authorisation: actor must be self, event creator, or the assignedTo manager.
+        const isSelf = actorId === input.employeeId;
+        const isCreator = actorId === eventRow.created_by;
+        const isAssignedManager = actorId === eventRow.assigned_to;
+        if (!isSelf && !isCreator && !isAssignedManager) {
+          throw new Error(
+            "Only the assignee, the event creator, or the assigned manager can record progress for a team member."
+          );
+        }
 
-      if (memberTarget === 0) {
-        const eventTargetMap: Record<string, keyof typeof events.$inferSelect> = {
-          'EB': 'targetEb',
-          'LEASE': 'targetLease',
-          'BTS_DOWN': 'targetBtsDown',
-          'FTTH_DOWN': 'targetFtthDown',
-          'ROUTE_FAIL': 'targetRouteFail',
-          'OFC_FAIL': 'targetOfcFail',
-        };
-        const eventTargetColumn = eventTargetMap[input.taskType];
-        const eventTarget = (event[0] as any)[eventTargetColumn] || 0;
+        // 3) Lock the target member's assignment row.
+        const [lockedAssignment] = await tx.select().from(eventAssignments)
+          .where(and(
+            eq(eventAssignments.eventId, input.eventId),
+            eq(eventAssignments.employeeId, input.employeeId)
+          ))
+          .for('update');
+        if (!lockedAssignment) throw new Error("Team member assignment not found");
 
-        const allAssignmentsForDistribution = await db.select().from(eventAssignments)
+        // 4) Assignment-type guard.
+        const assignedTypes = (lockedAssignment.assignedTaskTypes as string[]) || [];
+        if (assignedTypes.length > 0) {
+          const taskTypeToAssignedType: Record<string, string> = {
+            EB: 'EB', LEASE: 'LEASE_CIRCUIT',
+            BTS_DOWN: 'BTS_DOWN', FTTH_DOWN: 'FTTH_DOWN',
+            ROUTE_FAIL: 'ROUTE_FAIL', OFC_FAIL: 'OFC_FAIL',
+          };
+          const requiredType = taskTypeToAssignedType[input.taskType];
+          if (requiredType && !assignedTypes.includes(requiredType)) {
+            throw new Error(
+              `This member is not assigned to ${input.taskType} tasks. ` +
+              `Their assigned types: ${assignedTypes.join(', ') || '(none)'}`
+            );
+          }
+        }
+
+        const currentMemberCompleted = Number((lockedAssignment as any)[completedColumn] ?? 0);
+        let memberTarget = Number((lockedAssignment as any)[targetColumn] ?? 0);
+
+        // 5) Lazy fallback target via distributeFairly with deterministic
+        //    ordering — matches events.create and redistributeTargets exactly,
+        //    so two members tapping at the same time can never derive
+        //    overlapping fallback shares.
+        if (memberTarget === 0) {
+          const eventTarget = Number(eventRow[eventTargetSnake[eventTargetColumn]] ?? 0);
+          if (eventTarget > 0) {
+            const allAssignments = await tx.select().from(eventAssignments)
+              .where(eq(eventAssignments.eventId, input.eventId));
+            const ordered = [...allAssignments].sort(
+              (a, b) => a.employeeId.localeCompare(b.employeeId)
+            );
+            if (ordered.length > 0) {
+              const split = distributeFairly(eventTarget, ordered.length);
+              const memberIdx = ordered.findIndex(a => a.employeeId === input.employeeId);
+              memberTarget = memberIdx >= 0 ? (split[memberIdx] ?? 0) : 0;
+            }
+          }
+        }
+
+        // 6) Compute and validate new value — TYPED errors, no silent clamp.
+        const newMemberCompleted = currentMemberCompleted + input.increment;
+        if (newMemberCompleted < 0) {
+          throw new Error("Cannot decrement below zero — this member is already at 0.");
+        }
+        if (input.increment > 0 && memberTarget > 0 && newMemberCompleted > memberTarget) {
+          const remaining = Math.max(0, memberTarget - currentMemberCompleted);
+          throw new Error(
+            `Member would exceed their ${input.taskType} target (${memberTarget}). ` +
+            `Only ${remaining} remaining. Redistribute targets or raise this member's share first.`
+          );
+        }
+
+        // 7) Persist member counter.
+        await tx.update(eventAssignments)
+          .set({ [completedColumn]: newMemberCompleted, updatedAt: new Date() } as any)
+          .where(eq(eventAssignments.id, lockedAssignment.id));
+
+        // 8) Recompute event-level total from assignments and roll up.
+        const allAssignmentsAfter = await tx.select().from(eventAssignments)
           .where(eq(eventAssignments.eventId, input.eventId));
-        const teamSize = allAssignmentsForDistribution.length;
-        const memberIdx = allAssignmentsForDistribution.findIndex(a => a.employeeId === input.employeeId);
+        const totalCompleted = allAssignmentsAfter.reduce(
+          (sum, a) => sum + Number((a as any)[completedColumn] ?? 0), 0
+        );
 
-        if (teamSize > 0) {
-          const baseTarget = Math.floor(eventTarget / teamSize);
-          const remainder = eventTarget % teamSize;
-          memberTarget = baseTarget + (memberIdx < remainder ? 1 : 0);
+        const currentStartedAt = eventRow[eventStartedAtSnake[eventStartedAtColumn]];
+        const updateData: any = {
+          [eventCompletedColumn]: totalCompleted,
+          updatedAt: new Date(),
+        };
+        if (!currentStartedAt && totalCompleted > 0) {
+          updateData[eventStartedAtColumn] = new Date();
         }
-      }
 
-      let newMemberCompleted = currentMemberCompleted + input.increment;
-      newMemberCompleted = Math.max(0, Math.min(newMemberCompleted, memberTarget));
+        const [updatedEvent] = await tx.update(events)
+          .set(updateData)
+          .where(eq(events.id, input.eventId))
+          .returning();
 
-      await db.update(eventAssignments)
-        .set({ [completedColumn]: newMemberCompleted, updatedAt: new Date() } as any)
-        .where(and(
-          eq(eventAssignments.eventId, input.eventId),
-          eq(eventAssignments.employeeId, input.employeeId)
-        ));
-
-      const allAssignments = await db.select().from(eventAssignments)
-        .where(eq(eventAssignments.eventId, input.eventId));
-      const totalCompleted = allAssignments.reduce((sum, a) => sum + ((a as any)[completedColumn] || 0), 0);
-
-      const currentStartedAt = (event[0] as any)[eventStartedAtColumn];
-      const updateData: any = { 
-        [eventCompletedColumn]: totalCompleted, 
-        updatedAt: new Date() 
-      };
-      if (!currentStartedAt && totalCompleted > 0) {
-        updateData[eventStartedAtColumn] = new Date();
-      }
-
-      const result = await db.update(events)
-        .set(updateData)
-        .where(eq(events.id, input.eventId))
-        .returning();
-
-      const omTypes = ['BTS_DOWN', 'FTTH_DOWN', 'ROUTE_FAIL', 'OFC_FAIL'];
-      const salesTypes = ['EB', 'LEASE'];
-
-      if (input.increment > 0) {
-        try {
+        // 9) Audit-trail row INSIDE the transaction — failure rolls everything back.
+        const omTypes = ['BTS_DOWN', 'FTTH_DOWN', 'ROUTE_FAIL', 'OFC_FAIL'];
+        const salesTypes = ['EB', 'LEASE'];
+        if (input.increment > 0) {
           if (omTypes.includes(input.taskType)) {
-            await db.insert(maintenanceEntries).values({
+            await tx.insert(maintenanceEntries).values({
               eventId: input.eventId,
               employeeId: input.employeeId,
               taskType: input.taskType,
               increment: input.increment,
             });
           } else if (salesTypes.includes(input.taskType)) {
-            await db.insert(eventSalesEntries).values({
+            await tx.insert(eventSalesEntries).values({
               eventId: input.eventId,
               employeeId: input.employeeId,
               simsSold: 0,
@@ -3484,32 +3558,31 @@ export const eventsRouter = createTRPCRouter({
               customerType: 'B2C',
             });
           }
-        } catch (entryError) {
-          console.error(`Failed to create entry record for ${input.taskType}:`, entryError);
         }
-      }
 
-      await db.insert(auditLogs).values({
-        action: 'UPDATE_MEMBER_TASK_PROGRESS',
-        entityType: 'EVENT',
-        entityId: input.eventId,
-        performedBy: input.updatedBy,
-        timestamp: new Date(),
-        details: { 
-          taskType: input.taskType, 
-          employeeId: input.employeeId,
-          increment: input.increment, 
-          newMemberCompleted,
+        await tx.insert(auditLogs).values({
+          action: 'UPDATE_MEMBER_TASK_PROGRESS',
+          entityType: 'EVENT',
+          entityId: input.eventId,
+          performedBy: actorId,
+          timestamp: new Date(),
+          details: {
+            taskType: input.taskType,
+            employeeId: input.employeeId,
+            increment: input.increment,
+            newMemberCompleted,
+            totalCompleted,
+            actedAs: isSelf ? 'self' : isCreator ? 'creator' : 'manager',
+          },
+        });
+
+        return {
+          memberCompleted: newMemberCompleted,
+          memberTarget,
           totalCompleted,
-        },
+          event: updatedEvent,
+        };
       });
-
-      return { 
-        memberCompleted: newMemberCompleted, 
-        memberTarget,
-        totalCompleted,
-        event: result[0] 
-      };
     }),
 
   getTaskProgress: publicProcedure
