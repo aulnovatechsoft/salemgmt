@@ -5,11 +5,20 @@ import { createTRPCRouter, publicProcedure } from "../create-context";
 import { db, salesReports, auditLogs, events, employees, eventAssignments, employeeMaster, financeCollectionEntries, eventSalesEntries, maintenanceEntries } from "@/backend/db";
 
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
-const ymdSchema = z.string().regex(YMD_RE, "Date must be in YYYY-MM-DD format");
 const MAX_WINDOW_DAYS = 730;
 
+function isRealYmd(s: string): boolean {
+  if (!YMD_RE.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+const ymdSchema = z.string().refine(isRealYmd, "Date must be a valid YYYY-MM-DD");
+
 function isYmd(s?: string): s is string {
-  return !!s && YMD_RE.test(s);
+  return !!s && isRealYmd(s);
 }
 function istDayStart(dateStr: string): Date {
   return new Date(`${dateStr}T00:00:00+05:30`);
@@ -22,18 +31,41 @@ function ymdSpanDays(start: string, end: string): number {
   const e = istDayStart(end).getTime();
   return Math.floor((e - s) / 86400000) + 1;
 }
+function istTodayYmdBackend(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
 function refineDateWindow(
   data: { startDate?: string; endDate?: string },
   ctx: z.RefinementCtx,
 ) {
-  if (data.startDate && data.endDate) {
-    if (data.startDate > data.endDate) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "startDate must be on or before endDate", path: ["startDate"] });
-      return;
-    }
-    if (ymdSpanDays(data.startDate, data.endDate) > MAX_WINDOW_DAYS) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Date range cannot exceed ${MAX_WINDOW_DAYS} days`, path: ["endDate"] });
-    }
+  const hasStart = !!data.startDate;
+  const hasEnd = !!data.endDate;
+  if (hasStart !== hasEnd) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "startDate and endDate must be provided together",
+      path: [hasStart ? "endDate" : "startDate"],
+    });
+    return;
+  }
+  if (!hasStart) return;
+  if (data.startDate! > data.endDate!) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "startDate must be on or before endDate", path: ["startDate"] });
+    return;
+  }
+  if (ymdSpanDays(data.startDate!, data.endDate!) > MAX_WINDOW_DAYS) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Date range cannot exceed ${MAX_WINDOW_DAYS} days`, path: ["endDate"] });
+  }
+  const today = istTodayYmdBackend();
+  if (data.endDate! > today) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "endDate cannot be in the future (IST)", path: ["endDate"] });
   }
 }
 function resolveWindow(input: { startDate?: string; endDate?: string; days?: number }): { start: Date; end: Date } {

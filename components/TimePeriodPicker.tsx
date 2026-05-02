@@ -5,6 +5,7 @@ import {
   StyleSheet,
   Modal,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   ScrollView,
   TextInput,
   Platform,
@@ -16,6 +17,7 @@ import {
   PeriodKey,
   PeriodRange,
   computePeriodRange,
+  istTodayYmd,
 } from '@/utils/timePeriod';
 
 interface Props {
@@ -53,13 +55,14 @@ export default function TimePeriodPicker({ value, onChange }: Props) {
     return `${value.startDate} → ${value.endDate}`;
   }, [value]);
 
+  const todayYmd = useMemo(() => istTodayYmd(), []);
+
   const handleSelect = (key: PeriodKey) => {
     if (key === 'custom') {
-      const today = new Date();
-      const fmt = (d: Date) =>
-        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      const initStart = customStart || fmt(new Date(today.getFullYear(), today.getMonth(), 1));
-      const initEnd = customEnd || fmt(today);
+      const today = todayYmd;
+      const monthStart = `${today.slice(0, 7)}-01`;
+      const initStart = customStart || monthStart;
+      const initEnd = customEnd || today;
       setCustomStart(initStart);
       setCustomEnd(initEnd);
       setCustomError(null);
@@ -70,23 +73,36 @@ export default function TimePeriodPicker({ value, onChange }: Props) {
     setOpen(false);
   };
 
+  const isRealYmd = (s: string): boolean => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    const [y, m, d] = s.split('-').map(Number);
+    if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    return (
+      dt.getUTCFullYear() === y &&
+      dt.getUTCMonth() === m - 1 &&
+      dt.getUTCDate() === d
+    );
+  };
+
   const validateAndApplyCustom = () => {
-    const re = /^\d{4}-\d{2}-\d{2}$/;
-    if (!re.test(customStart) || !re.test(customEnd)) {
-      setCustomError('Use YYYY-MM-DD format');
+    if (!isRealYmd(customStart) || !isRealYmd(customEnd)) {
+      setCustomError('Use a valid YYYY-MM-DD date');
       return;
     }
-    const sd = new Date(customStart + 'T00:00:00');
-    const ed = new Date(customEnd + 'T00:00:00');
-    if (isNaN(sd.getTime()) || isNaN(ed.getTime())) {
-      setCustomError('Invalid date');
-      return;
-    }
-    if (sd > ed) {
+    if (customStart > customEnd) {
       setCustomError('Start date must be on or before end date');
       return;
     }
-    const diffDays = Math.floor((ed.getTime() - sd.getTime()) / 86400000) + 1;
+    if (customEnd > todayYmd) {
+      setCustomError('End date cannot be in the future');
+      return;
+    }
+    const [sy, sm, sd] = customStart.split('-').map(Number);
+    const [ey, em, ed] = customEnd.split('-').map(Number);
+    const sUtc = Date.UTC(sy, sm - 1, sd);
+    const eUtc = Date.UTC(ey, em - 1, ed);
+    const diffDays = Math.floor((eUtc - sUtc) / 86400000) + 1;
     if (diffDays > 730) {
       setCustomError('Range cannot exceed 730 days');
       return;
@@ -110,7 +126,10 @@ export default function TimePeriodPicker({ value, onChange }: Props) {
       </TouchableOpacity>
 
       <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
-        <View style={styles.backdrop}>
+        <TouchableWithoutFeedback onPress={() => setOpen(false)} accessible={false}>
+          <View style={styles.backdrop} />
+        </TouchableWithoutFeedback>
+        <View style={styles.sheetWrapper} pointerEvents="box-none">
           <View style={styles.sheet}>
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetTitle}>Select Time Period</Text>
@@ -155,9 +174,7 @@ export default function TimePeriodPicker({ value, onChange }: Props) {
                                   placeholderTextColor={Colors.light.textSecondary}
                                   autoCapitalize="none"
                                   autoCorrect={false}
-                                  {...(Platform.OS === 'web'
-                                    ? ({ type: 'date' } as any)
-                                    : { keyboardType: 'numbers-and-punctuation' as const })}
+                                  {...dateInputWebProps(todayYmd)}
                                 />
                               </View>
                               <View style={styles.customField}>
@@ -170,9 +187,7 @@ export default function TimePeriodPicker({ value, onChange }: Props) {
                                   placeholderTextColor={Colors.light.textSecondary}
                                   autoCapitalize="none"
                                   autoCorrect={false}
-                                  {...(Platform.OS === 'web'
-                                    ? ({ type: 'date' } as any)
-                                    : { keyboardType: 'numbers-and-punctuation' as const })}
+                                  {...dateInputWebProps(todayYmd)}
                                 />
                               </View>
                             </View>
@@ -213,6 +228,9 @@ export default function TimePeriodPicker({ value, onChange }: Props) {
   );
 }
 
+const dateInputWebProps = (max?: string) =>
+  Platform.OS === 'web' ? ({ type: 'date', max } as any) : { keyboardType: 'numbers-and-punctuation' as const };
+
 const styles = StyleSheet.create({
   trigger: {
     flexDirection: 'row',
@@ -228,7 +246,8 @@ const styles = StyleSheet.create({
   triggerLabels: { flex: 1 },
   triggerLabel: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
   triggerSub: { fontSize: 11, color: Colors.light.textSecondary, marginTop: 2 },
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)' },
+  sheetWrapper: { flex: 1, justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 16,

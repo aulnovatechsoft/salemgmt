@@ -59,6 +59,10 @@ function istCivilToday(): Date {
   return new Date(Date.UTC(get('year'), get('month') - 1, get('day')));
 }
 
+export function istTodayYmd(): string {
+  return fmt(istCivilToday());
+}
+
 const fmt = (d: Date) =>
   `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 
