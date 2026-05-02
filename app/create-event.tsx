@@ -472,12 +472,14 @@ export default function CreateEventScreen() {
       console.log('Task created in database:', data.id);
       setHasCreated(true);
       setIsSubmitting(false);
+      // router.replace (not push) so the user can't "go back" to the
+      // half-filled create form. The Alert's onPress fires on native; on
+      // web the alert is fire-and-forget so we also navigate via setTimeout.
+      const goToTask = () => router.replace(`/event-detail?id=${data.id}`);
       Alert.alert('Success', 'Task created successfully', [
-        { text: 'OK', onPress: () => router.back() },
+        { text: 'OK', onPress: goToTask },
       ]);
-      setTimeout(() => {
-        if (router.canGoBack()) router.back();
-      }, 50);
+      setTimeout(goToTask, 50);
     },
     onError: (error) => {
       console.error('Failed to create task:', error);
