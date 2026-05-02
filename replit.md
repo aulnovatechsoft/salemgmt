@@ -6,7 +6,20 @@ BSNL Sales & Task App is a mobile-first application for managing task assignment
 ## Tech Stack
 - **Frontend**: React Native with Expo SDK 54, React Native Web
 - **Backend**: Hono server with tRPC for type-safe API calls
-- **Database**: PostgreSQL (external at 117.251.72.195:5433)
+- **Database**: PostgreSQL (external at 117.251.72.195:5433). Connection string read from `BSNL_DATABASE_URL` (Replit reserves `DATABASE_URL`).
+
+## Environment Variables
+- `BSNL_DATABASE_URL` — Postgres connection string for the external BSNL DB.
+- `GEO_FENCE_KM` — Soft-warn radius (km) for sales submission geo-fence vs. event anchor (avg of prior entries' GPS). Default `50`.
+- `GEO_FENCE_ENFORCE` — `soft` (default, log + allow) or `hard` (reject when > `GEO_FENCE_KM`). Submissions > `3 × GEO_FENCE_KM` are always rejected as suspicious.
+
+## S&M Submission Flow (architect-aligned)
+- `submitEventSales` is an **authedProcedure** — actor is the `x-employee-id` header (sent by `lib/trpc.ts`); client-supplied employee IDs are ignored.
+- Requires ≥1 photo and a captured GPS location; backend mirrors the gating done in `app/event-sales.tsx`.
+- Per-subtype line items (SIM / FTTH / LC / EB) are validated for format, parity vs. activated/sold counts, in-submission uniqueness, and cross-event uniqueness against active prior entries.
+- `app/submit-sales.tsx` is a redirect-only screen; `app/event-sales.tsx` is the single canonical submit screen.
+- `app/(tabs)/my-tasks.tsx` shows **per-employee** LC/EB/maintenance progress sourced from `getMyAssignedTasks.myProgress` / `maintenanceProgress`.
+- Owners (and event creators / managers) can soft-delete entries with an audit reason; owners can append SIM/FTTH activations via `activateSimsForEntry` / `activateFtthForEntry` mutations.
 - **ORM**: Drizzle ORM
 - **State Management**: Zustand, React Query
 - **Styling**: React Native StyleSheet
@@ -46,8 +59,9 @@ The app uses the following main tables:
 - **resources**: SIM and FTTH resource inventory
 - **issues**: Event-related issues and escalations
 - **event_assignments**: Employee-to-event assignments with targets
-- **event_sales_entries**: Individual sales records
-- **audit_logs**: Activity tracking
+- **event_sales_entries**: Individual sales records (with `entry_status`, `version`, `superseded_by`, `deleted_at` for edit/delete/version tracking)
+- **sim_sale_lines / ftth_sale_lines / lc_sale_lines / eb_sale_lines**: Per-subtype line items keyed to a parent entry; enforce per-event uniqueness on mobile / FTTH ID / circuit ID / connection ID
+- **audit_logs**: Activity tracking (includes sales-entry delete/edit reasons + actor)
 - **notifications**: Real-time notifications for users (event assignments, issues, subtasks)
 - **push_tokens**: Expo push notification tokens for mobile devices
 

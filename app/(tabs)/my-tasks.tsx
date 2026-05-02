@@ -287,14 +287,14 @@ export default function MyTasksScreen() {
               </View>
             </View>
           )}
-          {item.categories.hasLease && item.myTargets.lease > 0 && (
+          {item.categories.hasLease && (
             <View style={styles.targetItem}>
               <View style={[styles.targetIcon, { backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>
                 <Text style={styles.targetIconText}>L</Text>
               </View>
               <View style={styles.targetInfo}>
                 <Text style={styles.targetLabel}>Lease</Text>
-                <Text style={styles.targetValue}>{item.maintenanceProgress.lease}/{item.myTargets.lease}</Text>
+                <Text style={styles.targetValue}>{(item.myProgress as any)?.lease ?? item.maintenanceProgress.lease}/{item.myTargets.lease}</Text>
               </View>
             </View>
           )}
@@ -342,14 +342,14 @@ export default function MyTasksScreen() {
               </View>
             </View>
           )}
-          {item.categories.hasEb && item.myTargets.eb > 0 && (
+          {item.categories.hasEb && (
             <View style={styles.targetItem}>
               <View style={[styles.targetIcon, { backgroundColor: CATEGORY_CONFIG.EB.color }]}>
                 <Text style={styles.targetIconText}>E</Text>
               </View>
               <View style={styles.targetInfo}>
                 <Text style={styles.targetLabel}>EB</Text>
-                <Text style={styles.targetValue}>{item.maintenanceProgress.eb}/{item.myTargets.eb}</Text>
+                <Text style={styles.targetValue}>{(item.myProgress as any)?.eb ?? item.maintenanceProgress.eb}/{item.myTargets.eb}</Text>
               </View>
             </View>
           )}
@@ -374,8 +374,8 @@ export default function MyTasksScreen() {
     const salesTargetsAchieved = 
       (!item.categories.hasSIM || item.myProgress.simSold >= item.myTargets.sim) &&
       (!item.categories.hasFTTH || item.myProgress.ftthSold >= item.myTargets.ftth) &&
-      (!item.categories.hasLease || item.maintenanceProgress.lease >= item.maintenanceProgress.leaseTarget) &&
-      (!item.categories.hasEb || item.maintenanceProgress.eb >= item.maintenanceProgress.ebTarget);
+      (!item.categories.hasLease || ((item.myProgress as any)?.lease ?? 0) >= (item.myTargets.lease || 0)) &&
+      (!item.categories.hasEb || ((item.myProgress as any)?.eb ?? 0) >= (item.myTargets.eb || 0));
     
     const maintenanceTargetsAchieved =
       (!item.categories.hasBtsDown || item.maintenanceProgress.btsDown >= item.maintenanceProgress.btsDownTarget) &&
@@ -467,14 +467,14 @@ export default function MyTasksScreen() {
               </View>
             </View>
           )}
-          {item.categories.hasLease && item.myTargets.lease > 0 && (
+          {item.categories.hasLease && (
             <View style={styles.targetItem}>
               <View style={[styles.targetIcon, { backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]}>
                 <Text style={styles.targetIconText}>L</Text>
               </View>
               <View style={styles.targetInfo}>
                 <Text style={styles.targetLabel}>Lease</Text>
-                <Text style={styles.targetValue}>Target: {item.myTargets.lease}</Text>
+                <Text style={styles.targetValue}>{(item.myProgress as any)?.lease ?? 0}/{item.myTargets.lease || 0}</Text>
               </View>
             </View>
           )}
@@ -522,14 +522,14 @@ export default function MyTasksScreen() {
               </View>
             </View>
           )}
-          {item.categories.hasEb && item.myTargets.eb > 0 && (
+          {item.categories.hasEb && (
             <View style={styles.targetItem}>
               <View style={[styles.targetIcon, { backgroundColor: CATEGORY_CONFIG.EB.color }]}>
                 <Text style={styles.targetIconText}>E</Text>
               </View>
               <View style={styles.targetInfo}>
                 <Text style={styles.targetLabel}>EB</Text>
-                <Text style={styles.targetValue}>Target: {item.myTargets.eb}</Text>
+                <Text style={styles.targetValue}>{(item.myProgress as any)?.eb ?? 0}/{item.myTargets.eb || 0}</Text>
               </View>
             </View>
           )}

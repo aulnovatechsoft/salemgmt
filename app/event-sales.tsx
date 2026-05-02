@@ -3,13 +3,25 @@ import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Alert,
 import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { Camera, MapPin, Trash2, Image as ImageIcon } from 'lucide-react-native';
+import { Camera, MapPin, Trash2, Image as ImageIcon, Plus, X } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
 import { CUSTOMER_TYPES } from '@/constants/app';
 import { GeoTaggedPhoto } from '@/types';
 import { uploadPhotos } from '@/lib/photoUpload';
+
+type LcLine = { circuitId: string; customerName: string; bandwidth: string };
+type EbLine = { connectionId: string; customerName: string; meterNumber: string };
+
+const MOBILE_RE = /^[6-9]\d{9}$/;
+
+function parseLines(text: string): string[] {
+  return text
+    .split(/[\n,;]/)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
 
 export default function EventSalesScreen() {
   const router = useRouter();
@@ -19,10 +31,12 @@ export default function EventSalesScreen() {
   
   const [simsSold, setSimsSold] = useState('');
   const [simsActivated, setSimsActivated] = useState('');
+  const [simMobileNumbersText, setSimMobileNumbersText] = useState('');
   const [ftthSold, setFtthSold] = useState('');
   const [ftthActivated, setFtthActivated] = useState('');
-  const [leaseSold, setLeaseSold] = useState('');
-  const [ebSold, setEbSold] = useState('');
+  const [ftthIdsText, setFtthIdsText] = useState('');
+  const [lcLines, setLcLines] = useState<LcLine[]>([{ circuitId: '', customerName: '', bandwidth: '' }]);
+  const [ebLines, setEbLines] = useState<EbLine[]>([{ connectionId: '', customerName: '', meterNumber: '' }]);
   const [customerType, setCustomerType] = useState<'B2C' | 'B2B' | 'Government' | 'Enterprise'>('B2C');
   const [remarks, setRemarks] = useState('');
   const [photos, setPhotos] = useState<GeoTaggedPhoto[]>([]);
@@ -165,13 +179,99 @@ export default function EventSalesScreen() {
   };
 
   const handleSubmit = async () => {
-    if (!simsSold && !ftthSold && !leaseSold && !ebSold) {
+    if (!employee?.id || !eventId) {
+      Alert.alert('Error', 'Invalid session. Please login again.');
+      return;
+    }
+
+    const simsSoldNum = parseInt(simsSold) || 0;
+    const simsActivatedNum = parseInt(simsActivated) || 0;
+    const ftthSoldNum = parseInt(ftthSold) || 0;
+    const ftthActivatedNum = parseInt(ftthActivated) || 0;
+
+    // Parse activated SIM mobile numbers
+    const simMobileNumbers = parseLines(simMobileNumbersText);
+    if (simMobileNumbers.length > 0) {
+      const invalid = simMobileNumbers.filter(n => !MOBILE_RE.test(n));
+      if (invalid.length > 0) {
+        Alert.alert('Invalid Mobile Numbers', `These are not valid 10-digit Indian mobile numbers:\n${invalid.join(', ')}`);
+        return;
+      }
+      const dupes = simMobileNumbers.filter((n, i) => simMobileNumbers.indexOf(n) !== i);
+      if (dupes.length > 0) {
+        Alert.alert('Duplicate Mobile Numbers', `Duplicate entries: ${[...new Set(dupes)].join(', ')}`);
+        return;
+      }
+      // Auto-set activated count from line count
+      if (simsActivatedNum && simsActivatedNum !== simMobileNumbers.length) {
+        Alert.alert('Mismatch', `You entered ${simMobileNumbers.length} mobile numbers but said ${simsActivatedNum} activated. They must match.`);
+        return;
+      }
+    }
+
+    // Parse FTTH IDs
+    const ftthIds = parseLines(ftthIdsText);
+    if (ftthIds.length > 0) {
+      const dupes = ftthIds.filter((n, i) => ftthIds.indexOf(n) !== i);
+      if (dupes.length > 0) {
+        Alert.alert('Duplicate FTTH IDs', `Duplicate entries: ${[...new Set(dupes)].join(', ')}`);
+        return;
+      }
+      if (ftthActivatedNum && ftthActivatedNum !== ftthIds.length) {
+        Alert.alert('Mismatch', `You entered ${ftthIds.length} FTTH IDs but said ${ftthActivatedNum} activated. They must match.`);
+        return;
+      }
+    }
+
+    // Build LC line items (only non-empty rows)
+    const lcLinesClean = lcLines
+      .filter(l => l.circuitId.trim() || l.customerName.trim())
+      .map(l => ({
+        circuitId: l.circuitId.trim(),
+        customerName: l.customerName.trim(),
+        bandwidth: l.bandwidth.trim() || undefined,
+      }));
+    if (showLcSection && lcLinesClean.length > 0) {
+      for (const l of lcLinesClean) {
+        if (!l.circuitId) { Alert.alert('Missing', 'Each Lease Circuit row needs a Circuit ID.'); return; }
+        if (!l.customerName) { Alert.alert('Missing', 'Each Lease Circuit row needs a Customer Name.'); return; }
+      }
+      const ids = lcLinesClean.map(l => l.circuitId);
+      const dupes = ids.filter((n, i) => ids.indexOf(n) !== i);
+      if (dupes.length > 0) { Alert.alert('Duplicate Circuit IDs', `Duplicate: ${[...new Set(dupes)].join(', ')}`); return; }
+    }
+
+    // Build EB line items
+    const ebLinesClean = ebLines
+      .filter(l => l.connectionId.trim() || l.customerName.trim())
+      .map(l => ({
+        connectionId: l.connectionId.trim(),
+        customerName: l.customerName.trim(),
+        meterNumber: l.meterNumber.trim() || undefined,
+      }));
+    if (showEbSection && ebLinesClean.length > 0) {
+      for (const l of ebLinesClean) {
+        if (!l.connectionId) { Alert.alert('Missing', 'Each EB row needs a Connection ID.'); return; }
+        if (!l.customerName) { Alert.alert('Missing', 'Each EB row needs a Customer Name.'); return; }
+      }
+      const ids = ebLinesClean.map(l => l.connectionId);
+      const dupes = ids.filter((n, i) => ids.indexOf(n) !== i);
+      if (dupes.length > 0) { Alert.alert('Duplicate Connection IDs', `Duplicate: ${[...new Set(dupes)].join(', ')}`); return; }
+    }
+
+    const totalEntries =
+      simsSoldNum + ftthSoldNum + lcLinesClean.length + ebLinesClean.length;
+    if (totalEntries === 0) {
       Alert.alert('Error', 'Please enter at least one sales entry');
       return;
     }
 
-    if (!employee?.id || !eventId) {
-      Alert.alert('Error', 'Invalid session. Please login again.');
+    if (photos.length === 0) {
+      Alert.alert('Photo required', 'Please add at least one geo-tagged photo before submitting.');
+      return;
+    }
+    if (!currentLocation?.latitude || !currentLocation?.longitude) {
+      Alert.alert('GPS required', 'Please tap "Capture GPS Location" before submitting.');
       return;
     }
 
@@ -198,13 +298,17 @@ export default function EventSalesScreen() {
     submitSalesMutation.mutate({
       eventId,
       employeeId: employee.id,
-      simsSold: parseInt(simsSold) || 0,
-      simsActivated: parseInt(simsActivated) || 0,
-      ftthSold: parseInt(ftthSold) || 0,
-      ftthActivated: parseInt(ftthActivated) || 0,
-      leaseSold: parseInt(leaseSold) || 0,
-      ebSold: parseInt(ebSold) || 0,
+      simsSold: simsSoldNum,
+      simsActivated: simMobileNumbers.length > 0 ? simMobileNumbers.length : simsActivatedNum,
+      ftthSold: ftthSoldNum,
+      ftthActivated: ftthIds.length > 0 ? ftthIds.length : ftthActivatedNum,
+      leaseSold: lcLinesClean.length || 0,
+      ebSold: ebLinesClean.length || 0,
       customerType,
+      simLines: simMobileNumbers.map(n => ({ mobileNumber: n, isActivated: true })),
+      ftthLines: ftthIds.map(id => ({ ftthId: id, isActivated: true })),
+      lcLines: lcLinesClean,
+      ebLines: ebLinesClean,
       photos: uploadedPhotoResults && uploadedPhotoResults.length > 0 ? uploadedPhotoResults : undefined,
       gpsLatitude: currentLocation?.latitude,
       gpsLongitude: currentLocation?.longitude,
@@ -221,6 +325,9 @@ export default function EventSalesScreen() {
   const hasFTTH = categories.includes('FTTH') && (!hasSpecificAssignment || myAssignedTypes.includes('FTTH'));
   const hasLC = (categories.includes('LEASE_CIRCUIT') || categories.includes('Lease Circuit')) && (!hasSpecificAssignment || myAssignedTypes.includes('LEASE_CIRCUIT'));
   const hasEB = categories.includes('EB') && (!hasSpecificAssignment || myAssignedTypes.includes('EB'));
+  // FIX: don't gate visibility on target>0; user is assigned to subtype = show the section
+  const showLcSection = hasLC;
+  const showEbSection = hasEB;
   const hasMaintenanceCategories = categories.some((c: string) => 
     ['BTS-Down', 'Route-Fail', 'FTTH-Down', 'OFC-Fail'].includes(c)
   );
@@ -254,16 +361,16 @@ export default function EventSalesScreen() {
                     <Text style={styles.myTargetValue}>{myAssignment.actualFtthSold} / {myAssignment.ftthTarget}</Text>
                   </View>
                 )}
-                {hasLC && myAssignment.leaseTarget > 0 && (
+                {hasLC && (
                   <View style={styles.myTargetItem}>
                     <Text style={styles.myTargetLabel}>My LC Target</Text>
-                    <Text style={styles.myTargetValue}>{myAssignment.leaseCompleted || 0} / {myAssignment.leaseTarget}</Text>
+                    <Text style={styles.myTargetValue}>{myAssignment.leaseCompleted || 0} / {myAssignment.leaseTarget || 0}</Text>
                   </View>
                 )}
-                {hasEB && myAssignment.ebTarget > 0 && (
+                {hasEB && (
                   <View style={styles.myTargetItem}>
                     <Text style={styles.myTargetLabel}>My EB Target</Text>
-                    <Text style={styles.myTargetValue}>{myAssignment.ebCompleted || 0} / {myAssignment.ebTarget}</Text>
+                    <Text style={styles.myTargetValue}>{myAssignment.ebCompleted || 0} / {myAssignment.ebTarget || 0}</Text>
                   </View>
                 )}
               </View>
@@ -297,6 +404,21 @@ export default function EventSalesScreen() {
                   />
                 </View>
               </View>
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>
+                  Activated Mobile Numbers {simMobileNumbersText.trim() ? `(${parseLines(simMobileNumbersText).length})` : ''}
+                </Text>
+                <TextInput
+                  style={[styles.input, styles.textarea]}
+                  placeholder={'9876543210\n9123456789\n...one per line'}
+                  value={simMobileNumbersText}
+                  onChangeText={setSimMobileNumbersText}
+                  multiline
+                  numberOfLines={4}
+                  autoCapitalize="none"
+                />
+                <Text style={styles.hint}>Enter each activated mobile number on a new line. 10 digits, starting with 6-9.</Text>
+              </View>
             </View>
           )}
 
@@ -318,51 +440,132 @@ export default function EventSalesScreen() {
                   <Text style={styles.label}>FTTH Activated</Text>
                   <TextInput
                     style={styles.input}
-                  placeholder="0"
-                  value={ftthActivated}
-                  onChangeText={setFtthActivated}
-                  keyboardType="number-pad"
-                />
+                    placeholder="0"
+                    value={ftthActivated}
+                    onChangeText={setFtthActivated}
+                    keyboardType="number-pad"
+                  />
+                </View>
               </View>
-            </View>
-          </View>
-          )}
-
-          {hasLC && myAssignment && myAssignment.leaseTarget > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Lease Circuit Sales</Text>
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>Lease Circuit Sold *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="0"
-                  value={leaseSold}
-                  onChangeText={setLeaseSold}
-                  keyboardType="number-pad"
-                />
-                <Text style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
-                  Remaining: {(myAssignment.leaseTarget || 0) - (myAssignment.leaseCompleted || 0)} of {myAssignment.leaseTarget}
+                <Text style={styles.label}>
+                  Activated FTTH IDs {ftthIdsText.trim() ? `(${parseLines(ftthIdsText).length})` : ''}
                 </Text>
+                <TextInput
+                  style={[styles.input, styles.textarea]}
+                  placeholder={'FTTH-12345\nFTTH-12346\n...one per line'}
+                  value={ftthIdsText}
+                  onChangeText={setFtthIdsText}
+                  multiline
+                  numberOfLines={4}
+                  autoCapitalize="none"
+                />
+                <Text style={styles.hint}>Enter each activated FTTH ID on a new line.</Text>
               </View>
             </View>
           )}
 
-          {hasEB && myAssignment && myAssignment.ebTarget > 0 && (
+          {showLcSection && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>EB Connection Sales</Text>
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>EB Connections Sold *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="0"
-                  value={ebSold}
-                  onChangeText={setEbSold}
-                  keyboardType="number-pad"
-                />
-                <Text style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
-                  Remaining: {(myAssignment.ebTarget || 0) - (myAssignment.ebCompleted || 0)} of {myAssignment.ebTarget}
-                </Text>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Lease Circuit Sales</Text>
+                <TouchableOpacity
+                  style={styles.addButton}
+                  onPress={() => setLcLines([...lcLines, { circuitId: '', customerName: '', bandwidth: '' }])}
+                >
+                  <Plus size={16} color={Colors.light.primary} />
+                  <Text style={styles.addButtonText}>Add Circuit</Text>
+                </TouchableOpacity>
               </View>
+              {myAssignment && (
+                <Text style={styles.hint}>
+                  My Target: {myAssignment.leaseCompleted || 0} / {myAssignment.leaseTarget || 0}
+                  {myAssignment.leaseTarget > 0 && ` (Remaining: ${(myAssignment.leaseTarget || 0) - (myAssignment.leaseCompleted || 0)})`}
+                </Text>
+              )}
+              {lcLines.map((line, idx) => (
+                <View key={idx} style={styles.lineRow}>
+                  <View style={styles.lineRowHeader}>
+                    <Text style={styles.lineRowLabel}>Circuit #{idx + 1}</Text>
+                    {lcLines.length > 1 && (
+                      <TouchableOpacity onPress={() => setLcLines(lcLines.filter((_, i) => i !== idx))}>
+                        <X size={18} color={Colors.light.error} />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Circuit ID *"
+                    value={line.circuitId}
+                    onChangeText={(v) => setLcLines(lcLines.map((l, i) => i === idx ? { ...l, circuitId: v } : l))}
+                    autoCapitalize="characters"
+                  />
+                  <TextInput
+                    style={[styles.input, { marginTop: 8 }]}
+                    placeholder="Customer Name *"
+                    value={line.customerName}
+                    onChangeText={(v) => setLcLines(lcLines.map((l, i) => i === idx ? { ...l, customerName: v } : l))}
+                  />
+                  <TextInput
+                    style={[styles.input, { marginTop: 8 }]}
+                    placeholder="Bandwidth (e.g. 100 Mbps)"
+                    value={line.bandwidth}
+                    onChangeText={(v) => setLcLines(lcLines.map((l, i) => i === idx ? { ...l, bandwidth: v } : l))}
+                  />
+                </View>
+              ))}
+            </View>
+          )}
+
+          {showEbSection && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>EB Connection Sales</Text>
+                <TouchableOpacity
+                  style={styles.addButton}
+                  onPress={() => setEbLines([...ebLines, { connectionId: '', customerName: '', meterNumber: '' }])}
+                >
+                  <Plus size={16} color={Colors.light.primary} />
+                  <Text style={styles.addButtonText}>Add Connection</Text>
+                </TouchableOpacity>
+              </View>
+              {myAssignment && (
+                <Text style={styles.hint}>
+                  My Target: {myAssignment.ebCompleted || 0} / {myAssignment.ebTarget || 0}
+                  {myAssignment.ebTarget > 0 && ` (Remaining: ${(myAssignment.ebTarget || 0) - (myAssignment.ebCompleted || 0)})`}
+                </Text>
+              )}
+              {ebLines.map((line, idx) => (
+                <View key={idx} style={styles.lineRow}>
+                  <View style={styles.lineRowHeader}>
+                    <Text style={styles.lineRowLabel}>Connection #{idx + 1}</Text>
+                    {ebLines.length > 1 && (
+                      <TouchableOpacity onPress={() => setEbLines(ebLines.filter((_, i) => i !== idx))}>
+                        <X size={18} color={Colors.light.error} />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Connection ID *"
+                    value={line.connectionId}
+                    onChangeText={(v) => setEbLines(ebLines.map((l, i) => i === idx ? { ...l, connectionId: v } : l))}
+                    autoCapitalize="characters"
+                  />
+                  <TextInput
+                    style={[styles.input, { marginTop: 8 }]}
+                    placeholder="Customer Name *"
+                    value={line.customerName}
+                    onChangeText={(v) => setEbLines(ebLines.map((l, i) => i === idx ? { ...l, customerName: v } : l))}
+                  />
+                  <TextInput
+                    style={[styles.input, { marginTop: 8 }]}
+                    placeholder="Meter Number"
+                    value={line.meterNumber}
+                    onChangeText={(v) => setEbLines(ebLines.map((l, i) => i === idx ? { ...l, meterNumber: v } : l))}
+                  />
+                </View>
+              ))}
             </View>
           )}
 
@@ -473,10 +676,22 @@ export default function EventSalesScreen() {
             />
           </View>
 
+          {(photos.length === 0 || !currentLocation) && (
+            <Text style={{ color: '#C62828', fontSize: 13, textAlign: 'center', marginBottom: 8 }}>
+              {photos.length === 0 && !currentLocation
+                ? 'Photo and GPS location are required to submit.'
+                : photos.length === 0
+                  ? 'At least one photo is required to submit.'
+                  : 'GPS location is required to submit.'}
+            </Text>
+          )}
           <TouchableOpacity 
-            style={[styles.submitButton, (submitSalesMutation.isPending || isUploadingPhotos) && styles.submitButtonDisabled]}
+            style={[
+              styles.submitButton,
+              (submitSalesMutation.isPending || isUploadingPhotos || photos.length === 0 || !currentLocation) && styles.submitButtonDisabled,
+            ]}
             onPress={handleSubmit}
-            disabled={submitSalesMutation.isPending || isUploadingPhotos}
+            disabled={submitSalesMutation.isPending || isUploadingPhotos || photos.length === 0 || !currentLocation}
           >
             {isUploadingPhotos && <ActivityIndicator color="#fff" style={{ marginRight: 8 }} />}
             <Text style={styles.submitButtonText}>
@@ -569,6 +784,57 @@ const styles = StyleSheet.create({
   },
   textArea: {
     minHeight: 80,
+  },
+  textarea: {
+    minHeight: 90,
+    textAlignVertical: 'top',
+    paddingTop: 12,
+  },
+  hint: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginTop: 6,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  addButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: Colors.light.primary,
+    backgroundColor: Colors.light.lightBlue,
+  },
+  addButtonText: {
+    color: Colors.light.primary,
+    fontSize: 13,
+    fontWeight: '600' as const,
+  },
+  lineRow: {
+    backgroundColor: Colors.light.backgroundSecondary,
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  lineRowHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  lineRowLabel: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.light.textSecondary,
   },
   row: {
     flexDirection: 'row',

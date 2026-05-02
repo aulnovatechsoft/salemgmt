@@ -333,7 +333,13 @@ export default function EventDetailScreen() {
   const [ebTarget, setEbTarget] = useState('');
   const [editMemberLeaseTarget, setEditMemberLeaseTarget] = useState('');
   const [editMemberEbTarget, setEditMemberEbTarget] = useState('');
-  
+
+  // Sales entry actions: delete + add activations
+  const [deleteEntryTarget, setDeleteEntryTarget] = useState<{ id: string; type: 'sales' } | null>(null);
+  const [deleteEntryReason, setDeleteEntryReason] = useState('');
+  const [activateModalEntry, setActivateModalEntry] = useState<{ id: string; kind: 'sim' | 'ftth'; remaining: number } | null>(null);
+  const [activateInput, setActivateInput] = useState('');
+
   const trpcUtils = trpc.useUtils();
   
   // Helper: Force integer-only input
@@ -617,6 +623,75 @@ export default function EventDetailScreen() {
       Alert.alert('Error', error.message);
     },
   });
+
+  const deleteSalesEntryMutation = trpc.events.deleteSalesEntry.useMutation({
+    onSuccess: () => {
+      Alert.alert('Deleted', 'Sales entry has been removed.');
+      setDeleteEntryTarget(null);
+      setDeleteEntryReason('');
+      refetch();
+    },
+    onError: (error) => Alert.alert('Error', error.message),
+  });
+
+  const activateSimsMutation = trpc.events.activateSimsForEntry.useMutation({
+    onSuccess: () => {
+      Alert.alert('Success', 'Activations recorded.');
+      setActivateModalEntry(null);
+      setActivateInput('');
+      refetch();
+    },
+    onError: (error) => Alert.alert('Error', error.message),
+  });
+
+  const activateFtthMutation = trpc.events.activateFtthForEntry.useMutation({
+    onSuccess: () => {
+      Alert.alert('Success', 'Activations recorded.');
+      setActivateModalEntry(null);
+      setActivateInput('');
+      refetch();
+    },
+    onError: (error) => Alert.alert('Error', error.message),
+  });
+
+  const handleConfirmDeleteEntry = () => {
+    if (!deleteEntryTarget) return;
+    const reason = deleteEntryReason.trim();
+    if (reason.length < 3) {
+      Alert.alert('Reason required', 'Please provide a reason of at least 3 characters.');
+      return;
+    }
+    deleteSalesEntryMutation.mutate({ entryId: deleteEntryTarget.id, reason });
+  };
+
+  const handleConfirmActivate = () => {
+    if (!activateModalEntry) return;
+    const lines = activateInput.split('\n').map(s => s.trim()).filter(Boolean);
+    if (lines.length === 0) {
+      Alert.alert('Empty', 'Enter at least one ID, one per line.');
+      return;
+    }
+    if (lines.length > activateModalEntry.remaining) {
+      Alert.alert('Too many', `You can only activate up to ${activateModalEntry.remaining} more.`);
+      return;
+    }
+    if (activateModalEntry.kind === 'sim') {
+      const bad = lines.filter(n => !/^[6-9]\d{9}$/.test(n));
+      if (bad.length > 0) {
+        Alert.alert('Invalid', `Invalid mobile number(s): ${bad.join(', ')}`);
+        return;
+      }
+      activateSimsMutation.mutate({
+        entryId: activateModalEntry.id,
+        lines: lines.map(mobileNumber => ({ mobileNumber })),
+      });
+    } else {
+      activateFtthMutation.mutate({
+        entryId: activateModalEntry.id,
+        lines: lines.map(ftthId => ({ ftthId })),
+      });
+    }
+  };
 
   const [rejectReason, setRejectReason] = useState('');
   const [rejectModalVisible, setRejectModalVisible] = useState(false);
@@ -2529,6 +2604,45 @@ export default function EventDetailScreen() {
                       </View>
                     )}
                   </View>
+                  {(() => {
+                    const isOwner = employee?.id === entry.employeeId;
+                    const isEventCreator = employee?.id === eventData.createdBy;
+                    const isEventManager = employee?.id === eventData.assignedTo;
+                    const canManage = isOwner || isEventCreator || isEventManager;
+                    const simRemaining = (entry.simsSold || 0) - (entry.simsActivated || 0);
+                    const ftthRemaining = (entry.ftthSold || 0) - (entry.ftthActivated || 0);
+                    return (
+                      <View style={styles.entryActionsRow}>
+                        {isOwner && showSim && simRemaining > 0 && (
+                          <TouchableOpacity
+                            style={styles.entryActionBtn}
+                            onPress={() => { setActivateInput(''); setActivateModalEntry({ id: entry.id, kind: 'sim', remaining: simRemaining }); }}
+                          >
+                            <Zap size={12} color={Colors.light.primary} />
+                            <Text style={styles.entryActionBtnText}>Activate {simRemaining} SIM</Text>
+                          </TouchableOpacity>
+                        )}
+                        {isOwner && showFtth && ftthRemaining > 0 && (
+                          <TouchableOpacity
+                            style={styles.entryActionBtn}
+                            onPress={() => { setActivateInput(''); setActivateModalEntry({ id: entry.id, kind: 'ftth', remaining: ftthRemaining }); }}
+                          >
+                            <Zap size={12} color={Colors.light.primary} />
+                            <Text style={styles.entryActionBtnText}>Activate {ftthRemaining} FTTH</Text>
+                          </TouchableOpacity>
+                        )}
+                        {canManage && (
+                          <TouchableOpacity
+                            style={[styles.entryActionBtn, styles.entryActionBtnDanger]}
+                            onPress={() => { setDeleteEntryReason(''); setDeleteEntryTarget({ id: entry.id, type: 'sales' }); }}
+                          >
+                            <Trash2 size={12} color="#C62828" />
+                            <Text style={[styles.entryActionBtnText, { color: '#C62828' }]}>Delete</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    );
+                  })()}
                 </View>
               );
             })}
@@ -3223,6 +3337,105 @@ export default function EventDetailScreen() {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* Delete Sales Entry Modal */}
+      <Modal
+        visible={!!deleteEntryTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDeleteEntryTarget(null)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setDeleteEntryTarget(null)}
+        >
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Delete Sales Entry</Text>
+            <Text style={styles.modalHint}>
+              This will soft-delete the entry and reduce the related counters. Provide a reason for the audit log.
+            </Text>
+            <TextInput
+              style={styles.modalTextarea}
+              placeholder="Reason (e.g., entered by mistake, duplicate)"
+              value={deleteEntryReason}
+              onChangeText={setDeleteEntryReason}
+              multiline
+              numberOfLines={3}
+              placeholderTextColor={Colors.light.textSecondary}
+            />
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+              <TouchableOpacity
+                style={[styles.secondaryButton, { flex: 1 }]}
+                onPress={() => setDeleteEntryTarget(null)}
+                disabled={deleteSalesEntryMutation.isPending}
+              >
+                <Text style={styles.secondaryButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.dangerButton, { flex: 1 }]}
+                onPress={handleConfirmDeleteEntry}
+                disabled={deleteSalesEntryMutation.isPending}
+              >
+                <Text style={styles.dangerButtonText}>{deleteSalesEntryMutation.isPending ? 'Deleting…' : 'Delete'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Add Activations Modal */}
+      <Modal
+        visible={!!activateModalEntry}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setActivateModalEntry(null)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setActivateModalEntry(null)}
+        >
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>
+              Add {activateModalEntry?.kind === 'sim' ? 'SIM' : 'FTTH'} Activations
+            </Text>
+            <Text style={styles.modalHint}>
+              {activateModalEntry?.kind === 'sim'
+                ? `Enter up to ${activateModalEntry?.remaining} mobile numbers, one per line.`
+                : `Enter up to ${activateModalEntry?.remaining} FTTH IDs, one per line.`}
+            </Text>
+            <TextInput
+              style={styles.modalTextarea}
+              placeholder={activateModalEntry?.kind === 'sim' ? '9876543210\n9123456789' : 'FTTH00001\nFTTH00002'}
+              value={activateInput}
+              onChangeText={setActivateInput}
+              multiline
+              numberOfLines={6}
+              autoCapitalize="none"
+              placeholderTextColor={Colors.light.textSecondary}
+            />
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+              <TouchableOpacity
+                style={[styles.secondaryButton, { flex: 1 }]}
+                onPress={() => setActivateModalEntry(null)}
+                disabled={activateSimsMutation.isPending || activateFtthMutation.isPending}
+              >
+                <Text style={styles.secondaryButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.primaryButton, { flex: 1 }]}
+                onPress={handleConfirmActivate}
+                disabled={activateSimsMutation.isPending || activateFtthMutation.isPending}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {activateSimsMutation.isPending || activateFtthMutation.isPending ? 'Saving…' : 'Add Activations'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </>
   );
 }
@@ -3523,4 +3736,13 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' as const },
   secondaryButton: { backgroundColor: Colors.light.backgroundSecondary, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8, alignItems: 'center' as const, justifyContent: 'center' as const, borderWidth: 1, borderColor: '#E0E0E0' },
   secondaryButtonText: { color: Colors.light.text, fontSize: 14, fontWeight: '600' as const },
+  dangerButton: { backgroundColor: '#C62828', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8, alignItems: 'center' as const, justifyContent: 'center' as const },
+  dangerButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' as const },
+  modalCard: { backgroundColor: Colors.light.card, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 20, maxHeight: '85%' as const },
+  modalHint: { fontSize: 13, color: Colors.light.textSecondary, marginTop: 6, marginBottom: 12, lineHeight: 18 },
+  modalTextarea: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, padding: 12, fontSize: 14, color: Colors.light.text, minHeight: 90, textAlignVertical: 'top' as const, backgroundColor: Colors.light.backgroundSecondary },
+  entryActionsRow: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' as const },
+  entryActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, backgroundColor: Colors.light.lightBlue, borderWidth: 1, borderColor: '#E3F2FD' },
+  entryActionBtnDanger: { backgroundColor: '#FFEBEE', borderColor: '#FFCDD2' },
+  entryActionBtnText: { fontSize: 12, fontWeight: '600' as const, color: Colors.light.primary },
 });

@@ -1,7 +1,22 @@
 import { z } from "zod";
-import { eq, and, desc, gte, lte, sql, or, inArray } from "drizzle-orm";
-import { createTRPCRouter, publicProcedure } from "../create-context";
-import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations, financeCollectionEntries, notifications, maintenanceEntries } from "@/backend/db";
+import { eq, and, desc, gte, lte, sql, or, inArray, isNotNull } from "drizzle-orm";
+import { createTRPCRouter, publicProcedure, authedProcedure } from "../create-context";
+
+const GEO_FENCE_KM = Number(process.env.GEO_FENCE_KM ?? '50');
+const GEO_FENCE_HARD_MULT = 3;
+const GEO_FENCE_ENFORCE = (process.env.GEO_FENCE_ENFORCE ?? 'soft').toLowerCase();
+
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations, financeCollectionEntries, notifications, maintenanceEntries, simSaleLines, ftthSaleLines, lcSaleLines, ebSaleLines } from "@/backend/db";
 import { 
   notifyEventAssignment, 
   notifyTaskSubmitted, 
@@ -1279,7 +1294,10 @@ export const eventsRouter = createTRPCRouter({
         .where(eq(eventAssignments.eventId, input.id));
       
       const salesEntries = await db.select().from(eventSalesEntries)
-        .where(eq(eventSalesEntries.eventId, input.id))
+        .where(and(
+          eq(eventSalesEntries.eventId, input.id),
+          eq(eventSalesEntries.entryStatus, 'active')
+        ))
         .orderBy(desc(eventSalesEntries.createdAt));
       
       const financeEntries = await db.select().from(financeCollectionEntries)
@@ -1764,17 +1782,52 @@ export const eventsRouter = createTRPCRouter({
       return { success: true };
     }),
 
-  submitEventSales: publicProcedure
+  submitEventSales: authedProcedure
     .input(z.object({
       eventId: z.string().uuid(),
-      employeeId: z.string().uuid(),
-      simsSold: z.number().min(0),
-      simsActivated: z.number().min(0),
-      ftthSold: z.number().min(0),
-      ftthActivated: z.number().min(0),
+      // Optional legacy employeeId — IGNORED on server; actor derived from session.
+      employeeId: z.string().uuid().optional(),
+      simsSold: z.number().min(0).optional().default(0),
+      simsActivated: z.number().min(0).optional().default(0),
+      ftthSold: z.number().min(0).optional().default(0),
+      ftthActivated: z.number().min(0).optional().default(0),
       leaseSold: z.number().min(0).optional().default(0),
       ebSold: z.number().min(0).optional().default(0),
       customerType: z.enum(['B2C', 'B2B', 'Government', 'Enterprise']),
+      // NEW: structured line-items per subtype (preferred path)
+      simLines: z.array(z.object({
+        mobileNumber: z.string().regex(/^[6-9]\d{9}$/, 'Mobile number must be 10 digits starting with 6-9'),
+        simSerialNumber: z.string().optional(),
+        customerName: z.string().optional(),
+        customerType: z.enum(['B2C', 'B2B', 'Government', 'Enterprise']).optional(),
+        isActivated: z.boolean().optional().default(true),
+      })).optional().default([]),
+      ftthLines: z.array(z.object({
+        ftthId: z.string().min(1, 'FTTH ID is required').max(50),
+        customerName: z.string().optional(),
+        customerContact: z.string().optional(),
+        customerType: z.enum(['B2C', 'B2B', 'Government', 'Enterprise']).optional(),
+        planName: z.string().optional(),
+        isActivated: z.boolean().optional().default(true),
+      })).optional().default([]),
+      lcLines: z.array(z.object({
+        circuitId: z.string().min(1, 'Circuit ID is required').max(100),
+        customerName: z.string().min(1, 'Customer name is required'),
+        customerContact: z.string().optional(),
+        customerType: z.enum(['B2C', 'B2B', 'Government', 'Enterprise']).optional(),
+        bandwidth: z.string().optional(),
+        endpointA: z.string().optional(),
+        endpointB: z.string().optional(),
+      })).optional().default([]),
+      ebLines: z.array(z.object({
+        connectionId: z.string().min(1, 'Connection ID is required').max(100),
+        meterNumber: z.string().optional(),
+        customerName: z.string().min(1, 'Customer name is required'),
+        customerContact: z.string().optional(),
+        customerType: z.enum(['B2C', 'B2B', 'Government', 'Enterprise']).optional(),
+        siteAddress: z.string().optional(),
+        loadKw: z.string().optional(),
+      })).optional().default([]),
       photos: z.array(z.object({
         uri: z.string(),
         latitude: z.string().optional(),
@@ -1785,110 +1838,318 @@ export const eventsRouter = createTRPCRouter({
       gpsLongitude: z.string().optional(),
       remarks: z.string().optional(),
     }))
-    .mutation(async ({ input }) => {
-      
+    .mutation(async ({ ctx, input }) => {
+      const employeeId = ctx.employeeId;
+
       const event = await db.select().from(events).where(eq(events.id, input.eventId));
       if (!event[0]) throw new Error("Event not found");
-      
+
       if (event[0].status === 'completed' || event[0].status === 'cancelled') {
         throw new Error(`Cannot submit sales for ${event[0].status} event`);
       }
-      
+
       const assignment = await db.select().from(eventAssignments)
         .where(and(
           eq(eventAssignments.eventId, input.eventId),
-          eq(eventAssignments.employeeId, input.employeeId)
+          eq(eventAssignments.employeeId, employeeId)
         ));
-      
+
       if (!assignment[0]) {
         throw new Error("You are not assigned to this event. Please contact the event manager.");
       }
 
+      // Photo + GPS enforcement
+      if (!input.photos || input.photos.length === 0) {
+        throw new Error("At least one geo-tagged photo is required to submit a sales entry.");
+      }
+      if (!input.gpsLatitude || !input.gpsLongitude) {
+        throw new Error("GPS location is required. Please tap 'Capture GPS Location' before submitting.");
+      }
+      const submitLat = parseFloat(input.gpsLatitude);
+      const submitLng = parseFloat(input.gpsLongitude);
+      if (!Number.isFinite(submitLat) || !Number.isFinite(submitLng)) {
+        throw new Error("Invalid GPS coordinates.");
+      }
+
+      // Geo-fence: anchor = avg GPS of prior active entries for this event (lazy-init from first entry)
+      const priorWithGps = await db.select({
+        lat: eventSalesEntries.gpsLatitude,
+        lng: eventSalesEntries.gpsLongitude,
+      })
+        .from(eventSalesEntries)
+        .where(and(
+          eq(eventSalesEntries.eventId, input.eventId),
+          eq(eventSalesEntries.entryStatus, 'active'),
+          isNotNull(eventSalesEntries.gpsLatitude),
+          isNotNull(eventSalesEntries.gpsLongitude),
+        ))
+        .limit(50);
+
+      let geoWarning: string | null = null;
+      if (priorWithGps.length > 0) {
+        const valid = priorWithGps
+          .map(p => ({ lat: parseFloat(p.lat as string), lng: parseFloat(p.lng as string) }))
+          .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+        if (valid.length > 0) {
+          const anchorLat = valid.reduce((s, p) => s + p.lat, 0) / valid.length;
+          const anchorLng = valid.reduce((s, p) => s + p.lng, 0) / valid.length;
+          const distKm = haversineKm(anchorLat, anchorLng, submitLat, submitLng);
+          if (distKm > GEO_FENCE_KM * GEO_FENCE_HARD_MULT) {
+            throw new Error(
+              `Submission location is ${distKm.toFixed(1)} km from the event area (limit ${GEO_FENCE_KM * GEO_FENCE_HARD_MULT} km). Please verify your GPS location.`
+            );
+          }
+          if (distKm > GEO_FENCE_KM) {
+            geoWarning = `Submission location is ${distKm.toFixed(1)} km from the event area (soft limit ${GEO_FENCE_KM} km).`;
+            if (GEO_FENCE_ENFORCE === 'hard') {
+              throw new Error(geoWarning);
+            }
+            console.warn(`[geo-fence] event=${input.eventId} employee=${employeeId} distKm=${distKm.toFixed(2)}`);
+          }
+        }
+      }
+
+      // Derive effective counts: lines take precedence when provided
+      const effSimsSold = input.simLines.length > 0 ? Math.max(input.simsSold, input.simLines.length) : input.simsSold;
+      const effSimsActivated = input.simLines.length > 0 ? input.simLines.filter(l => l.isActivated).length : input.simsActivated;
+      const effFtthSold = input.ftthLines.length > 0 ? Math.max(input.ftthSold, input.ftthLines.length) : input.ftthSold;
+      const effFtthActivated = input.ftthLines.length > 0 ? input.ftthLines.filter(l => l.isActivated).length : input.ftthActivated;
+      const effLeaseSold = input.lcLines.length > 0 ? input.lcLines.length : input.leaseSold;
+      const effEbSold = input.ebLines.length > 0 ? input.ebLines.length : input.ebSold;
+
+      // Parity: if user provided activated count without lines for SIM/FTTH, that's allowed (legacy);
+      //   if lines provided, lines.length must equal activated count when activated explicitly given.
+      if (input.simLines.length > 0 && input.simsActivated > 0 && input.simLines.filter(l => l.isActivated).length !== input.simsActivated) {
+        throw new Error(`SIMs Activated (${input.simsActivated}) must match number of activated mobile numbers entered (${input.simLines.filter(l => l.isActivated).length}).`);
+      }
+      if (input.ftthLines.length > 0 && input.ftthActivated > 0 && input.ftthLines.filter(l => l.isActivated).length !== input.ftthActivated) {
+        throw new Error(`FTTH Activated (${input.ftthActivated}) must match number of FTTH IDs entered (${input.ftthLines.filter(l => l.isActivated).length}).`);
+      }
+
+      // Sanity: cannot have more activated than sold
+      if (effSimsActivated > effSimsSold) {
+        throw new Error('SIMs Activated cannot exceed SIMs Sold.');
+      }
+      if (effFtthActivated > effFtthSold) {
+        throw new Error('FTTH Activated cannot exceed FTTH Sold.');
+      }
+
+      // Assignment-type checks — apply to ANY work in that subtype (sold OR activated OR lines)
       const assignedTypes = (assignment[0].assignedTaskTypes as string[]) || [];
       const hasAssignedTypes = assignedTypes.length > 0;
       if (hasAssignedTypes) {
-        if (input.simsSold > 0 && !assignedTypes.includes('SIM')) {
-          throw new Error('You are not assigned to SIM tasks');
-        }
-        if (input.ftthSold > 0 && !assignedTypes.includes('FTTH')) {
-          throw new Error('You are not assigned to FTTH tasks');
-        }
-        if (input.leaseSold > 0 && !assignedTypes.includes('LEASE_CIRCUIT')) {
-          throw new Error('You are not assigned to Lease Circuit tasks');
-        }
-        if (input.ebSold > 0 && !assignedTypes.includes('EB')) {
-          throw new Error('You are not assigned to EB tasks');
-        }
-      }
-      
-      const newTotalSim = assignment[0].simSold + input.simsSold;
-      const newTotalFtth = assignment[0].ftthSold + input.ftthSold;
-      const newTotalLease = (assignment[0].leaseCompleted || 0) + input.leaseSold;
-      const newTotalEb = (assignment[0].ebCompleted || 0) + input.ebSold;
-      
-      if (newTotalSim > assignment[0].simTarget) {
-        const remaining = assignment[0].simTarget - assignment[0].simSold;
-        throw new Error(`Cannot sell ${input.simsSold} SIMs. Only ${remaining} remaining in your target. Contact manager to increase target.`);
-      }
-      
-      if (newTotalFtth > assignment[0].ftthTarget) {
-        const remaining = assignment[0].ftthTarget - assignment[0].ftthSold;
-        throw new Error(`Cannot sell ${input.ftthSold} FTTH. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+        const touchesSim = effSimsSold > 0 || effSimsActivated > 0 || input.simLines.length > 0;
+        const touchesFtth = effFtthSold > 0 || effFtthActivated > 0 || input.ftthLines.length > 0;
+        const touchesLc = effLeaseSold > 0 || input.lcLines.length > 0;
+        const touchesEb = effEbSold > 0 || input.ebLines.length > 0;
+        if (touchesSim && !assignedTypes.includes('SIM')) throw new Error('You are not assigned to SIM tasks');
+        if (touchesFtth && !assignedTypes.includes('FTTH')) throw new Error('You are not assigned to FTTH tasks');
+        if (touchesLc && !assignedTypes.includes('LEASE_CIRCUIT')) throw new Error('You are not assigned to Lease Circuit tasks');
+        if (touchesEb && !assignedTypes.includes('EB')) throw new Error('You are not assigned to EB tasks');
       }
 
-      if (input.leaseSold > 0 && newTotalLease > (assignment[0].leaseTarget || 0)) {
-        const remaining = (assignment[0].leaseTarget || 0) - (assignment[0].leaseCompleted || 0);
-        throw new Error(`Cannot sell ${input.leaseSold} Lease Circuit. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+      // Format/uniqueness for line items — within submission
+      const simNumbers = input.simLines.map(l => l.mobileNumber);
+      if (new Set(simNumbers).size !== simNumbers.length) {
+        throw new Error('Duplicate mobile numbers in this submission.');
+      }
+      const ftthIds = input.ftthLines.map(l => l.ftthId);
+      if (new Set(ftthIds).size !== ftthIds.length) {
+        throw new Error('Duplicate FTTH IDs in this submission.');
+      }
+      const lcIds = input.lcLines.map(l => l.circuitId);
+      if (new Set(lcIds).size !== lcIds.length) {
+        throw new Error('Duplicate Lease Circuit IDs in this submission.');
+      }
+      const ebIds = input.ebLines.map(l => l.connectionId);
+      if (new Set(ebIds).size !== ebIds.length) {
+        throw new Error('Duplicate EB Connection IDs in this submission.');
       }
 
-      if (input.ebSold > 0 && newTotalEb > (assignment[0].ebTarget || 0)) {
-        const remaining = (assignment[0].ebTarget || 0) - (assignment[0].ebCompleted || 0);
-        throw new Error(`Cannot sell ${input.ebSold} EB. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+      // Cross-event uniqueness (against active prior submissions in this event)
+      if (simNumbers.length > 0) {
+        const dup = await db.select({ n: simSaleLines.mobileNumber })
+          .from(simSaleLines)
+          .innerJoin(eventSalesEntries, eq(simSaleLines.entryId, eventSalesEntries.id))
+          .where(and(
+            eq(simSaleLines.eventId, input.eventId),
+            inArray(simSaleLines.mobileNumber, simNumbers),
+            eq(eventSalesEntries.entryStatus, 'active')
+          ));
+        if (dup.length > 0) {
+          throw new Error(`Mobile number(s) already submitted for this event: ${dup.map(d => d.n).join(', ')}`);
+        }
       }
-      
-      const result = await db.insert(eventSalesEntries).values({
-        eventId: input.eventId,
-        employeeId: input.employeeId,
-        simsSold: input.simsSold,
-        simsActivated: input.simsActivated,
-        ftthSold: input.ftthSold,
-        ftthActivated: input.ftthActivated,
-        leaseSold: input.leaseSold,
-        ebSold: input.ebSold,
-        customerType: input.customerType,
-        photos: input.photos || [],
-        gpsLatitude: input.gpsLatitude,
-        gpsLongitude: input.gpsLongitude,
-        remarks: input.remarks,
-      }).returning();
+      if (ftthIds.length > 0) {
+        const dup = await db.select({ n: ftthSaleLines.ftthId })
+          .from(ftthSaleLines)
+          .innerJoin(eventSalesEntries, eq(ftthSaleLines.entryId, eventSalesEntries.id))
+          .where(and(
+            eq(ftthSaleLines.eventId, input.eventId),
+            inArray(ftthSaleLines.ftthId, ftthIds),
+            eq(eventSalesEntries.entryStatus, 'active')
+          ));
+        if (dup.length > 0) {
+          throw new Error(`FTTH ID(s) already submitted for this event: ${dup.map(d => d.n).join(', ')}`);
+        }
+      }
+      if (lcIds.length > 0) {
+        const dup = await db.select({ n: lcSaleLines.circuitId })
+          .from(lcSaleLines)
+          .innerJoin(eventSalesEntries, eq(lcSaleLines.entryId, eventSalesEntries.id))
+          .where(and(
+            eq(lcSaleLines.eventId, input.eventId),
+            inArray(lcSaleLines.circuitId, lcIds),
+            eq(eventSalesEntries.entryStatus, 'active')
+          ));
+        if (dup.length > 0) {
+          throw new Error(`Circuit ID(s) already submitted for this event: ${dup.map(d => d.n).join(', ')}`);
+        }
+      }
+      if (ebIds.length > 0) {
+        const dup = await db.select({ n: ebSaleLines.connectionId })
+          .from(ebSaleLines)
+          .innerJoin(eventSalesEntries, eq(ebSaleLines.entryId, eventSalesEntries.id))
+          .where(and(
+            eq(ebSaleLines.eventId, input.eventId),
+            inArray(ebSaleLines.connectionId, ebIds),
+            eq(eventSalesEntries.entryStatus, 'active')
+          ));
+        if (dup.length > 0) {
+          throw new Error(`EB Connection ID(s) already submitted for this event: ${dup.map(d => d.n).join(', ')}`);
+        }
+      }
 
-      const assignmentUpdate: any = {
-        simSold: newTotalSim,
-        ftthSold: newTotalFtth,
-        updatedAt: new Date(),
-      };
-      if (input.leaseSold > 0) {
-        assignmentUpdate.leaseCompleted = newTotalLease;
-      }
-      if (input.ebSold > 0) {
-        assignmentUpdate.ebCompleted = newTotalEb;
-      }
-      
-      await db.update(eventAssignments)
-        .set(assignmentUpdate)
-        .where(eq(eventAssignments.id, assignment[0].id));
+      // Insert parent entry + child line items in a transaction.
+      // Re-read assignment with SELECT ... FOR UPDATE to prevent race conditions
+      // between concurrent submissions blowing through the target.
+      const result = await db.transaction(async (tx) => {
+        const [lockedAssignment] = await tx.select().from(eventAssignments)
+          .where(eq(eventAssignments.id, assignment[0].id))
+          .for('update');
+        if (!lockedAssignment) {
+          throw new Error('Assignment vanished during submission. Please retry.');
+        }
 
-      if (input.leaseSold > 0 || input.ebSold > 0) {
+        const newTotalSim = lockedAssignment.simSold + effSimsSold;
+        const newTotalFtth = lockedAssignment.ftthSold + effFtthSold;
+        const newTotalLease = (lockedAssignment.leaseCompleted || 0) + effLeaseSold;
+        const newTotalEb = (lockedAssignment.ebCompleted || 0) + effEbSold;
+
+        if (effSimsSold > 0 && newTotalSim > lockedAssignment.simTarget) {
+          const remaining = lockedAssignment.simTarget - lockedAssignment.simSold;
+          throw new Error(`Cannot sell ${effSimsSold} SIMs. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+        }
+        if (effFtthSold > 0 && newTotalFtth > lockedAssignment.ftthTarget) {
+          const remaining = lockedAssignment.ftthTarget - lockedAssignment.ftthSold;
+          throw new Error(`Cannot sell ${effFtthSold} FTTH. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+        }
+        if (effLeaseSold > 0 && newTotalLease > (lockedAssignment.leaseTarget || 0)) {
+          const remaining = (lockedAssignment.leaseTarget || 0) - (lockedAssignment.leaseCompleted || 0);
+          throw new Error(`Cannot sell ${effLeaseSold} Lease Circuit. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+        }
+        if (effEbSold > 0 && newTotalEb > (lockedAssignment.ebTarget || 0)) {
+          const remaining = (lockedAssignment.ebTarget || 0) - (lockedAssignment.ebCompleted || 0);
+          throw new Error(`Cannot sell ${effEbSold} EB. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+        }
+
+        const [entry] = await tx.insert(eventSalesEntries).values({
+          eventId: input.eventId,
+          employeeId,
+          simsSold: effSimsSold,
+          simsActivated: effSimsActivated,
+          ftthSold: effFtthSold,
+          ftthActivated: effFtthActivated,
+          leaseSold: effLeaseSold,
+          ebSold: effEbSold,
+          customerType: input.customerType,
+          photos: input.photos || [],
+          gpsLatitude: input.gpsLatitude,
+          gpsLongitude: input.gpsLongitude,
+          remarks: input.remarks,
+        }).returning();
+
+        if (input.simLines.length > 0) {
+          await tx.insert(simSaleLines).values(input.simLines.map(l => ({
+            entryId: entry.id,
+            eventId: input.eventId,
+            employeeId,
+            mobileNumber: l.mobileNumber,
+            simSerialNumber: l.simSerialNumber,
+            customerName: l.customerName,
+            customerType: l.customerType ?? input.customerType,
+            isActivated: l.isActivated ?? true,
+          })));
+        }
+        if (input.ftthLines.length > 0) {
+          await tx.insert(ftthSaleLines).values(input.ftthLines.map(l => ({
+            entryId: entry.id,
+            eventId: input.eventId,
+            employeeId,
+            ftthId: l.ftthId,
+            customerName: l.customerName,
+            customerContact: l.customerContact,
+            customerType: l.customerType ?? input.customerType,
+            planName: l.planName,
+            isActivated: l.isActivated ?? true,
+          })));
+        }
+        if (input.lcLines.length > 0) {
+          await tx.insert(lcSaleLines).values(input.lcLines.map(l => ({
+            entryId: entry.id,
+            eventId: input.eventId,
+            employeeId,
+            circuitId: l.circuitId,
+            customerName: l.customerName,
+            customerContact: l.customerContact,
+            customerType: l.customerType ?? input.customerType,
+            bandwidth: l.bandwidth,
+            endpointA: l.endpointA,
+            endpointB: l.endpointB,
+          })));
+        }
+        if (input.ebLines.length > 0) {
+          await tx.insert(ebSaleLines).values(input.ebLines.map(l => ({
+            entryId: entry.id,
+            eventId: input.eventId,
+            employeeId,
+            connectionId: l.connectionId,
+            meterNumber: l.meterNumber,
+            customerName: l.customerName,
+            customerContact: l.customerContact,
+            customerType: l.customerType ?? input.customerType,
+            siteAddress: l.siteAddress,
+            loadKw: l.loadKw,
+          })));
+        }
+
+        // Atomic increment using SQL expression (the row is FOR UPDATE-locked above)
+        const assignmentUpdate: any = {
+          simSold: sql`${eventAssignments.simSold} + ${effSimsSold}`,
+          ftthSold: sql`${eventAssignments.ftthSold} + ${effFtthSold}`,
+          updatedAt: new Date(),
+        };
+        if (effLeaseSold > 0) assignmentUpdate.leaseCompleted = sql`${eventAssignments.leaseCompleted} + ${effLeaseSold}`;
+        if (effEbSold > 0) assignmentUpdate.ebCompleted = sql`${eventAssignments.ebCompleted} + ${effEbSold}`;
+        await tx.update(eventAssignments)
+          .set(assignmentUpdate)
+          .where(eq(eventAssignments.id, lockedAssignment.id));
+
+        return entry;
+      });
+
+      // Roll up lease/eb to event-level
+      if (effLeaseSold > 0 || effEbSold > 0) {
         const allAssignments = await db.select().from(eventAssignments)
           .where(eq(eventAssignments.eventId, input.eventId));
         const eventUpdate: any = { updatedAt: new Date() };
-        if (input.leaseSold > 0) {
+        if (effLeaseSold > 0) {
           eventUpdate.leaseCompleted = allAssignments.reduce((sum, a) => sum + (a.leaseCompleted || 0), 0);
           if (!event[0].leaseStartedAt && eventUpdate.leaseCompleted > 0) {
             eventUpdate.leaseStartedAt = new Date();
           }
         }
-        if (input.ebSold > 0) {
+        if (effEbSold > 0) {
           eventUpdate.ebCompleted = allAssignments.reduce((sum, a) => sum + (a.ebCompleted || 0), 0);
           if (!event[0].ebStartedAt && eventUpdate.ebCompleted > 0) {
             eventUpdate.ebStartedAt = new Date();
@@ -1898,35 +2159,23 @@ export const eventsRouter = createTRPCRouter({
           .set(eventUpdate)
           .where(eq(events.id, input.eventId));
       }
-      
-      if (input.simsSold > 0) {
+
+      // Resource usage
+      if (effSimsSold > 0) {
         const simResource = await db.select().from(resources)
-          .where(and(
-            eq(resources.circle, event[0].circle),
-            eq(resources.type, 'SIM')
-          ));
+          .where(and(eq(resources.circle, event[0].circle), eq(resources.type, 'SIM')));
         if (simResource[0]) {
           await db.update(resources)
-            .set({
-              used: simResource[0].used + input.simsSold,
-              updatedAt: new Date(),
-            })
+            .set({ used: simResource[0].used + effSimsSold, updatedAt: new Date() })
             .where(eq(resources.id, simResource[0].id));
         }
       }
-      
-      if (input.ftthSold > 0) {
+      if (effFtthSold > 0) {
         const ftthResource = await db.select().from(resources)
-          .where(and(
-            eq(resources.circle, event[0].circle),
-            eq(resources.type, 'FTTH')
-          ));
+          .where(and(eq(resources.circle, event[0].circle), eq(resources.type, 'FTTH')));
         if (ftthResource[0]) {
           await db.update(resources)
-            .set({
-              used: ftthResource[0].used + input.ftthSold,
-              updatedAt: new Date(),
-            })
+            .set({ used: ftthResource[0].used + effFtthSold, updatedAt: new Date() })
             .where(eq(resources.id, ftthResource[0].id));
         }
       }
@@ -1934,38 +2183,315 @@ export const eventsRouter = createTRPCRouter({
       await db.insert(auditLogs).values({
         action: 'SUBMIT_EVENT_SALES',
         entityType: 'SALES',
-        entityId: result[0].id,
-        performedBy: input.employeeId,
-        details: { eventId: input.eventId, simsSold: input.simsSold, ftthSold: input.ftthSold, leaseSold: input.leaseSold, ebSold: input.ebSold },
-      });
-
-      await db.insert(auditLogs).values({
-        action: 'SUBMIT_EVENT_SALES',
-        entityType: 'EVENT',
-        entityId: input.eventId,
-        performedBy: input.employeeId,
-        timestamp: new Date(),
+        entityId: result.id,
+        performedBy: employeeId,
         details: {
-          simsSold: input.simsSold,
-          simsActivated: input.simsActivated,
-          ftthSold: input.ftthSold,
-          ftthActivated: input.ftthActivated,
-          leaseSold: input.leaseSold,
-          ebSold: input.ebSold,
-          customerType: input.customerType,
+          eventId: input.eventId,
+          simsSold: effSimsSold,
+          simsActivated: effSimsActivated,
+          ftthSold: effFtthSold,
+          ftthActivated: effFtthActivated,
+          leaseSold: effLeaseSold,
+          ebSold: effEbSold,
+          simLineCount: input.simLines.length,
+          ftthLineCount: input.ftthLines.length,
+          lcLineCount: input.lcLines.length,
+          ebLineCount: input.ebLines.length,
         },
       });
 
-      return result[0];
+      return result;
     }),
 
   getEventSalesEntries: publicProcedure
-    .input(z.object({ eventId: z.string().uuid() }))
+    .input(z.object({
+      eventId: z.string().uuid(),
+      includeDeleted: z.boolean().optional().default(false),
+    }))
     .query(async ({ input }) => {
       const entries = await db.select().from(eventSalesEntries)
-        .where(eq(eventSalesEntries.eventId, input.eventId))
+        .where(input.includeDeleted
+          ? eq(eventSalesEntries.eventId, input.eventId)
+          : and(
+              eq(eventSalesEntries.eventId, input.eventId),
+              eq(eventSalesEntries.entryStatus, 'active')
+            )
+        )
         .orderBy(desc(eventSalesEntries.createdAt));
       return entries;
+    }),
+
+  getSalesEntryWithLines: publicProcedure
+    .input(z.object({ entryId: z.string().uuid() }))
+    .query(async ({ input }) => {
+      const [entry] = await db.select().from(eventSalesEntries)
+        .where(eq(eventSalesEntries.id, input.entryId));
+      if (!entry) throw new Error('Sales entry not found');
+      const [simLines, ftthLines, lcLines, ebLines] = await Promise.all([
+        db.select().from(simSaleLines).where(eq(simSaleLines.entryId, input.entryId)),
+        db.select().from(ftthSaleLines).where(eq(ftthSaleLines.entryId, input.entryId)),
+        db.select().from(lcSaleLines).where(eq(lcSaleLines.entryId, input.entryId)),
+        db.select().from(ebSaleLines).where(eq(ebSaleLines.entryId, input.entryId)),
+      ]);
+      return { entry, simLines, ftthLines, lcLines, ebLines };
+    }),
+
+  // Soft-delete a sales entry. Authorized actor: the entry's creator OR the event's creator/manager.
+  // Adjusts assignment counters and event-level rollups by the entry's amounts.
+  deleteSalesEntry: authedProcedure
+    .input(z.object({
+      entryId: z.string().uuid(),
+      reason: z.string().min(3, 'Please provide a reason of at least 3 characters'),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const actor = ctx.employeeId;
+      const [entry] = await db.select().from(eventSalesEntries)
+        .where(eq(eventSalesEntries.id, input.entryId));
+      if (!entry) throw new Error('Sales entry not found');
+      if (entry.entryStatus !== 'active') {
+        throw new Error(`Cannot delete an entry with status ${entry.entryStatus}`);
+      }
+
+      const [event] = await db.select().from(events).where(eq(events.id, entry.eventId));
+      if (!event) throw new Error('Event not found');
+      const isOwner = entry.employeeId === actor;
+      const isEventCreator = event.createdBy === actor;
+      const isEventManager = event.assignedTo === actor;
+      if (!isOwner && !isEventCreator && !isEventManager) {
+        throw new Error('You are not authorized to delete this sales entry');
+      }
+
+      await db.transaction(async (tx) => {
+        await tx.update(eventSalesEntries)
+          .set({
+            entryStatus: 'deleted',
+            deletedAt: new Date(),
+            deletedBy: actor,
+            reviewRemarks: input.reason,
+            updatedAt: new Date(),
+          })
+          .where(eq(eventSalesEntries.id, entry.id));
+
+        // Subtract from assignment counters (atomic, lock-free via SQL expressions)
+        const [assignment] = await tx.select().from(eventAssignments)
+          .where(and(
+            eq(eventAssignments.eventId, entry.eventId),
+            eq(eventAssignments.employeeId, entry.employeeId)
+          ));
+        if (assignment) {
+          await tx.update(eventAssignments)
+            .set({
+              simSold: sql`GREATEST(0, ${eventAssignments.simSold} - ${entry.simsSold || 0})`,
+              ftthSold: sql`GREATEST(0, ${eventAssignments.ftthSold} - ${entry.ftthSold || 0})`,
+              leaseCompleted: sql`GREATEST(0, ${eventAssignments.leaseCompleted} - ${entry.leaseSold || 0})`,
+              ebCompleted: sql`GREATEST(0, ${eventAssignments.ebCompleted} - ${entry.ebSold || 0})`,
+              updatedAt: new Date(),
+            })
+            .where(eq(eventAssignments.id, assignment.id));
+        }
+
+        // Roll back resources.used for SIM/FTTH so circle inventory stays accurate
+        if ((entry.simsSold || 0) > 0) {
+          const [simResource] = await tx.select().from(resources)
+            .where(and(eq(resources.circle, event.circle), eq(resources.type, 'SIM')));
+          if (simResource) {
+            await tx.update(resources)
+              .set({
+                used: sql`GREATEST(0, ${resources.used} - ${entry.simsSold || 0})`,
+                updatedAt: new Date(),
+              })
+              .where(eq(resources.id, simResource.id));
+          }
+        }
+        if ((entry.ftthSold || 0) > 0) {
+          const [ftthResource] = await tx.select().from(resources)
+            .where(and(eq(resources.circle, event.circle), eq(resources.type, 'FTTH')));
+          if (ftthResource) {
+            await tx.update(resources)
+              .set({
+                used: sql`GREATEST(0, ${resources.used} - ${entry.ftthSold || 0})`,
+                updatedAt: new Date(),
+              })
+              .where(eq(resources.id, ftthResource.id));
+          }
+        }
+      });
+
+      // Event-level lease/eb rollup
+      if ((entry.leaseSold || 0) > 0 || (entry.ebSold || 0) > 0) {
+        const allAssignments = await db.select().from(eventAssignments)
+          .where(eq(eventAssignments.eventId, entry.eventId));
+        await db.update(events).set({
+          leaseCompleted: allAssignments.reduce((s, a) => s + (a.leaseCompleted || 0), 0),
+          ebCompleted: allAssignments.reduce((s, a) => s + (a.ebCompleted || 0), 0),
+          updatedAt: new Date(),
+        }).where(eq(events.id, entry.eventId));
+      }
+
+      await db.insert(auditLogs).values({
+        action: 'DELETE_EVENT_SALES',
+        entityType: 'SALES',
+        entityId: entry.id,
+        performedBy: actor,
+        details: {
+          eventId: entry.eventId,
+          reason: input.reason,
+          simsSold: entry.simsSold,
+          ftthSold: entry.ftthSold,
+          leaseSold: entry.leaseSold,
+          ebSold: entry.ebSold,
+        },
+      });
+
+      return { success: true, entryId: entry.id };
+    }),
+
+  // Append SIM activations to an existing entry without changing sold counts.
+  // Useful when SIMs were sold first and activated later.
+  activateSimsForEntry: authedProcedure
+    .input(z.object({
+      entryId: z.string().uuid(),
+      lines: z.array(z.object({
+        mobileNumber: z.string().regex(/^[6-9]\d{9}$/, 'Mobile number must be 10 digits starting with 6-9'),
+        simSerialNumber: z.string().optional(),
+        customerName: z.string().optional(),
+        customerType: z.enum(['B2C', 'B2B', 'Government', 'Enterprise']).optional(),
+      })).min(1, 'At least one mobile number is required'),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const actor = ctx.employeeId;
+      const [entry] = await db.select().from(eventSalesEntries)
+        .where(eq(eventSalesEntries.id, input.entryId));
+      if (!entry) throw new Error('Sales entry not found');
+      if (entry.entryStatus !== 'active') {
+        throw new Error(`Cannot add activations to ${entry.entryStatus} entry`);
+      }
+      if (entry.employeeId !== actor) {
+        throw new Error('Only the entry creator can add activations');
+      }
+
+      const numbers = input.lines.map(l => l.mobileNumber);
+      if (new Set(numbers).size !== numbers.length) {
+        throw new Error('Duplicate mobile numbers in this activation batch.');
+      }
+
+      // Cross-event uniqueness against active entries
+      const dup = await db.select({ n: simSaleLines.mobileNumber })
+        .from(simSaleLines)
+        .innerJoin(eventSalesEntries, eq(simSaleLines.entryId, eventSalesEntries.id))
+        .where(and(
+          eq(simSaleLines.eventId, entry.eventId),
+          inArray(simSaleLines.mobileNumber, numbers),
+          eq(eventSalesEntries.entryStatus, 'active')
+        ));
+      if (dup.length > 0) {
+        throw new Error(`Mobile number(s) already submitted for this event: ${dup.map(d => d.n).join(', ')}`);
+      }
+
+      const newActivated = (entry.simsActivated || 0) + input.lines.length;
+      if (newActivated > (entry.simsSold || 0)) {
+        throw new Error(`Cannot activate ${input.lines.length} more SIMs. Sold=${entry.simsSold}, already activated=${entry.simsActivated}.`);
+      }
+
+      await db.transaction(async (tx) => {
+        await tx.insert(simSaleLines).values(input.lines.map(l => ({
+          entryId: entry.id,
+          eventId: entry.eventId,
+          employeeId: entry.employeeId,
+          mobileNumber: l.mobileNumber,
+          simSerialNumber: l.simSerialNumber,
+          customerName: l.customerName,
+          customerType: l.customerType ?? entry.customerType,
+          isActivated: true,
+        })));
+        await tx.update(eventSalesEntries)
+          .set({ simsActivated: newActivated, updatedAt: new Date() })
+          .where(eq(eventSalesEntries.id, entry.id));
+      });
+
+      await db.insert(auditLogs).values({
+        action: 'ACTIVATE_SIMS_FOR_ENTRY',
+        entityType: 'SALES',
+        entityId: entry.id,
+        performedBy: actor,
+        details: { eventId: entry.eventId, addedCount: input.lines.length, newSimsActivated: newActivated },
+      });
+
+      return { success: true, entryId: entry.id, simsActivated: newActivated };
+    }),
+
+  // Append FTTH activations to an existing entry without changing sold counts.
+  activateFtthForEntry: authedProcedure
+    .input(z.object({
+      entryId: z.string().uuid(),
+      lines: z.array(z.object({
+        ftthId: z.string().min(1).max(50),
+        customerName: z.string().optional(),
+        customerContact: z.string().optional(),
+        customerType: z.enum(['B2C', 'B2B', 'Government', 'Enterprise']).optional(),
+        planName: z.string().optional(),
+      })).min(1, 'At least one FTTH ID is required'),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const actor = ctx.employeeId;
+      const [entry] = await db.select().from(eventSalesEntries)
+        .where(eq(eventSalesEntries.id, input.entryId));
+      if (!entry) throw new Error('Sales entry not found');
+      if (entry.entryStatus !== 'active') {
+        throw new Error(`Cannot add activations to ${entry.entryStatus} entry`);
+      }
+      if (entry.employeeId !== actor) {
+        throw new Error('Only the entry creator can add activations');
+      }
+
+      const ids = input.lines.map(l => l.ftthId);
+      if (new Set(ids).size !== ids.length) {
+        throw new Error('Duplicate FTTH IDs in this activation batch.');
+      }
+
+      const dup = await db.select({ n: ftthSaleLines.ftthId })
+        .from(ftthSaleLines)
+        .innerJoin(eventSalesEntries, eq(ftthSaleLines.entryId, eventSalesEntries.id))
+        .where(and(
+          eq(ftthSaleLines.eventId, entry.eventId),
+          inArray(ftthSaleLines.ftthId, ids),
+          eq(eventSalesEntries.entryStatus, 'active')
+        ));
+      if (dup.length > 0) {
+        throw new Error(`FTTH ID(s) already submitted for this event: ${dup.map(d => d.n).join(', ')}`);
+      }
+
+      const newActivated = (entry.ftthActivated || 0) + input.lines.length;
+      if (newActivated > (entry.ftthSold || 0)) {
+        throw new Error(`Cannot activate ${input.lines.length} more FTTH. Sold=${entry.ftthSold}, already activated=${entry.ftthActivated}.`);
+      }
+
+      await db.transaction(async (tx) => {
+        await tx.insert(ftthSaleLines).values(input.lines.map(l => ({
+          entryId: entry.id,
+          eventId: entry.eventId,
+          employeeId: entry.employeeId,
+          ftthId: l.ftthId,
+          customerName: l.customerName,
+          customerContact: l.customerContact,
+          customerType: l.customerType ?? entry.customerType,
+          planName: l.planName,
+          isActivated: true,
+        })));
+        await tx.update(eventSalesEntries)
+          .set({ ftthActivated: newActivated, updatedAt: new Date() })
+          .where(eq(eventSalesEntries.id, entry.id));
+      });
+
+      await db.insert(auditLogs).values({
+        action: 'ACTIVATE_FTTH_FOR_ENTRY',
+        entityType: 'SALES',
+        entityId: entry.id,
+        performedBy: actor,
+        details: { eventId: entry.eventId, addedCount: input.lines.length, newFtthActivated: newActivated },
+      });
+
+      return { success: true, entryId: entry.id, ftthActivated: newActivated };
     }),
 
   submitFinanceCollection: publicProcedure
@@ -3633,20 +4159,27 @@ export const eventsRouter = createTRPCRouter({
           myProgress: {
             simSold: assignment?.simSold ?? 0,
             ftthSold: assignment?.ftthSold ?? 0,
+            lease: assignment?.leaseCompleted ?? 0,
+            eb: assignment?.ebCompleted ?? 0,
+            btsDown: assignment?.btsDownCompleted ?? 0,
+            routeFail: assignment?.routeFailCompleted ?? 0,
+            ftthDown: assignment?.ftthDownCompleted ?? 0,
+            ofcFail: assignment?.ofcFailCompleted ?? 0,
           },
           maintenanceProgress: {
-            lease: event.leaseCompleted ?? 0,
-            leaseTarget: event.targetLease ?? 0,
-            btsDown: event.btsDownCompleted ?? 0,
-            btsDownTarget: event.targetBtsDown ?? 0,
-            routeFail: event.routeFailCompleted ?? 0,
-            routeFailTarget: event.targetRouteFail ?? 0,
-            ftthDown: event.ftthDownCompleted ?? 0,
-            ftthDownTarget: event.targetFtthDown ?? 0,
-            ofcFail: event.ofcFailCompleted ?? 0,
-            ofcFailTarget: event.targetOfcFail ?? 0,
-            eb: event.ebCompleted ?? 0,
-            ebTarget: event.targetEb ?? 0,
+            // Per-employee when assigned, fall back to event rollup otherwise
+            lease: assignment ? (assignment.leaseCompleted ?? 0) : (event.leaseCompleted ?? 0),
+            leaseTarget: myLeaseTarget,
+            btsDown: assignment ? (assignment.btsDownCompleted ?? 0) : (event.btsDownCompleted ?? 0),
+            btsDownTarget: myBtsDownTarget,
+            routeFail: assignment ? (assignment.routeFailCompleted ?? 0) : (event.routeFailCompleted ?? 0),
+            routeFailTarget: myRouteFailTarget,
+            ftthDown: assignment ? (assignment.ftthDownCompleted ?? 0) : (event.ftthDownCompleted ?? 0),
+            ftthDownTarget: myFtthDownTarget,
+            ofcFail: assignment ? (assignment.ofcFailCompleted ?? 0) : (event.ofcFailCompleted ?? 0),
+            ofcFailTarget: myOfcFailTarget,
+            eb: assignment ? (assignment.ebCompleted ?? 0) : (event.ebCompleted ?? 0),
+            ebTarget: myEbTarget,
           },
           categories: {
             hasSIM,
@@ -3665,12 +4198,12 @@ export const eventsRouter = createTRPCRouter({
             const hasProgress = 
               (assignment?.simSold ?? 0) > 0 || 
               (assignment?.ftthSold ?? 0) > 0 ||
-              (event.leaseCompleted ?? 0) > 0 ||
-              (event.btsDownCompleted ?? 0) > 0 ||
-              (event.routeFailCompleted ?? 0) > 0 ||
-              (event.ftthDownCompleted ?? 0) > 0 ||
-              (event.ofcFailCompleted ?? 0) > 0 ||
-              (event.ebCompleted ?? 0) > 0;
+              (assignment?.leaseCompleted ?? 0) > 0 ||
+              (assignment?.btsDownCompleted ?? 0) > 0 ||
+              (assignment?.routeFailCompleted ?? 0) > 0 ||
+              (assignment?.ftthDownCompleted ?? 0) > 0 ||
+              (assignment?.ofcFailCompleted ?? 0) > 0 ||
+              (assignment?.ebCompleted ?? 0) > 0;
             return hasProgress ? 'in_progress' : 'not_started';
           })(),
           submittedAt: assignment?.submittedAt ?? null,

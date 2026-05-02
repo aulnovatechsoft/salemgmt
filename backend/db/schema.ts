@@ -34,6 +34,8 @@ export const salesReportStatusEnum = pgEnum('sales_report_status', ['pending', '
 
 export const taskSubmissionStatusEnum = pgEnum('task_submission_status', ['not_started', 'in_progress', 'submitted', 'approved', 'rejected']);
 
+export const salesEntryStatusEnum = pgEnum('sales_entry_status', ['active', 'superseded', 'deleted']);
+
 export const notificationTypeEnum = pgEnum('notification_type', [
   'EVENT_ASSIGNED',
   'EVENT_STATUS_CHANGED',
@@ -251,6 +253,73 @@ export const eventSalesEntries = pgTable('event_sales_entries', {
   gpsLatitude: text('gps_latitude'),
   gpsLongitude: text('gps_longitude'),
   remarks: text('remarks'),
+  entryStatus: salesEntryStatusEnum('entry_status').default('active').notNull(),
+  version: integer('version').default(1).notNull(),
+  supersededBy: uuid('superseded_by'),
+  reviewStatus: salesReportStatusEnum('review_status').default('pending').notNull(),
+  reviewedBy: uuid('reviewed_by').references(() => employees.id),
+  reviewedAt: timestamp('reviewed_at'),
+  reviewRemarks: text('review_remarks'),
+  deletedAt: timestamp('deleted_at'),
+  deletedBy: uuid('deleted_by').references(() => employees.id),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const simSaleLines = pgTable('sim_sale_lines', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  entryId: uuid('entry_id').notNull().references(() => eventSalesEntries.id, { onDelete: 'cascade' }),
+  eventId: uuid('event_id').notNull().references(() => events.id),
+  employeeId: uuid('employee_id').notNull().references(() => employees.id),
+  mobileNumber: varchar('mobile_number', { length: 15 }).notNull(),
+  simSerialNumber: varchar('sim_serial_number', { length: 50 }),
+  customerName: varchar('customer_name', { length: 255 }),
+  customerType: customerTypeEnum('customer_type'),
+  isActivated: boolean('is_activated').default(false).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const ftthSaleLines = pgTable('ftth_sale_lines', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  entryId: uuid('entry_id').notNull().references(() => eventSalesEntries.id, { onDelete: 'cascade' }),
+  eventId: uuid('event_id').notNull().references(() => events.id),
+  employeeId: uuid('employee_id').notNull().references(() => employees.id),
+  ftthId: varchar('ftth_id', { length: 50 }).notNull(),
+  customerName: varchar('customer_name', { length: 255 }),
+  customerContact: varchar('customer_contact', { length: 20 }),
+  customerType: customerTypeEnum('customer_type'),
+  planName: varchar('plan_name', { length: 100 }),
+  isActivated: boolean('is_activated').default(false).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const lcSaleLines = pgTable('lc_sale_lines', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  entryId: uuid('entry_id').notNull().references(() => eventSalesEntries.id, { onDelete: 'cascade' }),
+  eventId: uuid('event_id').notNull().references(() => events.id),
+  employeeId: uuid('employee_id').notNull().references(() => employees.id),
+  circuitId: varchar('circuit_id', { length: 100 }).notNull(),
+  customerName: varchar('customer_name', { length: 255 }).notNull(),
+  customerContact: varchar('customer_contact', { length: 20 }),
+  customerType: customerTypeEnum('customer_type'),
+  bandwidth: varchar('bandwidth', { length: 50 }),
+  endpointA: varchar('endpoint_a', { length: 255 }),
+  endpointB: varchar('endpoint_b', { length: 255 }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const ebSaleLines = pgTable('eb_sale_lines', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  entryId: uuid('entry_id').notNull().references(() => eventSalesEntries.id, { onDelete: 'cascade' }),
+  eventId: uuid('event_id').notNull().references(() => events.id),
+  employeeId: uuid('employee_id').notNull().references(() => employees.id),
+  connectionId: varchar('connection_id', { length: 100 }).notNull(),
+  meterNumber: varchar('meter_number', { length: 100 }),
+  customerName: varchar('customer_name', { length: 255 }).notNull(),
+  customerContact: varchar('customer_contact', { length: 20 }),
+  customerType: customerTypeEnum('customer_type'),
+  siteAddress: text('site_address'),
+  loadKw: varchar('load_kw', { length: 50 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
