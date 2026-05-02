@@ -1,6 +1,6 @@
 import postgres from "postgres";
 
-const connectionString = process.env.DATABASE_URL!;
+const connectionString = process.env.BSNL_DATABASE_URL || process.env.DATABASE_URL!;
 
 async function updateCircles() {
   const sql = postgres(connectionString, { ssl: false });
@@ -14,6 +14,7 @@ async function updateCircles() {
       "ASSAM",
       "BIHAR",
       "CHHATTISGARH",
+      "DELHI",
       "GUJARAT",
       "HARYANA",
       "HIMACHAL_PRADESH",

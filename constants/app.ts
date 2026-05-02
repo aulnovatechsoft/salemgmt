@@ -17,6 +17,7 @@ export const CIRCLES: { label: string; value: Circle }[] = [
   { label: 'Assam', value: 'ASSAM' },
   { label: 'Bihar', value: 'BIHAR' },
   { label: 'Chhattisgarh', value: 'CHHATTISGARH' },
+  { label: 'Delhi', value: 'DELHI' },
   { label: 'Gujarat', value: 'GUJARAT' },
   { label: 'Haryana', value: 'HARYANA' },
   { label: 'Himachal Pradesh', value: 'HIMACHAL_PRADESH' },

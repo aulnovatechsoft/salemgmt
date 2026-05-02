@@ -8,6 +8,7 @@ export type Circle =
   | 'ASSAM'
   | 'BIHAR'
   | 'CHHATTISGARH'
+  | 'DELHI'
   | 'GUJARAT'
   | 'HARYANA'
   | 'HIMACHAL_PRADESH'
