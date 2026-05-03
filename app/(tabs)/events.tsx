@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { Plus, Search, Calendar, MapPin, Users, Play, Pause, CheckCircle, XCircle, FileText, Edit3, ChevronRight, ChevronDown, ChevronUp, Zap, Briefcase } from 'lucide-react-native';
+import { Plus, Search, Calendar, MapPin, Users, Play, Pause, CheckCircle, XCircle, FileText, Edit3, ChevronRight, ChevronDown, ChevronUp, Zap, Briefcase, Clock } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
@@ -469,6 +469,40 @@ function EventCard({ event, getDisplayStatus, canEdit, onActivate }: {
             {new Date(event.dateRange.startDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} - {new Date(event.dateRange.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
           </Text>
         </View>
+        {/* Tier C — SLA pill. Hidden for terminal statuses (completed /
+            cancelled / past) where remaining-time is meaningless. For active
+            and upcoming tasks we surface time-to-deadline at a glance using a
+            colour grammar consistent with the event-detail header so users
+            build one mental model across the app. */}
+        {(() => {
+          if (status === 'completed' || status === 'cancelled' || status === 'past') return null;
+          const end = new Date(event.dateRange.endDate);
+          const now = new Date();
+          const ms = end.getTime() - now.getTime();
+          const dayMs = 24 * 60 * 60 * 1000;
+          const days = Math.floor(Math.abs(ms) / dayMs);
+          const hours = Math.floor((Math.abs(ms) % dayMs) / (60 * 60 * 1000));
+          let label: string; let pillColor: string; let pillBg: string;
+          if (ms < 0) {
+            label = days > 0 ? `Overdue ${days}d` : `Overdue ${hours}h`;
+            pillColor = '#B71C1C'; pillBg = '#FFCDD2';
+          } else if (ms < dayMs) {
+            label = `Due in ${hours}h`;
+            pillColor = '#C62828'; pillBg = '#FFEBEE';
+          } else if (ms < 3 * dayMs) {
+            label = `Due in ${days}d`; pillColor = '#E65100'; pillBg = '#FFF3E0';
+          } else if (ms < 7 * dayMs) {
+            label = `Due in ${days}d`; pillColor = '#F9A825'; pillBg = '#FFFDE7';
+          } else {
+            label = `Due in ${days}d`; pillColor = '#2E7D32'; pillBg = '#E8F5E9';
+          }
+          return (
+            <View style={[styles.slaPill, { backgroundColor: pillBg }]}>
+              <Clock size={12} color={pillColor} />
+              <Text style={[styles.slaPillText, { color: pillColor }]}>{label}</Text>
+            </View>
+          );
+        })()}
       </View>
 
       {/* Creator Info */}
@@ -878,6 +912,19 @@ const styles = StyleSheet.create({
   progressBarFill: {
     height: '100%' as const,
     borderRadius: 3,
+  },
+  slaPill: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  slaPillText: {
+    fontSize: 11,
+    fontWeight: '700' as const,
+    letterSpacing: 0.2,
   },
   categoryText: {
     fontSize: 12,

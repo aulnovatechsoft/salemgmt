@@ -3872,27 +3872,100 @@ export const eventsRouter = createTRPCRouter({
       const newStatus = input.status as any;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const prevStatus = previousStatus as any;
-      const updated = await db.update(events)
-        .set({ status: newStatus, updatedAt: new Date() })
-        .where(and(
-          eq(events.id, input.eventId),
-          eq(events.status, prevStatus),
-        ))
-        .returning();
-      if (!updated[0]) {
-        throw new TRPCError({
-          code: 'CONFLICT',
-          message: 'This task was changed by someone else. Please refresh and try again.',
-        });
-      }
-      const result = updated[0];
+      // Tier C hardening — wrap the entire state-change "unit of work"
+      // (CAS status flip + audit row + inventory return for cancel) in a
+      // single DB transaction so the system can never end up in a
+      // half-cancelled state where the task is `cancelled` but its SIM/FTTH
+      // allocations leaked into the circle pool. If any step inside the
+      // transaction throws, Postgres rolls back the status flip too, and
+      // the caller gets a clean error to retry — no manual reconciliation
+      // needed. Notifications stay outside the transaction (best-effort,
+      // not data-integrity critical).
+      const result = await db.transaction(async (tx) => {
+        const updated = await tx.update(events)
+          .set({ status: newStatus, updatedAt: new Date() })
+          .where(and(
+            eq(events.id, input.eventId),
+            eq(events.status, prevStatus),
+          ))
+          .returning();
+        if (!updated[0]) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This task was changed by someone else. Please refresh and try again.',
+          });
+        }
 
-      await db.insert(auditLogs).values({
-        action: 'UPDATE_EVENT_STATUS',
-        entityType: 'EVENT',
-        entityId: input.eventId,
-        performedBy: actorId,
-        details: { previousStatus, newStatus: input.status, reason: input.reason ?? null },
+        await tx.insert(auditLogs).values({
+          action: 'UPDATE_EVENT_STATUS',
+          entityType: 'EVENT',
+          entityId: input.eventId,
+          performedBy: actorId,
+          details: { previousStatus, newStatus: input.status, reason: input.reason ?? null },
+        });
+
+        // Inventory return on cancel — see Tier C section in replit.md.
+        // For each allocation row: decrement `resources.allocated`,
+        // increment `resources.remaining` (clamped so a corrupt over-count
+        // can never push `allocated` negative), then delete the allocation
+        // rows so a re-cancel after a reopen→cancel cycle is a safe no-op.
+        // Inside the same tx as the status flip → atomic.
+        if (input.status === 'cancelled' && previousStatus !== 'cancelled') {
+          const allocs = await tx.select({
+            id: resourceAllocations.id,
+            resourceId: resourceAllocations.resourceId,
+            quantity: resourceAllocations.quantity,
+          })
+            .from(resourceAllocations)
+            .where(eq(resourceAllocations.eventId, input.eventId));
+
+          let returnedSim = 0;
+          let returnedFtth = 0;
+          for (const alloc of allocs) {
+            if (!alloc.quantity || alloc.quantity <= 0) continue;
+            const [res] = await tx.select({
+              id: resources.id,
+              type: resources.type,
+              allocated: resources.allocated,
+              remaining: resources.remaining,
+            }).from(resources).where(eq(resources.id, alloc.resourceId)).limit(1);
+            if (!res) continue;
+
+            const safeReturn = Math.min(alloc.quantity, res.allocated);
+            await tx.update(resources)
+              .set({
+                allocated: res.allocated - safeReturn,
+                remaining: res.remaining + safeReturn,
+                updatedAt: new Date(),
+              })
+              .where(eq(resources.id, res.id));
+
+            if (res.type === 'SIM') returnedSim += safeReturn;
+            else if (res.type === 'FTTH') returnedFtth += safeReturn;
+          }
+
+          if (allocs.length > 0) {
+            await tx.delete(resourceAllocations)
+              .where(eq(resourceAllocations.eventId, input.eventId));
+          }
+
+          if (returnedSim > 0 || returnedFtth > 0) {
+            await tx.insert(auditLogs).values({
+              action: 'RETURN_INVENTORY',
+              entityType: 'EVENT',
+              entityId: input.eventId,
+              performedBy: actorId,
+              details: {
+                trigger: 'cancel',
+                returnedSim,
+                returnedFtth,
+                allocationsRemoved: allocs.length,
+              },
+            });
+          }
+        }
+
+        return updated[0];
       });
 
       // Notifications for paused / cancelled / completed (best-effort)

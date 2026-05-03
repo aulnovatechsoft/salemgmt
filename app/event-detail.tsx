@@ -2292,11 +2292,13 @@ export default function EventDetailScreen() {
               <Text style={styles.sectionTitle}>Recent Activity</Text>
             </View>
             <View style={styles.activityList}>
-              {activityLogs.slice(0, 5).map((log, idx) => {
+              {activityLogs.slice(0, 10).map((log, idx) => {
                 const getActivityIcon = (action: string) => {
                   if (action.includes('TASK_PROGRESS')) return { icon: 'check', color: '#2E7D32', bg: '#E8F5E9' };
                   if (action === 'SUBMIT_EVENT_SALES') return { icon: 'sales', color: '#00796B', bg: '#E0F2F1' };
                   if (action.includes('ASSIGN')) return { icon: 'user', color: '#1565C0', bg: '#E3F2FD' };
+                  if (action === 'REOPEN_EVENT' || action === 'AUTO_COMPLETE_EVENT') return { icon: 'flag', color: '#7B1FA2', bg: '#F3E5F5' };
+                  if (action === 'RETURN_INVENTORY') return { icon: 'sales', color: '#1565C0', bg: '#E3F2FD' };
                   if (action.includes('STATUS')) return { icon: 'flag', color: '#EF6C00', bg: '#FFF3E0' };
                   if (action.includes('CREATE')) return { icon: 'plus', color: '#7B1FA2', bg: '#F3E5F5' };
                   return { icon: 'activity', color: '#546E7A', bg: '#ECEFF1' };
@@ -2326,10 +2328,40 @@ export default function EventDetailScreen() {
                     return parts.length > 0 ? `submitted sales entry (${parts.join(', ')})` : 'submitted sales entry';
                   }
                   if (log.action === 'UPDATE_EVENT_STATUS' && details) {
-                    return `Status changed to ${details.status}`;
+                    const d = details as any;
+                    const ns = d.newStatus ?? d.status;
+                    const reasonStr = d.reason ? ` — "${d.reason}"` : '';
+                    return `marked task as ${ns}${reasonStr}`;
+                  }
+                  if (log.action === 'REOPEN_EVENT') {
+                    const d = details as any;
+                    return `reopened the task${d?.reason ? ` — "${d.reason}"` : ''}`;
+                  }
+                  if (log.action === 'AUTO_COMPLETE_EVENT') {
+                    return 'task auto-completed (all subtasks done)';
+                  }
+                  if (log.action === 'RETURN_INVENTORY') {
+                    const d = details as any;
+                    const parts: string[] = [];
+                    if (d?.returnedSim) parts.push(`${d.returnedSim} SIM`);
+                    if (d?.returnedFtth) parts.push(`${d.returnedFtth} FTTH`);
+                    return parts.length > 0
+                      ? `returned ${parts.join(' + ')} to circle pool`
+                      : 'returned inventory to circle pool';
                   }
                   if (log.action === 'ASSIGN_TEAM_MEMBER') return 'Team member assigned';
                   if (log.action === 'CREATE_SUBTASK') return 'Subtask created';
+                  if (log.action === 'UPDATE_SUBTASK') return 'Subtask updated';
+                  if (log.action === 'DELETE_SUBTASK') return 'Subtask deleted';
+                  if (log.action === 'DELETE_SALES_ENTRY') return 'deleted a sales entry';
+                  if (log.action === 'ACTIVATE_SIMS') {
+                    const d = details as any;
+                    return d?.count ? `activated ${d.count} SIM(s)` : 'activated SIMs';
+                  }
+                  if (log.action === 'ACTIVATE_FTTH') {
+                    const d = details as any;
+                    return d?.count ? `activated ${d.count} FTTH(s)` : 'activated FTTH';
+                  }
                   return log.action.replace(/_/g, ' ').toLowerCase();
                 };
                 

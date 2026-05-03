@@ -85,6 +85,33 @@ export const isAdminRole = (role: UserRole): boolean => {
   return role === 'ADMIN' || role === 'CMD';
 };
 
+// Single source of truth for human-readable role labels. Anywhere a raw role
+// code (e.g. "SD_JTO", "AGM") would otherwise leak into the UI — audit feeds,
+// activity timelines, member lists, role-pickers — should call this helper so
+// rebrandings (CGM → Circle Head, etc.) are a one-line change.
+const ROLE_LABEL_MAP: Record<UserRole, string> = {
+  CMD: 'Chairman',
+  ADMIN: 'System Admin',
+  GM: 'General Manager',
+  CGM: 'Chief General Manager',
+  DGM: 'Deputy General Manager',
+  AGM: 'Assistant General Manager',
+  SD_JTO: 'SD / JTO',
+  SALES_STAFF: 'Sales Staff',
+};
+
+export const getRoleLabel = (role: UserRole | string | null | undefined): string => {
+  if (!role) return '—';
+  return ROLE_LABEL_MAP[role as UserRole] ?? String(role);
+};
+
+// Compact form for tight UI surfaces (chips, badges) where the full descriptor
+// would wrap. Falls back to the raw code for anything we don't recognise.
+export const getRoleShortLabel = (role: UserRole | string | null | undefined): string => {
+  if (!role) return '—';
+  return String(role).replace(/_/g, ' ');
+};
+
 export const canAccessAdminPanel = (role: UserRole): boolean => {
   return ['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(role);
 };
