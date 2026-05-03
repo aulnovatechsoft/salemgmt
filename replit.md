@@ -388,6 +388,40 @@ All preset ranges are computed in `utils/timePeriod.ts` using India-local calend
   - Header period chip uses the existing `TimePeriodPicker` component (`{value, onChange}` API). Default period = MTD. Pull-to-refresh refetches all three queries in parallel.
   - Hard-blocks non-admin/non-CMD users with a Restricted screen (queries `enabled` flag is also gated, so no unauthorized requests fire).
 
+## Task Lifecycle Hardening (Tier A — "Stop the bleeding")
+Production-grade safety on the create→assign→execute→approve→complete loop. All implemented in `backend/trpc/routes/events.ts` + the boot-time scheduler in `backend/services/notification-scheduler.service.ts`.
+
+- **A1 — Date validation**:
+  - `events.create` uses `superRefine` to reject invalid Date parses, `startDate > endDate`, and end dates already in the past (24h IST grace for time-zone slop).
+  - `events.update` uses `superRefine` for the in-payload check AND additionally cross-validates against the persisted DB row inside the mutation, so a partial update (only `startDate` or only `endDate`) cannot persist an inverted range.
+
+- **A2/A3 — Auto-completion sweep**:
+  - Core logic extracted into `_completeExpiredEventsCore(eventsList)`. Throttled wrapper `autoCompleteExpiredEvents(list)` is kept for lazy callers (`getAll`, `getByCircle`, etc.).
+  - New exported `runAutoCompleteSweepNow()` queries every active event itself; called by `startNotificationScheduler` on boot AND every 15 min interval.
+  - Race-safe flip: `UPDATE events SET status='completed' WHERE id IN (...) AND status='active'` with `.returning({id})`; the toComplete list is post-filtered so audits/notifications only fire for events we truly transitioned (concurrent pause/cancel won't be clobbered).
+  - Per-completion side-effects: notifications (type `EVENT_STATUS_CHANGED`, transition in `metadata`) fan-out to creator + assigned manager + every team member (resolved via `eventAssignments.employeeId`); single audit row `AUTO_COMPLETE_EVENT` per event. Notification + audit failures are best-effort (logged, never block the status flip).
+  - Tasks expired but with unmet targets are deliberately left as `active` so they keep showing up on the CMD heatmap / overdue lists.
+
+- **A4 — Geo-fence on finance collections**:
+  - `submitFinanceCollection` mirrors the Sales pattern. Anchor = avg GPS of prior non-rejected `financeCollectionEntries` for the same event.
+  - Hard limit `GEO_FENCE_KM * GEO_FENCE_HARD_MULT` (default 50 × 3 = 150 km) always blocks. Soft limit `GEO_FENCE_KM` warns by default, blocks when `GEO_FENCE_ENFORCE=hard`.
+  - First entry seeds the anchor (no fence check on the very first submission).
+
+- **A5 — Status transitions**:
+  - `updateEventStatus` is now `authedProcedure`; actor is `ctx.employeeId` (legacy `input.updatedBy` is accepted for client compatibility but ignored).
+  - State-machine guard: terminal states (`completed`, `cancelled`) cannot transition (a future Tier B "reopen" admin action will be required).
+  - Cancellation requires a non-empty `reason`.
+  - Atomic compare-and-set: `UPDATE ... WHERE id=? AND status=previousStatus`; throws `TRPCError CONFLICT` on 0 rows so a racing client gets a clean "refresh and try again".
+  - Notifications (`EVENT_STATUS_CHANGED`) fan out to creator + manager + team for paused/cancelled/completed; the actor is excluded.
+  - Audit captures `previousStatus`, `newStatus`, `reason`.
+
+- **Authorization (closed in this tier)**:
+  - `events.create`, `events.update`, `updateEventStatus`, `submitFinanceCollection` are all converted to `authedProcedure`. Actor identity comes from `ctx.employeeId`; client-supplied `createdBy`/`updatedBy`/`employeeId` is ignored or strictly enforced to match.
+  - `events.update` and `updateEventStatus` enforce event-level authorization: only ADMIN/CMD, the event creator, or the assigned event manager can mutate; otherwise `FORBIDDEN`.
+  - `submitFinanceCollection` rejects `input.employeeId !== ctx.employeeId`.
+
+- **Notification enum compliance**: All new task-status notifications use the existing `EVENT_STATUS_CHANGED` enum value (no schema migration required); the actual `previousStatus`/`newStatus`/`reason`/`autoCompleted` flags live in `metadata`.
+
 ## Deployment
 Configured for autoscale deployment:
 - Build: Exports web version using Expo

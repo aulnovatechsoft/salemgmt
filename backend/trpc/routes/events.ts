@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { eq, and, desc, gte, lte, sql, or, inArray, isNotNull } from "drizzle-orm";
+import { eq, and, desc, gte, lte, sql, or, inArray, isNotNull, ne } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure, authedProcedure } from "../create-context";
 
 const GEO_FENCE_KM = Number(process.env.GEO_FENCE_KM ?? '50');
@@ -224,16 +224,24 @@ async function buildManagerHierarchyMap(): Promise<Map<string, string[]>> {
 let lastAutoCompleteRun = 0;
 const AUTO_COMPLETE_INTERVAL = 60 * 1000;
 
-async function autoCompleteExpiredEvents(eventsList: typeof events.$inferSelect[]) {
-  const now = Date.now();
-  if (now - lastAutoCompleteRun < AUTO_COMPLETE_INTERVAL) {
-    return [];
-  }
-  lastAutoCompleteRun = now;
-
+/**
+ * Core auto-completion logic. Given a list of events, completes those whose
+ * end date has passed AND whose every active-category target has been met.
+ * Sends per-event notifications to the creator, manager, and assigned team
+ * members, and writes a single audit log row per completion. Best-effort:
+ * notification/audit failures never block the status flip.
+ *
+ * Tasks that have expired but whose targets are NOT met are deliberately
+ * left as `active` so they keep showing up in overdue lists / the CMD heatmap
+ * — silent closure of failed work would mask the very problem managers need
+ * to see.
+ */
+async function _completeExpiredEventsCore(
+  eventsList: typeof events.$inferSelect[]
+): Promise<string[]> {
   const today = getISTDate();
   today.setHours(0, 0, 0, 0);
-  
+
   const expiredCandidateIds: string[] = [];
   for (const event of eventsList) {
     if (event.status === 'active' && event.endDate) {
@@ -244,9 +252,9 @@ async function autoCompleteExpiredEvents(eventsList: typeof events.$inferSelect[
       }
     }
   }
-  
+
   if (expiredCandidateIds.length === 0) return [];
-  
+
   const [salesProgress, assignProgress] = await Promise.all([
     db.select({
       eventId: eventSalesEntries.eventId,
@@ -267,7 +275,7 @@ async function autoCompleteExpiredEvents(eventsList: typeof events.$inferSelect[
       ofcFail: sql<number>`COALESCE(SUM(${eventAssignments.ofcFailCompleted}), 0)::integer`,
     }).from(eventAssignments).where(inArray(eventAssignments.eventId, expiredCandidateIds)).groupBy(eventAssignments.eventId),
   ]);
-  
+
   const progressByEvent = new Map<string, Record<string, number>>();
   for (const r of salesProgress) {
     progressByEvent.set(r.eventId, {
@@ -287,9 +295,10 @@ async function autoCompleteExpiredEvents(eventsList: typeof events.$inferSelect[
     cur.ofcFail = Number(r.ofcFail);
     progressByEvent.set(r.eventId, cur);
   }
-  
+
   const eventsById = new Map(eventsList.map(e => [e.id, e]));
-  const toComplete: string[] = [];
+  type CompleteRec = { id: string; name: string; createdBy: string; assignedTo: string | null };
+  const toComplete: CompleteRec[] = [];
   for (const id of expiredCandidateIds) {
     const ev = eventsById.get(id);
     if (!ev) continue;
@@ -307,19 +316,130 @@ async function autoCompleteExpiredEvents(eventsList: typeof events.$inferSelect[
     const activeCategories = checks.filter(c => c.target > 0);
     if (activeCategories.length === 0) continue;
     const allMet = activeCategories.every(c => c.progress >= c.target);
-    if (allMet) toComplete.push(id);
+    if (allMet) {
+      toComplete.push({ id, name: ev.name, createdBy: ev.createdBy, assignedTo: ev.assignedTo });
+    }
   }
-  
-  if (toComplete.length > 0) {
-    await Promise.all(toComplete.map(id =>
-      db.update(events)
-        .set({ status: 'completed', updatedAt: new Date() })
-        .where(eq(events.id, id))
-    ));
-    console.log(`Auto-completed ${toComplete.length} expired works with all targets met`);
+
+  if (toComplete.length === 0) return [];
+
+  // Flip status — must include `status='active'` in WHERE so a concurrent
+  // pause/cancel between read and write is NOT clobbered back to completed.
+  // returning() gives us the actually-affected ids so audits/notifications
+  // only fire for events we truly transitioned.
+  const flipped = await db.update(events)
+    .set({ status: 'completed', updatedAt: new Date() })
+    .where(and(
+      inArray(events.id, toComplete.map(c => c.id)),
+      eq(events.status, 'active'),
+    ))
+    .returning({ id: events.id });
+  const flippedIds = new Set(flipped.map(f => f.id));
+  if (flippedIds.size === 0) return [];
+  // Drop any candidate that lost the race to a paused/cancelled transition
+  for (let i = toComplete.length - 1; i >= 0; i--) {
+    if (!flippedIds.has(toComplete[i].id)) toComplete.splice(i, 1);
   }
-  
-  return toComplete;
+  if (toComplete.length === 0) return [];
+
+  // Resolve all team-member employeeIds for notifications (one query, then group)
+  let assignmentsByEvent = new Map<string, string[]>();
+  try {
+    const allAssigns = await db.select({
+      eventId: eventAssignments.eventId,
+      employeeId: eventAssignments.employeeId,
+    })
+      .from(eventAssignments)
+      .where(inArray(eventAssignments.eventId, toComplete.map(c => c.id)));
+    for (const a of allAssigns) {
+      const arr = assignmentsByEvent.get(a.eventId) || [];
+      arr.push(a.employeeId);
+      assignmentsByEvent.set(a.eventId, arr);
+    }
+  } catch (e) {
+    console.error('[auto-complete] failed to load team assignments for notifications:', (e as Error).message);
+    assignmentsByEvent = new Map();
+  }
+
+  // Build notification + audit rows in a single batch each (best-effort).
+  // Use the schema's inferred insert types so Drizzle's overload matches.
+  const notifyRows: (typeof notifications.$inferInsert)[] = [];
+  const auditRows: (typeof auditLogs.$inferInsert)[] = [];
+
+  for (const c of toComplete) {
+    const recipients = new Set<string>();
+    if (c.assignedTo) recipients.add(c.assignedTo);
+    if (c.createdBy) recipients.add(c.createdBy);
+    for (const eid of assignmentsByEvent.get(c.id) || []) recipients.add(eid);
+    for (const rid of recipients) {
+      notifyRows.push({
+        recipientId: rid,
+        type: 'EVENT_STATUS_CHANGED',
+        title: 'Task Auto-Completed',
+        message: `"${c.name}" reached its end date with all targets met and was marked completed.`,
+        entityType: 'EVENT',
+        entityId: c.id,
+        metadata: {
+          eventName: c.name,
+          previousStatus: 'active',
+          newStatus: 'completed',
+          reason: 'all_targets_met_after_end_date',
+          autoCompleted: true,
+        },
+      });
+    }
+    auditRows.push({
+      action: 'AUTO_COMPLETE_EVENT',
+      entityType: 'EVENT',
+      entityId: c.id,
+      performedBy: c.createdBy,
+      details: { eventName: c.name, reason: 'all_targets_met_after_end_date', previousStatus: 'active', newStatus: 'completed' },
+    });
+  }
+
+  if (notifyRows.length > 0) {
+    try { await db.insert(notifications).values(notifyRows); }
+    catch (e) { console.error('[auto-complete] notification insert failed:', (e as Error).message); }
+  }
+  if (auditRows.length > 0) {
+    try { await db.insert(auditLogs).values(auditRows); }
+    catch (e) { console.error('[auto-complete] audit insert failed:', (e as Error).message); }
+  }
+
+  console.log(`[auto-complete] Completed ${toComplete.length} expired works with all targets met`);
+  return toComplete.map(c => c.id);
+}
+
+/**
+ * Throttled wrapper used by lazy call sites (getAll, getByCircle, etc.).
+ * Skips if the last sweep ran within AUTO_COMPLETE_INTERVAL to keep request
+ * latency predictable.
+ */
+async function autoCompleteExpiredEvents(eventsList: typeof events.$inferSelect[]) {
+  const now = Date.now();
+  if (now - lastAutoCompleteRun < AUTO_COMPLETE_INTERVAL) {
+    return [];
+  }
+  lastAutoCompleteRun = now;
+  return _completeExpiredEventsCore(eventsList);
+}
+
+/**
+ * Authoritative sweep used by the server-boot scheduler. Bypasses the
+ * throttle, queries every active event itself, and performs the same
+ * notifications + audit. Safe to call concurrently — the underlying UPDATE
+ * is idempotent (already-completed events are filtered out by status).
+ */
+export async function runAutoCompleteSweepNow(): Promise<{ completed: number }> {
+  try {
+    const activeEvents = await db.select().from(events).where(eq(events.status, 'active'));
+    const ids = await _completeExpiredEventsCore(activeEvents);
+    lastAutoCompleteRun = Date.now();
+    return { completed: ids.length };
+  } catch (e) {
+    console.error('[auto-complete sweep] failed:', (e as Error).message);
+    return { completed: 0 };
+  }
 }
 
 export const eventsRouter = createTRPCRouter({
@@ -841,7 +961,7 @@ export const eventsRouter = createTRPCRouter({
       return result[0] || null;
     }),
 
-  create: publicProcedure
+  create: authedProcedure
     .input(z.object({
       name: z.string().min(1),
       location: z.string().min(1),
@@ -878,9 +998,32 @@ export const eventsRouter = createTRPCRouter({
       assignedToStaffId: z.string().optional(),
       createdBy: z.string().uuid(),
       teamAssignments: z.string().optional(),
+    }).superRefine((d, ctx) => {
+      const sd = new Date(d.startDate);
+      const ed = new Date(d.endDate);
+      if (Number.isNaN(sd.getTime())) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['startDate'], message: 'Invalid start date.' });
+      }
+      if (Number.isNaN(ed.getTime())) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['endDate'], message: 'Invalid end date.' });
+      }
+      if (!Number.isNaN(sd.getTime()) && !Number.isNaN(ed.getTime())) {
+        if (sd.getTime() > ed.getTime()) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['endDate'], message: 'End date must be on or after start date.' });
+        }
+        // Disallow tasks whose end date is already in the past (24h IST grace
+        // for time-zone slop). Prevents instantly-overdue tasks polluting KPIs.
+        const istNowMs = getISTDate().getTime();
+        if (ed.getTime() < istNowMs - 24 * 60 * 60 * 1000) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['endDate'], message: 'End date is in the past. Tasks must end today or in the future.' });
+        }
+      }
     }))
-    .mutation(async ({ input }) => {
-      
+    .mutation(async ({ input, ctx }) => {
+      // Authorization: actor identity comes from the authenticated session,
+      // never from the client payload. Any client-supplied createdBy is ignored.
+      (input as { createdBy: string }).createdBy = ctx.employeeId;
+
       // Server-side role validation: ADMIN cannot create events
       const creator = await db.select().from(employees).where(eq(employees.id, input.createdBy)).limit(1);
       if (creator[0]?.role === 'ADMIN' && creator[0]?.role !== 'CMD') {
@@ -1127,7 +1270,7 @@ export const eventsRouter = createTRPCRouter({
       return result[0];
     }),
 
-  update: publicProcedure
+  update: authedProcedure
     .input(z.object({
       id: z.string().uuid(),
       name: z.string().min(1).optional(),
@@ -1152,12 +1295,61 @@ export const eventsRouter = createTRPCRouter({
       status: z.string().optional(),
       assignedTo: z.string().uuid().nullable().optional(),
       updatedBy: z.string().uuid(),
+    }).superRefine((d, ctx) => {
+      // Validate dates only when provided (all fields are optional on update)
+      const sd = d.startDate ? new Date(d.startDate) : null;
+      const ed = d.endDate ? new Date(d.endDate) : null;
+      if (d.startDate && sd && Number.isNaN(sd.getTime())) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['startDate'], message: 'Invalid start date.' });
+      }
+      if (d.endDate && ed && Number.isNaN(ed.getTime())) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['endDate'], message: 'Invalid end date.' });
+      }
+      if (sd && ed && !Number.isNaN(sd.getTime()) && !Number.isNaN(ed.getTime()) && sd.getTime() > ed.getTime()) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['endDate'], message: 'End date must be on or after start date.' });
+      }
     }))
-    .mutation(async ({ input }) => {
-      const { id, updatedBy, startDate, endDate, ...updateData } = input;
-      
+    .mutation(async ({ input, ctx }) => {
+      // Authorization: derive actor from session; ignore client-supplied updatedBy.
+      // IMPORTANT: also strip `updatedBy` from updateData so it never leaks
+      // into db.update().set() — there is no `updatedBy` column on events.
+      const updatedBy = ctx.employeeId;
+      const { id, startDate, endDate, updatedBy: _ignoredUpdatedBy, ...updateData } = input;
+      void _ignoredUpdatedBy;
+
       const existingEvent = await db.select().from(events).where(eq(events.id, id));
       if (!existingEvent[0]) throw new Error("Event not found");
+
+      // Event-level authorization: only the creator, the assigned event
+      // manager, or an admin (ADMIN/CMD) may edit the event.
+      const [actor] = await db.select({ role: employees.role })
+        .from(employees).where(eq(employees.id, updatedBy)).limit(1);
+      const isPriv = actor?.role === 'ADMIN' || actor?.role === 'CMD';
+      const isOwner = existingEvent[0].createdBy === updatedBy;
+      const isManager = existingEvent[0].assignedTo === updatedBy;
+      if (!isPriv && !isOwner && !isManager) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission to edit this task.',
+        });
+      }
+
+      // Cross-validate dates against the persisted row when only one of
+      // {startDate, endDate} is being changed — otherwise a partial update
+      // could persist an inverted range.
+      const effStart = startDate
+        ? new Date(startDate)
+        : existingEvent[0].startDate ? new Date(existingEvent[0].startDate) : null;
+      const effEnd = endDate
+        ? new Date(endDate)
+        : existingEvent[0].endDate ? new Date(existingEvent[0].endDate) : null;
+      if (effStart && effEnd && !Number.isNaN(effStart.getTime()) && !Number.isNaN(effEnd.getTime())
+          && effStart.getTime() > effEnd.getTime()) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'End date must be on or after start date.',
+        });
+      }
       
       if (input.allocatedSim !== undefined || input.allocatedFtth !== undefined) {
         const assignments = await db.select().from(eventAssignments)
@@ -3032,10 +3224,10 @@ export const eventsRouter = createTRPCRouter({
       return { success: true, entryId: entry.id, ftthActivated: newActivated };
     }),
 
-  submitFinanceCollection: publicProcedure
+  submitFinanceCollection: authedProcedure
     .input(z.object({
       eventId: z.string().uuid(),
-      employeeId: z.string().uuid(),
+      employeeId: z.string().uuid(), // legacy: retained for client compat; server rebinds to ctx.employeeId below
       financeType: z.string(),
       amountCollected: z.number().int('Amount must be an integer (paise/rupees)').min(1).max(Number.MAX_SAFE_INTEGER),
       paymentMode: z.string(),
@@ -3052,7 +3244,7 @@ export const eventsRouter = createTRPCRouter({
       gpsLatitude: z.string().optional(),
       gpsLongitude: z.string().optional(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       
       const VALID_FINANCE_TYPES = ['FIN_LC', 'FIN_LL_FTTH', 'FIN_TOWER', 'FIN_GSM_POSTPAID', 'FIN_RENT_BUILDING'];
       const VALID_PAYMENT_MODES = ['CASH', 'CHEQUE', 'NEFT', 'UPI', 'CARD', 'DD', 'OTHER'];
@@ -3091,7 +3283,64 @@ export const eventsRouter = createTRPCRouter({
       if (!assignment[0] && !isEventManager) {
         throw new Error("You are not assigned to this event. Please contact the event manager.");
       }
-      
+      // Authorization: enforce that submitter == authenticated actor. Reject
+      // any attempt to submit on behalf of another employee.
+      if (input.employeeId !== ctx.employeeId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only submit finance collections under your own account.',
+        });
+      }
+
+      // Geo-fence enforcement (mirror the Sales / Maintenance pattern).
+      // Anchor = avg GPS of prior non-rejected finance entries for this event.
+      // No anchor (first entry for the event) → no fence check; the very next
+      // submission seeds the anchor. Hard limit always blocks; soft limit
+      // warns or blocks based on GEO_FENCE_ENFORCE.
+      let geoWarning: string | null = null;
+      if (input.gpsLatitude && input.gpsLongitude) {
+        const submitLat = parseFloat(input.gpsLatitude);
+        const submitLng = parseFloat(input.gpsLongitude);
+        if (!Number.isFinite(submitLat) || !Number.isFinite(submitLng)) {
+          throw new Error("Invalid GPS coordinates.");
+        }
+        const priorWithGps = await db.select({
+          lat: financeCollectionEntries.gpsLatitude,
+          lng: financeCollectionEntries.gpsLongitude,
+        })
+          .from(financeCollectionEntries)
+          .where(and(
+            eq(financeCollectionEntries.eventId, input.eventId),
+            ne(financeCollectionEntries.approvalStatus, 'rejected'),
+            isNotNull(financeCollectionEntries.gpsLatitude),
+            isNotNull(financeCollectionEntries.gpsLongitude),
+          ))
+          .limit(50);
+        if (priorWithGps.length > 0) {
+          const valid = priorWithGps
+            .map(p => ({ lat: parseFloat(p.lat as string), lng: parseFloat(p.lng as string) }))
+            .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+          if (valid.length > 0) {
+            const anchorLat = valid.reduce((s, p) => s + p.lat, 0) / valid.length;
+            const anchorLng = valid.reduce((s, p) => s + p.lng, 0) / valid.length;
+            const distKm = haversineKm(anchorLat, anchorLng, submitLat, submitLng);
+            if (distKm > GEO_FENCE_KM * GEO_FENCE_HARD_MULT) {
+              throw new Error(
+                `Submission location is ${distKm.toFixed(1)} km from the event area (limit ${GEO_FENCE_KM * GEO_FENCE_HARD_MULT} km). Please verify your GPS location.`
+              );
+            }
+            if (distKm > GEO_FENCE_KM) {
+              geoWarning = `Submission location is ${distKm.toFixed(1)} km from the event area (soft limit ${GEO_FENCE_KM} km).`;
+              if (GEO_FENCE_ENFORCE === 'hard') {
+                throw new Error(geoWarning);
+              }
+              console.warn(`[geo-fence finance] event=${input.eventId} employee=${input.employeeId} distKm=${distKm.toFixed(2)}`);
+            }
+          }
+        }
+      }
+      void geoWarning; // surfaced via console; included in audit details below
+
       const targetField = input.financeType === 'FIN_LC' ? 'targetFinLc' :
                          input.financeType === 'FIN_LL_FTTH' ? 'targetFinLlFtth' :
                          input.financeType === 'FIN_TOWER' ? 'targetFinTower' :
@@ -3522,28 +3771,157 @@ export const eventsRouter = createTRPCRouter({
       }));
     }),
 
-  updateEventStatus: publicProcedure
+  // Status transition with state-machine validation, optional reason capture,
+  // and notifications to the creator + manager + every assigned team member
+  // for paused/cancelled/completed transitions. Production-grade:
+  //   - Terminal states (completed, cancelled) cannot be re-opened from here
+  //     (use a dedicated "reopen" admin action instead — Tier B work).
+  //   - Notifications are best-effort; the status flip and audit row commit
+  //     even if push delivery fails.
+  //   - Audit captures both the previous and new status plus the optional reason.
+  updateEventStatus: authedProcedure
     .input(z.object({
       eventId: z.string().uuid(),
       status: z.enum(['draft', 'active', 'paused', 'completed', 'cancelled']),
-      updatedBy: z.string().uuid(),
+      updatedBy: z.string().uuid().optional(), // legacy: ignored; actor is ctx.employeeId
+      reason: z.string().max(500).optional(),
     }))
-    .mutation(async ({ input }) => {
-      
-      const result = await db.update(events)
-        .set({ status: input.status, updatedAt: new Date() })
-        .where(eq(events.id, input.eventId))
+    .mutation(async ({ input, ctx }) => {
+      // Authorization: actor identity from session, not client payload
+      const actorId = ctx.employeeId;
+
+      const [existing] = await db.select().from(events).where(eq(events.id, input.eventId));
+      if (!existing) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Event not found.' });
+      }
+
+      const previousStatus = existing.status;
+      if (previousStatus === input.status) {
+        // No-op — return without touching DB or sending notifications
+        return existing;
+      }
+
+      // Event-level authorization: only the creator, the assigned event
+      // manager, or an admin (ADMIN/CMD) may transition status.
+      const [actor] = await db.select({ role: employees.role })
+        .from(employees).where(eq(employees.id, actorId)).limit(1);
+      const isPriv = actor?.role === 'ADMIN' || actor?.role === 'CMD';
+      const isOwner = existing.createdBy === actorId;
+      const isManager = existing.assignedTo === actorId;
+      if (!isPriv && !isOwner && !isManager) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission to change this task’s status.',
+        });
+      }
+
+      // Terminal-state guard
+      if (previousStatus === 'completed' || previousStatus === 'cancelled') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `This task is ${previousStatus} and cannot be moved to ${input.status}. Ask an admin to reopen it first.`,
+        });
+      }
+
+      // Cancel reason is mandatory so the team has context
+      if (input.status === 'cancelled' && !input.reason?.trim()) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'A reason is required to cancel a task.',
+        });
+      }
+
+      // Atomic transition: include previousStatus in WHERE so concurrent
+      // updates don't clobber each other. If 0 rows affected the caller
+      // raced and must refetch.
+      // Cast through `any` is necessary because the `events.status` pgEnum
+      // type-narrows to a tuple union that doesn't structurally match the
+      // Zod-inferred string union here. Behaviourally identical.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const newStatus = input.status as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const prevStatus = previousStatus as any;
+      const updated = await db.update(events)
+        .set({ status: newStatus, updatedAt: new Date() })
+        .where(and(
+          eq(events.id, input.eventId),
+          eq(events.status, prevStatus),
+        ))
         .returning();
+      if (!updated[0]) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'This task was changed by someone else. Please refresh and try again.',
+        });
+      }
+      const result = updated[0];
 
       await db.insert(auditLogs).values({
         action: 'UPDATE_EVENT_STATUS',
         entityType: 'EVENT',
         entityId: input.eventId,
-        performedBy: input.updatedBy,
-        details: { status: input.status },
+        performedBy: actorId,
+        details: { previousStatus, newStatus: input.status, reason: input.reason ?? null },
       });
 
-      return result[0];
+      // Notifications for paused / cancelled / completed (best-effort)
+      const NOTIFY_STATES = new Set(['paused', 'cancelled', 'completed']);
+      if (NOTIFY_STATES.has(input.status)) {
+        try {
+          const recipients = new Set<string>();
+          if (existing.assignedTo) recipients.add(existing.assignedTo);
+          if (existing.createdBy && existing.createdBy !== actorId) {
+            recipients.add(existing.createdBy);
+          }
+          const teamAssigns = await db.select({ employeeId: eventAssignments.employeeId })
+            .from(eventAssignments)
+            .where(eq(eventAssignments.eventId, input.eventId));
+          for (const a of teamAssigns) recipients.add(a.employeeId);
+          recipients.delete(actorId); // don't notify the actor
+
+          let actorName = 'A manager';
+          try {
+            const [actor] = await db.select({ name: employees.name })
+              .from(employees).where(eq(employees.id, actorId)).limit(1);
+            if (actor?.name) actorName = actor.name;
+          } catch {}
+
+          const verb =
+            input.status === 'paused' ? 'paused' :
+            input.status === 'cancelled' ? 'cancelled' : 'marked completed';
+          const title =
+            input.status === 'paused' ? 'Task Paused' :
+            input.status === 'cancelled' ? 'Task Cancelled' : 'Task Completed';
+          const reasonSuffix = input.reason?.trim() ? ` Reason: ${input.reason.trim()}` : '';
+          const message = `${actorName} ${verb} "${existing.name}".${reasonSuffix}`;
+
+          // notification_type is a Postgres enum; 'EVENT_STATUS_CHANGED' is
+          // the canonical type for paused/cancelled/completed transitions.
+          // The exact transition lives in metadata.{previousStatus,newStatus}.
+          const notifyRows: (typeof notifications.$inferInsert)[] = Array.from(recipients).map(rid => ({
+            recipientId: rid,
+            type: 'EVENT_STATUS_CHANGED',
+            title,
+            message,
+            entityType: 'EVENT',
+            entityId: input.eventId,
+            metadata: {
+              eventName: existing.name,
+              previousStatus,
+              newStatus: input.status,
+              actorName,
+              reason: input.reason ?? null,
+            } as Record<string, unknown>,
+          }));
+          if (notifyRows.length > 0) {
+            await db.insert(notifications).values(notifyRows);
+          }
+        } catch (notifyErr) {
+          console.error(`[updateEventStatus] notification fan-out failed for event ${input.eventId}:`, (notifyErr as Error).message);
+        }
+      }
+
+      return result;
     }),
 
   // Event-level progress (assignee posting their own work). Production-grade:

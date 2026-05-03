@@ -10,6 +10,7 @@ import {
   cleanupOldNotifications,
   cleanupInactivePushTokens
 } from './notification.service';
+import { runAutoCompleteSweepNow } from '../trpc/routes/events';
 
 const SLA_WARNING_THRESHOLD_MINUTES = 60;
 const DEADLINE_WARNING_DAYS = 1;
@@ -384,7 +385,14 @@ export function startNotificationScheduler(intervalMinutes: number = 15): void {
     } catch (error) {
       console.error('[Notification Scheduler] Initial retry queue processing failed:', error);
     }
-    
+
+    try {
+      const r = await runAutoCompleteSweepNow();
+      if (r.completed > 0) console.log(`[Auto-Complete Sweep] Initial run completed ${r.completed} expired tasks`);
+    } catch (error) {
+      console.error('[Notification Scheduler] Initial auto-complete sweep failed:', error);
+    }
+
     try {
       await runDailyCleanup();
     } catch (error) {
@@ -413,7 +421,14 @@ export function startNotificationScheduler(intervalMinutes: number = 15): void {
     } catch (error) {
       console.error('[Notification Scheduler] Retry queue processing failed:', error);
     }
-    
+
+    try {
+      const r = await runAutoCompleteSweepNow();
+      if (r.completed > 0) console.log(`[Auto-Complete Sweep] Completed ${r.completed} expired tasks`);
+    } catch (error) {
+      console.error('[Notification Scheduler] Auto-complete sweep failed:', error);
+    }
+
     try {
       await runDailyCleanup();
     } catch (error) {
