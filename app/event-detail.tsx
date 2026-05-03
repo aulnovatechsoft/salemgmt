@@ -513,10 +513,20 @@ export default function EventDetailScreen() {
     },
   });
 
+  // Live progress summary — overall % across all categories + subtask roll-up.
+  // Backed by `events.getEventProgressSummary`. Refetches whenever the event is
+  // refetched (e.g. after status changes / reopen / subtask edits) so the
+  // panel stays in sync without a manual reload.
+  const progressQuery = trpc.events.getEventProgressSummary.useQuery(
+    { eventId: id! },
+    { enabled: !!id, staleTime: 30_000 },
+  );
+
   const reopenMutation = trpc.events.reopenEvent.useMutation({
     onSuccess: () => {
       Alert.alert('Task Reopened', 'The task is now active again. The team has been notified.');
       refetch();
+      progressQuery.refetch();
       setShowReopenModal(false);
       setReopenReason('');
     },
@@ -547,6 +557,7 @@ export default function EventDetailScreen() {
     onSuccess: () => {
       Alert.alert('Success', 'Task status updated');
       refetch();
+      progressQuery.refetch();
       setShowStatusModal(false);
       setShowCancelReasonModal(false);
       setCancelReason('');
@@ -569,6 +580,7 @@ export default function EventDetailScreen() {
     onSuccess: () => {
       Alert.alert('Success', 'Subtask created successfully');
       refetch();
+      progressQuery.refetch();
       setShowSubtaskModal(false);
       resetSubtaskForm();
     },
@@ -581,6 +593,7 @@ export default function EventDetailScreen() {
     onSuccess: () => {
       Alert.alert('Success', 'Subtask updated');
       refetch();
+      progressQuery.refetch();
       setShowSubtaskModal(false);
       resetSubtaskForm();
     },
@@ -593,6 +606,7 @@ export default function EventDetailScreen() {
     onSuccess: () => {
       Alert.alert('Success', 'Subtask deleted');
       refetch();
+      progressQuery.refetch();
     },
     onError: (error) => {
       Alert.alert('Error', error.message);
@@ -603,6 +617,7 @@ export default function EventDetailScreen() {
     onSuccess: () => {
       Alert.alert('Success', 'Targets updated successfully');
       refetch();
+      progressQuery.refetch();
       setShowEditTargetModal(false);
       setEditingMember(null);
     },
@@ -614,6 +629,7 @@ export default function EventDetailScreen() {
   const updateTaskProgressMutation = trpc.events.updateTaskProgress.useMutation({
     onSuccess: () => {
       refetch();
+      progressQuery.refetch();
     },
     onError: (error) => {
       Alert.alert('Error', error.message);
@@ -629,6 +645,7 @@ export default function EventDetailScreen() {
     onSuccess: () => {
       console.log("Member task progress updated successfully");
       refetch();
+      progressQuery.refetch();
       refetchAuditLogs();
       setPendingMemberTask(null);
     },
@@ -643,6 +660,7 @@ export default function EventDetailScreen() {
     onSuccess: () => {
       Alert.alert('Success', 'Task approved successfully!');
       refetch();
+      progressQuery.refetch();
     },
     onError: (error) => {
       Alert.alert('Error', error.message);
@@ -675,6 +693,7 @@ export default function EventDetailScreen() {
       setDeleteEntryTarget(null);
       setDeleteEntryReason('');
       refetch();
+      progressQuery.refetch();
     },
     onError: (error) => Alert.alert('Error', error.message),
   });
@@ -685,6 +704,7 @@ export default function EventDetailScreen() {
       setActivateModalEntry(null);
       setActivateInput('');
       refetch();
+      progressQuery.refetch();
     },
     onError: (error) => Alert.alert('Error', error.message),
   });
@@ -695,6 +715,7 @@ export default function EventDetailScreen() {
       setActivateModalEntry(null);
       setActivateInput('');
       refetch();
+      progressQuery.refetch();
     },
     onError: (error) => Alert.alert('Error', error.message),
   });
@@ -1345,6 +1366,47 @@ export default function EventDetailScreen() {
               <Text style={styles.categoryText}>{eventData.category}</Text>
             </View>
           </View>
+
+          {/* Live progress summary — single glance health of the task.
+              Combines per-category target/actual + subtask roll-up. */}
+          {progressQuery.data && (progressQuery.data.breakdown.length > 0 || progressQuery.data.subtasks.total > 0) && (() => {
+            const pct = progressQuery.data.overallPct;
+            const barColor =
+              pct >= 100 ? '#1565C0' :
+              pct >= 75  ? '#2E7D32' :
+              pct >= 40  ? '#EF6C00' : '#C62828';
+            const sub = progressQuery.data.subtasks;
+            return (
+              <View style={styles.headerProgressPanel}>
+                <View style={styles.headerProgressHeader}>
+                  <Text style={styles.headerProgressLabel}>Overall Progress</Text>
+                  <Text style={[styles.headerProgressValue, { color: barColor }]}>{pct}%</Text>
+                </View>
+                <View style={styles.headerProgressTrack}>
+                  <View style={[styles.headerProgressFill, { width: `${pct}%`, backgroundColor: barColor }]} />
+                </View>
+                {(progressQuery.data.breakdown.length > 0 || sub.total > 0) && (
+                  <View style={styles.headerProgressMeta}>
+                    {progressQuery.data.breakdown.slice(0, 6).map(b => (
+                      <View key={b.key} style={styles.headerProgressChip}>
+                        <Text style={styles.headerProgressChipLabel}>{b.label}</Text>
+                        <Text style={styles.headerProgressChipValue}>{b.completed}/{b.target}</Text>
+                      </View>
+                    ))}
+                    {sub.total > 0 && (
+                      <View style={[styles.headerProgressChip, { backgroundColor: '#EDE7F6' }]}>
+                        <Text style={[styles.headerProgressChipLabel, { color: '#5E35B1' }]}>Subtasks</Text>
+                        <Text style={[styles.headerProgressChipValue, { color: '#4527A0' }]}>
+                          {sub.done}/{sub.active}
+                          {sub.cancelled > 0 ? ` (+${sub.cancelled} cancelled)` : ''}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+              </View>
+            );
+          })()}
         </View>
 
         {isDraftEvent && canManageTeam && (
@@ -3688,6 +3750,66 @@ const styles = StyleSheet.create({
   infoRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   infoText: { fontSize: 14, color: Colors.light.textSecondary },
   categoryBadge: { backgroundColor: Colors.light.lightBlue, alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, marginTop: 4 },
+  headerProgressPanel: {
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#ECEFF1',
+  },
+  headerProgressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  headerProgressLabel: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    fontWeight: '600' as const,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.4,
+  },
+  headerProgressValue: {
+    fontSize: 18,
+    fontWeight: '700' as const,
+  },
+  headerProgressTrack: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#ECEFF1',
+    overflow: 'hidden' as const,
+  },
+  headerProgressFill: {
+    height: '100%' as const,
+    borderRadius: 4,
+  },
+  headerProgressMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 10,
+  },
+  headerProgressChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F5F5F5',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  headerProgressChipLabel: {
+    fontSize: 10,
+    color: Colors.light.textSecondary,
+    fontWeight: '600' as const,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.3,
+  },
+  headerProgressChipValue: {
+    fontSize: 12,
+    color: Colors.light.text,
+    fontWeight: '700' as const,
+  },
   categoryText: { fontSize: 12, color: Colors.light.primary, fontWeight: '600' as const },
   statusSection: { backgroundColor: Colors.light.card, padding: 16, marginBottom: 12 },
   currentStatusRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },

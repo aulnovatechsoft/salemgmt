@@ -549,7 +549,9 @@ function EventCard({ event, getDisplayStatus, canEdit, onActivate }: {
         return (
           <View style={styles.progressOverallWrap}>
             <View style={styles.progressOverallHeader}>
-              <Text style={styles.progressOverallLabel}>Overall Progress</Text>
+              <Text style={styles.progressOverallLabel}>
+                {event.ownershipCategory === 'assigned_to_me' ? 'Team Progress' : 'Overall Progress'}
+              </Text>
               <Text style={[styles.progressOverallValue, { color: barColor }]}>{overallPct}%</Text>
             </View>
             <View style={styles.progressBarTrack}>
