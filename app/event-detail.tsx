@@ -294,6 +294,8 @@ export default function EventDetailScreen() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [showSubtaskModal, setShowSubtaskModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
+  const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
   const [showEditTargetModal, setShowEditTargetModal] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState('');
   const [simTarget, setSimTarget] = useState('');
@@ -514,9 +516,20 @@ export default function EventDetailScreen() {
       Alert.alert('Success', 'Task status updated');
       refetch();
       setShowStatusModal(false);
+      setShowCancelReasonModal(false);
+      setCancelReason('');
     },
     onError: (error) => {
-      Alert.alert('Error', error.message);
+      // Friendly message when another user changed the task underneath us
+      const isConflict = (error as any)?.data?.code === 'CONFLICT'
+        || /changed by another user|conflict/i.test(error.message || '');
+      Alert.alert(
+        isConflict ? 'Task already changed' : 'Error',
+        isConflict
+          ? 'Someone else updated this task while you were editing. Refreshing the latest state.'
+          : (error.message || 'Failed to update task status'),
+      );
+      if (isConflict) refetch();
     },
   });
 
@@ -912,7 +925,15 @@ export default function EventDetailScreen() {
     };
     
     const { title, message } = confirmMessages[newStatus];
-    
+
+    // Cancellation requires a reason — show the dedicated modal instead of
+    // the native confirm so we can capture the reason before mutating.
+    if (newStatus === 'cancelled') {
+      setCancelReason('');
+      setShowCancelReasonModal(true);
+      return;
+    }
+
     Alert.alert(
       title,
       message,
@@ -920,7 +941,7 @@ export default function EventDetailScreen() {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Confirm',
-          style: newStatus === 'cancelled' ? 'destructive' : 'default',
+          style: 'default',
           onPress: () => {
             updateStatusMutation.mutate({
               eventId: eventData.id,
@@ -931,6 +952,21 @@ export default function EventDetailScreen() {
         },
       ]
     );
+  };
+
+  const submitCancellation = () => {
+    const trimmed = cancelReason.trim();
+    if (trimmed.length < 5) {
+      Alert.alert('Reason required', 'Please enter at least a few words explaining why this task is being cancelled.');
+      return;
+    }
+    if (!eventData || !employee?.id) return;
+    updateStatusMutation.mutate({
+      eventId: eventData.id,
+      status: 'cancelled',
+      reason: trimmed,
+      updatedBy: employee.id,
+    });
   };
 
   const handleCreateSubtask = () => {
@@ -3305,6 +3341,66 @@ export default function EventDetailScreen() {
             {availableTransitions.length === 0 && (
               <Text style={styles.noTransitionsText}>No status changes available for this event.</Text>
             )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Cancel Task — capture mandatory reason */}
+      <Modal
+        visible={showCancelReasonModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => !updateStatusMutation.isPending && setShowCancelReasonModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => !updateStatusMutation.isPending && setShowCancelReasonModal(false)}
+        >
+          <View style={styles.statusModalContent}>
+            <View style={styles.statusModalHeader}>
+              <Text style={styles.statusModalTitle}>Cancel Task</Text>
+              <TouchableOpacity
+                onPress={() => !updateStatusMutation.isPending && setShowCancelReasonModal(false)}
+                disabled={updateStatusMutation.isPending}
+              >
+                <X size={24} color={Colors.light.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ fontSize: 14, color: Colors.light.textSecondary, marginBottom: 12 }}>
+              Cancelling stops all submissions for this task. Please record why this task is being cancelled — the reason is logged for audit and shared with the team.
+            </Text>
+            <TextInput
+              style={[styles.input, { minHeight: 96, textAlignVertical: 'top' }]}
+              placeholder="e.g. Postponed by circle office until next quarter"
+              value={cancelReason}
+              onChangeText={setCancelReason}
+              multiline
+              maxLength={500}
+              placeholderTextColor={Colors.light.textSecondary}
+              editable={!updateStatusMutation.isPending}
+            />
+            <Text style={{ fontSize: 12, color: Colors.light.textSecondary, alignSelf: 'flex-end', marginTop: 4 }}>
+              {cancelReason.length}/500
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
+              <TouchableOpacity
+                style={[styles.secondaryButton, { flex: 1 }]}
+                onPress={() => setShowCancelReasonModal(false)}
+                disabled={updateStatusMutation.isPending}
+              >
+                <Text style={styles.secondaryButtonText}>Keep Task</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.primaryButton, { flex: 1, backgroundColor: '#C62828', opacity: updateStatusMutation.isPending ? 0.6 : 1 }]}
+                onPress={submitCancellation}
+                disabled={updateStatusMutation.isPending}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {updateStatusMutation.isPending ? 'Cancelling…' : 'Cancel Task'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </TouchableOpacity>
       </Modal>

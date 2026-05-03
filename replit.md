@@ -422,6 +422,14 @@ Production-grade safety on the create→assign→execute→approve→complete lo
 
 - **Notification enum compliance**: All new task-status notifications use the existing `EVENT_STATUS_CHANGED` enum value (no schema migration required); the actual `previousStatus`/`newStatus`/`reason`/`autoCompleted` flags live in `metadata`.
 
+- **Status backdoor closed**: `events.update` accepts `status` in the input schema for backward compatibility but **silently strips** it before the DB write. All status changes must go through `updateEventStatus` so the state-machine, atomic CAS, audit, and notifications fire. Removes the privilege-escalation hole where a client could call `events.update({ status: 'completed' })` and skip every safeguard.
+
+- **Legacy identity fields hardened**: `createdBy` (events.create), `updatedBy` (events.update), `employeeId` (submitFinanceCollection) are all `.optional()` in the input schema; the server rebinds them from `ctx.employeeId`. If a legacy client supplies its own value AND it mismatches `ctx.employeeId`, finance submission throws `FORBIDDEN`. Inserts/audits use the bound local variable, never the optional input field.
+
+- **Cancellation UX & enforcement**: When a manager picks "Cancel Task" from the status modal in `app/event-detail.tsx`, a dedicated modal opens to capture the mandatory reason (`>=5` chars, 500-char counter, with "Keep Task" escape hatch and a disabled Cancel button while the mutation is pending). The same `>=5` chars rule is enforced server-side in `updateEventStatus` (`BAD_REQUEST`), so non-UI clients can't slip through with `"x"`. The status-mutation `onError` detects `CONFLICT` (atomic CAS race) and shows "Someone else updated this task… refreshing" + auto-refetches the latest state.
+
+- **Pre-existing bug fixed**: `events.create` role-check was `role === 'ADMIN' && role !== 'CMD'` (impossible AND, TS warned). Simplified to `role === 'ADMIN'` and switched from `Error` to `TRPCError(FORBIDDEN)` for consistent client handling.
+
 ## Deployment
 Configured for autoscale deployment:
 - Build: Exports web version using Expo

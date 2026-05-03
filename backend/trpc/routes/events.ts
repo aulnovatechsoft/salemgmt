@@ -996,7 +996,8 @@ export const eventsRouter = createTRPCRouter({
       keyInsight: z.string().optional(),
       assignedTo: z.string().uuid().optional(),
       assignedToStaffId: z.string().optional(),
-      createdBy: z.string().uuid(),
+      // legacy: retained for client compat; server rebinds to ctx.employeeId
+      createdBy: z.string().uuid().optional(),
       teamAssignments: z.string().optional(),
     }).superRefine((d, ctx) => {
       const sd = new Date(d.startDate);
@@ -1023,11 +1024,16 @@ export const eventsRouter = createTRPCRouter({
       // Authorization: actor identity comes from the authenticated session,
       // never from the client payload. Any client-supplied createdBy is ignored.
       (input as { createdBy: string }).createdBy = ctx.employeeId;
+      const createdBy = ctx.employeeId; // typed string for TS narrowness below
 
       // Server-side role validation: ADMIN cannot create events
-      const creator = await db.select().from(employees).where(eq(employees.id, input.createdBy)).limit(1);
-      if (creator[0]?.role === 'ADMIN' && creator[0]?.role !== 'CMD') {
-        throw new Error('Admin users cannot create tasks. Please use a manager account.');
+      // (CMD is a separate top role and IS allowed to create.)
+      const creator = await db.select().from(employees).where(eq(employees.id, createdBy)).limit(1);
+      if (creator[0]?.role === 'ADMIN') {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Admin users cannot create tasks. Please use a manager account.',
+        });
       }
       
       let assignedToId = input.assignedTo;
@@ -1097,7 +1103,7 @@ export const eventsRouter = createTRPCRouter({
         allocatedFtth: input.allocatedFtth,
         keyInsight: input.keyInsight,
         assignedTo: assignedToId,
-        createdBy: input.createdBy,
+        createdBy,
       }).returning();
       
       if (input.allocatedSim > 0 && simResource) {
@@ -1113,7 +1119,7 @@ export const eventsRouter = createTRPCRouter({
           resourceId: simResource.id,
           eventId: result[0].id,
           quantity: input.allocatedSim,
-          allocatedBy: input.createdBy,
+          allocatedBy: createdBy,
         });
       }
       
@@ -1130,7 +1136,7 @@ export const eventsRouter = createTRPCRouter({
           resourceId: ftthResource.id,
           eventId: result[0].id,
           quantity: input.allocatedFtth,
-          allocatedBy: input.createdBy,
+          allocatedBy: createdBy,
         });
       }
       
@@ -1263,7 +1269,7 @@ export const eventsRouter = createTRPCRouter({
         action: 'CREATE_EVENT',
         entityType: 'EVENT',
         entityId: result[0].id,
-        performedBy: input.createdBy,
+        performedBy: createdBy,
         details: { eventName: input.name },
       });
 
@@ -1292,9 +1298,14 @@ export const eventsRouter = createTRPCRouter({
       allocatedSim: z.number().min(0).optional(),
       allocatedFtth: z.number().min(0).optional(),
       keyInsight: z.string().optional(),
+      // status is intentionally NOT updatable here — clients must use
+      // `updateEventStatus` so the state-machine, audit, and notifications
+      // are honored. We accept it in the schema for backward-compat with
+      // older clients, but it is stripped before the DB write below.
       status: z.string().optional(),
       assignedTo: z.string().uuid().nullable().optional(),
-      updatedBy: z.string().uuid(),
+      // legacy: retained for client compat; server rebinds to ctx.employeeId
+      updatedBy: z.string().uuid().optional(),
     }).superRefine((d, ctx) => {
       // Validate dates only when provided (all fields are optional on update)
       const sd = d.startDate ? new Date(d.startDate) : null;
@@ -1314,8 +1325,20 @@ export const eventsRouter = createTRPCRouter({
       // IMPORTANT: also strip `updatedBy` from updateData so it never leaks
       // into db.update().set() — there is no `updatedBy` column on events.
       const updatedBy = ctx.employeeId;
-      const { id, startDate, endDate, updatedBy: _ignoredUpdatedBy, ...updateData } = input;
+      // Strip `updatedBy` (no DB column) AND `status` (must go through
+      // `updateEventStatus` so the state-machine, audit row, and
+      // notifications fire). Silently dropping `status` is safe because
+      // the client UI never edits status from the edit form.
+      const {
+        id,
+        startDate,
+        endDate,
+        updatedBy: _ignoredUpdatedBy,
+        status: _ignoredStatus,
+        ...updateData
+      } = input;
       void _ignoredUpdatedBy;
+      void _ignoredStatus;
 
       const existingEvent = await db.select().from(events).where(eq(events.id, id));
       if (!existingEvent[0]) throw new Error("Event not found");
@@ -3227,7 +3250,8 @@ export const eventsRouter = createTRPCRouter({
   submitFinanceCollection: authedProcedure
     .input(z.object({
       eventId: z.string().uuid(),
-      employeeId: z.string().uuid(), // legacy: retained for client compat; server rebinds to ctx.employeeId below
+      // legacy: retained for client compat; server rebinds to ctx.employeeId below
+      employeeId: z.string().uuid().optional(),
       financeType: z.string(),
       amountCollected: z.number().int('Amount must be an integer (paise/rupees)').min(1).max(Number.MAX_SAFE_INTEGER),
       paymentMode: z.string(),
@@ -3245,7 +3269,18 @@ export const eventsRouter = createTRPCRouter({
       gpsLongitude: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      
+      // Authorization: actor identity comes from the authenticated session.
+      // Bind submitter to ctx.employeeId; legacy clients may still send their
+      // own employeeId — accept it only if it matches ctx, reject otherwise.
+      if (input.employeeId && input.employeeId !== ctx.employeeId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only submit finance collections under your own account.',
+        });
+      }
+      (input as { employeeId: string }).employeeId = ctx.employeeId;
+      const employeeId = ctx.employeeId; // typed string for TS narrowness below
+
       const VALID_FINANCE_TYPES = ['FIN_LC', 'FIN_LL_FTTH', 'FIN_TOWER', 'FIN_GSM_POSTPAID', 'FIN_RENT_BUILDING'];
       const VALID_PAYMENT_MODES = ['CASH', 'CHEQUE', 'NEFT', 'UPI', 'CARD', 'DD', 'OTHER'];
       
@@ -3275,21 +3310,13 @@ export const eventsRouter = createTRPCRouter({
       const assignment = await db.select().from(eventAssignments)
         .where(and(
           eq(eventAssignments.eventId, input.eventId),
-          eq(eventAssignments.employeeId, input.employeeId)
+          eq(eventAssignments.employeeId, employeeId)
         ));
       
-      const isEventManager = event[0].assignedTo === input.employeeId;
+      const isEventManager = event[0].assignedTo === employeeId;
       
       if (!assignment[0] && !isEventManager) {
         throw new Error("You are not assigned to this event. Please contact the event manager.");
-      }
-      // Authorization: enforce that submitter == authenticated actor. Reject
-      // any attempt to submit on behalf of another employee.
-      if (input.employeeId !== ctx.employeeId) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'You can only submit finance collections under your own account.',
-        });
       }
 
       // Geo-fence enforcement (mirror the Sales / Maintenance pattern).
@@ -3374,7 +3401,7 @@ export const eventsRouter = createTRPCRouter({
       
       const result = await db.insert(financeCollectionEntries).values({
         eventId: input.eventId,
-        employeeId: input.employeeId,
+        employeeId,
         financeType: input.financeType,
         amountCollected: input.amountCollected,
         paymentMode: input.paymentMode,
@@ -3397,16 +3424,16 @@ export const eventsRouter = createTRPCRouter({
         action: 'SUBMIT_FINANCE_COLLECTION',
         entityType: 'FINANCE',
         entityId: result[0].id,
-        performedBy: input.employeeId,
+        performedBy: employeeId,
         details: { eventId: input.eventId, financeType: input.financeType, amountCollected: input.amountCollected, paymentMode: input.paymentMode, status: 'pending' },
       });
       
       // Get submitter name for notification
-      const submitter = await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1);
+      const submitter = await db.select().from(employees).where(eq(employees.id, employeeId)).limit(1);
       const submitterName = submitter[0]?.name || 'Unknown';
       
       // Send notification to event creator for review (best-effort; never fail the mutation if this errors)
-      if (event[0].assignedTo && event[0].assignedTo !== input.employeeId) {
+      if (event[0].assignedTo && event[0].assignedTo !== employeeId) {
         try {
           await db.insert(notifications).values({
             recipientId: event[0].assignedTo,
@@ -3823,13 +3850,17 @@ export const eventsRouter = createTRPCRouter({
         });
       }
 
-      // Cancel reason is mandatory so the team has context
-      if (input.status === 'cancelled' && !input.reason?.trim()) {
+      // Cancel reason is mandatory so the team has context.
+      // Server-side enforcement of the same minimum length the UI requires
+      // (>=5 chars after trim) so non-UI clients can't bypass with "x".
+      const trimmedReason = input.reason?.trim() ?? '';
+      if (input.status === 'cancelled' && trimmedReason.length < 5) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: 'A reason is required to cancel a task.',
+          message: 'Please provide at least a few words (5+ characters) explaining why this task is being cancelled.',
         });
       }
+      // (Length check above also covers empty/whitespace-only reasons.)
 
       // Atomic transition: include previousStatus in WHERE so concurrent
       // updates don't clobber each other. If 0 rows affected the caller
