@@ -30,12 +30,19 @@ const EVENT_STATUS_CONFIG: Record<EventStatus, { label: string; color: string; b
   cancelled: { label: 'Cancelled', color: '#C62828', bg: '#FFEBEE', icon: 'x', description: 'Task has been cancelled' },
 };
 
+// Tier C polish — keep the client transition map aligned with the backend
+// state machine in updateEventStatus. Terminal states (completed / cancelled)
+// must not offer direct flips back to active / draft from this modal — that
+// path is reserved for the dedicated `reopenEvent` admin action which carries
+// its own auth check, mandatory reason, and notification fan-out. Surfacing
+// those transitions here previously caused avoidable error toasts when a
+// non-admin tapped them or when the backend rejected the implicit reopen.
 const STATUS_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
   draft: ['active', 'cancelled'],
   active: ['paused', 'completed', 'cancelled'],
   paused: ['active', 'completed', 'cancelled'],
-  completed: ['active'],
-  cancelled: ['draft'],
+  completed: [],
+  cancelled: [],
 };
 
 // Category configuration with icons and colors
@@ -554,8 +561,32 @@ export default function EventDetailScreen() {
   };
 
   const updateStatusMutation = trpc.events.updateEventStatus.useMutation({
-    onSuccess: () => {
-      Alert.alert('Success', 'Task status updated');
+    onSuccess: (data) => {
+      // Tier C polish — when a cancel triggered an inventory return, surface
+      // the exact quantities so the manager sees what went back to the pool
+      // without having to navigate to the resources screen to verify.
+      const inv = (data as any)?.inventoryReturn;
+      const newStatus = (data as any)?.status;
+      let title = 'Success';
+      let message = 'Task status updated';
+      if (newStatus === 'cancelled') {
+        title = 'Task Cancelled';
+        if (inv && (inv.returnedSim > 0 || inv.returnedFtth > 0)) {
+          const parts: string[] = [];
+          if (inv.returnedSim > 0) parts.push(`${inv.returnedSim} SIM`);
+          if (inv.returnedFtth > 0) parts.push(`${inv.returnedFtth} FTTH`);
+          message = `Returned ${parts.join(' + ')} back to the circle pool.`;
+        } else {
+          message = 'Task cancelled. No allocated stock to return.';
+        }
+      } else if (newStatus === 'completed') {
+        title = 'Task Completed';
+        message = 'Marked as completed.';
+      } else if (newStatus === 'paused') {
+        title = 'Task Paused';
+        message = 'Team has been notified.';
+      }
+      Alert.alert(title, message);
       refetch();
       progressQuery.refetch();
       setShowStatusModal(false);
@@ -2349,11 +2380,16 @@ export default function EventDetailScreen() {
                       ? `returned ${parts.join(' + ')} to circle pool`
                       : 'returned inventory to circle pool';
                   }
-                  if (log.action === 'ASSIGN_TEAM_MEMBER') return 'Team member assigned';
-                  if (log.action === 'CREATE_SUBTASK') return 'Subtask created';
-                  if (log.action === 'UPDATE_SUBTASK') return 'Subtask updated';
-                  if (log.action === 'DELETE_SUBTASK') return 'Subtask deleted';
-                  if (log.action === 'DELETE_SALES_ENTRY') return 'deleted a sales entry';
+                  if (log.action === 'ASSIGN_TEAM_MEMBER') return 'assigned a team member';
+                  if (log.action === 'REMOVE_TEAM_MEMBER') return 'removed a team member';
+                  if (log.action === 'UPDATE_TEAM_MEMBER_TARGETS') return 'updated team member targets';
+                  if (log.action === 'CREATE_SUBTASK') return 'created a subtask';
+                  if (log.action === 'UPDATE_SUBTASK') return 'updated a subtask';
+                  if (log.action === 'DELETE_SUBTASK') return 'deleted a subtask';
+                  if (log.action === 'DELETE_SALES_ENTRY') {
+                    const d = details as any;
+                    return d?.reason ? `deleted a sales entry — "${d.reason}"` : 'deleted a sales entry';
+                  }
                   if (log.action === 'ACTIVATE_SIMS') {
                     const d = details as any;
                     return d?.count ? `activated ${d.count} SIM(s)` : 'activated SIMs';
@@ -2362,7 +2398,30 @@ export default function EventDetailScreen() {
                     const d = details as any;
                     return d?.count ? `activated ${d.count} FTTH(s)` : 'activated FTTH';
                   }
-                  return log.action.replace(/_/g, ' ').toLowerCase();
+                  if (log.action === 'CREATE_ISSUE') return 'raised an issue';
+                  if (log.action === 'UPDATE_ISSUE_STATUS') return 'updated an issue status';
+                  if (log.action === 'RESOLVE_ISSUE') return 'resolved an issue';
+                  if (log.action === 'ALLOCATE_RESOURCE') {
+                    const d = details as any;
+                    const parts: string[] = [];
+                    if (d?.allocatedSim) parts.push(`${d.allocatedSim} SIM`);
+                    if (d?.allocatedFtth) parts.push(`${d.allocatedFtth} FTTH`);
+                    return parts.length > 0
+                      ? `allocated ${parts.join(' + ')} from circle pool`
+                      : 'allocated resources';
+                  }
+                  if (log.action === 'SUBMIT_SALES' || log.action === 'SUBMIT_EVENT_SALES') return 'submitted sales';
+                  if (log.action === 'APPROVE_SALES') return 'approved a sales submission';
+                  if (log.action === 'REJECT_SALES') return 'rejected a sales submission';
+                  if (log.action === 'APPROVE_TASK') return 'approved a task submission';
+                  if (log.action === 'REJECT_TASK') return 'rejected a task submission';
+                  if (log.action === 'SUBMIT_FOR_REVIEW') return 'submitted task for review';
+                  if (log.action === 'CREATE_EVENT') return 'created the task';
+                  if (log.action === 'UPDATE_EVENT') return 'updated task details';
+                  // Friendly fallback: title-case every underscore-separated
+                  // word so even unmapped actions render as "Update Sub Task"
+                  // instead of "update_sub_task".
+                  return log.action.split('_').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ').toLowerCase();
                 };
                 
                 const performerName = (log as any).performerName || 'Unknown';
@@ -2381,9 +2440,37 @@ export default function EventDetailScreen() {
                       </Text>
                       <Text style={styles.activityTime}>
                         {(() => {
-                          // Database stores timestamps in IST but JSON serialization treats them as UTC
-                          // Use UTC getters since the stored values are actually IST values marked as UTC
+                          // Tier C polish — show relative time ("3m ago",
+                          // "2h ago") for entries inside the last 24h so
+                          // managers can scan the freshness of the feed at a
+                          // glance, then fall back to the absolute IST date
+                          // for older rows so the timeline still makes sense
+                          // a week later.
+                          //
+                          // IMPORTANT timestamp model: the DB stores wall-
+                          // clock IST values, but JSON serialization labels
+                          // them as UTC. So `new Date(log.timestamp)` parses
+                          // a value that is the IST wall-time *interpreted*
+                          // as UTC — i.e. 5h30m AHEAD of the real moment
+                          // the row was inserted. To compute a meaningful
+                          // diff, we shift "now" by the same offset so both
+                          // sides live in the same coordinate space. The
+                          // absolute fallback already uses UTC getters, so
+                          // it produces the correct IST wall-time string
+                          // without any shift.
+                          const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
                           const date = new Date(log.timestamp);
+                          const ts = date.getTime();
+                          const istNowMs = Date.now() + IST_OFFSET_MS;
+                          const diffMs = istNowMs - ts;
+                          const dayMs = 24 * 60 * 60 * 1000;
+                          if (diffMs >= 0 && diffMs < dayMs) {
+                            const mins = Math.floor(diffMs / 60000);
+                            if (mins < 1) return 'just now';
+                            if (mins < 60) return `${mins}m ago`;
+                            const hrs = Math.floor(mins / 60);
+                            return `${hrs}h ago`;
+                          }
                           const day = date.getUTCDate();
                           const month = new Date(date.getUTCFullYear(), date.getUTCMonth(), 1).toLocaleString('en-IN', { month: 'short' });
                           let hours = date.getUTCHours();

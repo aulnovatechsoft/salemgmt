@@ -3881,6 +3881,14 @@ export const eventsRouter = createTRPCRouter({
       // the caller gets a clean error to retry — no manual reconciliation
       // needed. Notifications stay outside the transaction (best-effort,
       // not data-integrity critical).
+      // Tier C polish — capture the inventory-return summary inside the tx
+      // and surface it back to the caller so the cancel UI can show
+      // "12 SIM + 3 FTTH returned to circle pool" instead of a generic
+      // "Task status updated" toast.
+      let returnedSimSummary = 0;
+      let returnedFtthSummary = 0;
+      let allocationsRemovedSummary = 0;
+
       const result = await db.transaction(async (tx) => {
         const updated = await tx.update(events)
           .set({ status: newStatus, updatedAt: new Date() })
@@ -3919,29 +3927,43 @@ export const eventsRouter = createTRPCRouter({
             .from(resourceAllocations)
             .where(eq(resourceAllocations.eventId, input.eventId));
 
+          // Tier C polish — race-safe SQL arithmetic. Earlier we did a
+          // SELECT-then-UPDATE with literal values (`allocated - safeReturn`,
+          // `remaining + safeReturn`), which loses updates if two concurrent
+          // cancel transactions read the same snapshot before either writes.
+          // Now the arithmetic happens entirely server-side with clamps:
+          //   - allocated  := GREATEST(0, allocated - LEAST(qty, allocated))
+          //                   so a corrupt over-count can never push it negative
+          //   - remaining  := LEAST(total, remaining + LEAST(qty, allocated))
+          //                   so it can never exceed the configured total
+          // The pre-read on `resources` is for metadata only (type for the
+          // SIM/FTTH split, and a best-effort pre-allocated for the user-
+          // facing summary). It is NOT fed into the update arithmetic, so
+          // a stale read here cannot cause stock corruption — only a slight
+          // cosmetic overcount in the summary toast in the rare case where
+          // another cancel races between the two statements.
           let returnedSim = 0;
           let returnedFtth = 0;
           for (const alloc of allocs) {
             if (!alloc.quantity || alloc.quantity <= 0) continue;
-            const [res] = await tx.select({
-              id: resources.id,
+            const qty = alloc.quantity;
+            const [resPre] = await tx.select({
               type: resources.type,
               allocated: resources.allocated,
-              remaining: resources.remaining,
             }).from(resources).where(eq(resources.id, alloc.resourceId)).limit(1);
-            if (!res) continue;
+            if (!resPre) continue;
 
-            const safeReturn = Math.min(alloc.quantity, res.allocated);
             await tx.update(resources)
               .set({
-                allocated: res.allocated - safeReturn,
-                remaining: res.remaining + safeReturn,
+                allocated: sql`GREATEST(0, ${resources.allocated} - LEAST(${qty}, ${resources.allocated}))`,
+                remaining: sql`LEAST(${resources.total}, ${resources.remaining} + LEAST(${qty}, ${resources.allocated}))`,
                 updatedAt: new Date(),
               })
-              .where(eq(resources.id, res.id));
+              .where(eq(resources.id, alloc.resourceId));
 
-            if (res.type === 'SIM') returnedSim += safeReturn;
-            else if (res.type === 'FTTH') returnedFtth += safeReturn;
+            const applied = Math.min(qty, Math.max(0, resPre.allocated));
+            if (resPre.type === 'SIM') returnedSim += applied;
+            else if (resPre.type === 'FTTH') returnedFtth += applied;
           }
 
           if (allocs.length > 0) {
@@ -3963,6 +3985,12 @@ export const eventsRouter = createTRPCRouter({
               },
             });
           }
+
+          // Hoist for the outer return value so the client can show a
+          // precise success toast.
+          returnedSimSummary = returnedSim;
+          returnedFtthSummary = returnedFtth;
+          allocationsRemovedSummary = allocs.length;
         }
 
         return updated[0];
@@ -4025,7 +4053,21 @@ export const eventsRouter = createTRPCRouter({
         }
       }
 
-      return result;
+      // Return shape extended (Tier C polish): clients reading just `result`
+      // continue to work because the event row is spread on top, but a
+      // status-aware UI can now check `inventoryReturn` to render a precise
+      // "12 SIM + 3 FTTH returned to circle pool" success toast.
+      return {
+        ...result,
+        inventoryReturn:
+          (returnedSimSummary > 0 || returnedFtthSummary > 0)
+            ? {
+                returnedSim: returnedSimSummary,
+                returnedFtth: returnedFtthSummary,
+                allocationsRemoved: allocationsRemovedSummary,
+              }
+            : null,
+      };
     }),
 
   // Admin-only "reopen" action — moves a completed/cancelled task back to

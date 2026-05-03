@@ -461,48 +461,53 @@ function EventCard({ event, getDisplayStatus, canEdit, onActivate }: {
       <View style={styles.eventDetails}>
         <View style={styles.eventDetail}>
           <MapPin size={16} color={Colors.light.textSecondary} />
-          <Text style={styles.eventDetailText}>{event.location}</Text>
+          <Text style={styles.eventDetailText} numberOfLines={1}>{event.location}</Text>
         </View>
-        <View style={styles.eventDetail}>
-          <Calendar size={16} color={Colors.light.textSecondary} />
-          <Text style={styles.eventDetailText}>
-            {new Date(event.dateRange.startDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} - {new Date(event.dateRange.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
-          </Text>
+        {/* Tier C polish — date + SLA pill share one row with the pill
+            right-aligned. Earlier the pill sat as its own row underneath,
+            which (a) made the card taller for no reason and (b) visually
+            separated two pieces of information that managers always read
+            together ("when is it due?" + "how urgent is that?"). The pill
+            is hidden on terminal statuses where remaining-time is meaningless,
+            so the row gracefully collapses back to just the date when a task
+            closes out. */}
+        <View style={[styles.eventDetail, { justifyContent: 'space-between' }]}>
+          <View style={[styles.eventDetail, { flexShrink: 1 }]}>
+            <Calendar size={16} color={Colors.light.textSecondary} />
+            <Text style={styles.eventDetailText} numberOfLines={1}>
+              {new Date(event.dateRange.startDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} - {new Date(event.dateRange.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+            </Text>
+          </View>
+          {(() => {
+            if (status === 'completed' || status === 'cancelled' || status === 'past') return null;
+            const end = new Date(event.dateRange.endDate);
+            const now = new Date();
+            const ms = end.getTime() - now.getTime();
+            const dayMs = 24 * 60 * 60 * 1000;
+            const days = Math.floor(Math.abs(ms) / dayMs);
+            const hours = Math.floor((Math.abs(ms) % dayMs) / (60 * 60 * 1000));
+            let label: string; let pillColor: string; let pillBg: string;
+            if (ms < 0) {
+              label = days > 0 ? `Overdue ${days}d` : `Overdue ${hours}h`;
+              pillColor = '#B71C1C'; pillBg = '#FFCDD2';
+            } else if (ms < dayMs) {
+              label = `Due in ${hours}h`;
+              pillColor = '#C62828'; pillBg = '#FFEBEE';
+            } else if (ms < 3 * dayMs) {
+              label = `Due in ${days}d`; pillColor = '#E65100'; pillBg = '#FFF3E0';
+            } else if (ms < 7 * dayMs) {
+              label = `Due in ${days}d`; pillColor = '#EF6C00'; pillBg = '#FFF3E0';
+            } else {
+              label = `Due in ${days}d`; pillColor = '#2E7D32'; pillBg = '#E8F5E9';
+            }
+            return (
+              <View style={[styles.slaPill, { backgroundColor: pillBg }]}>
+                <Clock size={12} color={pillColor} />
+                <Text style={[styles.slaPillText, { color: pillColor }]}>{label}</Text>
+              </View>
+            );
+          })()}
         </View>
-        {/* Tier C — SLA pill. Hidden for terminal statuses (completed /
-            cancelled / past) where remaining-time is meaningless. For active
-            and upcoming tasks we surface time-to-deadline at a glance using a
-            colour grammar consistent with the event-detail header so users
-            build one mental model across the app. */}
-        {(() => {
-          if (status === 'completed' || status === 'cancelled' || status === 'past') return null;
-          const end = new Date(event.dateRange.endDate);
-          const now = new Date();
-          const ms = end.getTime() - now.getTime();
-          const dayMs = 24 * 60 * 60 * 1000;
-          const days = Math.floor(Math.abs(ms) / dayMs);
-          const hours = Math.floor((Math.abs(ms) % dayMs) / (60 * 60 * 1000));
-          let label: string; let pillColor: string; let pillBg: string;
-          if (ms < 0) {
-            label = days > 0 ? `Overdue ${days}d` : `Overdue ${hours}h`;
-            pillColor = '#B71C1C'; pillBg = '#FFCDD2';
-          } else if (ms < dayMs) {
-            label = `Due in ${hours}h`;
-            pillColor = '#C62828'; pillBg = '#FFEBEE';
-          } else if (ms < 3 * dayMs) {
-            label = `Due in ${days}d`; pillColor = '#E65100'; pillBg = '#FFF3E0';
-          } else if (ms < 7 * dayMs) {
-            label = `Due in ${days}d`; pillColor = '#F9A825'; pillBg = '#FFFDE7';
-          } else {
-            label = `Due in ${days}d`; pillColor = '#2E7D32'; pillBg = '#E8F5E9';
-          }
-          return (
-            <View style={[styles.slaPill, { backgroundColor: pillBg }]}>
-              <Clock size={12} color={pillColor} />
-              <Text style={[styles.slaPillText, { color: pillColor }]}>{label}</Text>
-            </View>
-          );
-        })()}
       </View>
 
       {/* Creator Info */}
