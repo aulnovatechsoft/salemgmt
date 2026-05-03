@@ -525,6 +525,40 @@ function EventCard({ event, getDisplayStatus, canEdit, onActivate }: {
         <Text style={styles.categoryText}>{event.category}</Text>
       </View>
 
+      {/* Overall progress — derived locally from the per-category target/completed
+          pairs already on the event row; a single number managers can scan in
+          a list. Only renders when at least one category has a target > 0. */}
+      {(() => {
+        const pairs: { tgt: number; done: number }[] = [
+          { tgt: event.targetSim ?? 0,           done: event.simsSold ?? 0 },
+          { tgt: event.targetFtth ?? 0,          done: event.ftthSold ?? 0 },
+          { tgt: event.targetEb ?? 0,            done: event.ebCompleted ?? 0 },
+          { tgt: event.targetLease ?? 0,         done: event.leaseCompleted ?? 0 },
+          { tgt: event.targetBtsDown ?? 0,       done: event.btsDownCompleted ?? 0 },
+          { tgt: event.targetFtthDown ?? 0,      done: event.ftthDownCompleted ?? 0 },
+          { tgt: event.targetRouteFail ?? 0,     done: event.routeFailCompleted ?? 0 },
+          { tgt: event.targetOfcFail ?? 0,       done: event.ofcFailCompleted ?? 0 },
+        ].filter(p => p.tgt > 0);
+        if (pairs.length === 0) return null;
+        const pcts = pairs.map(p => Math.min(100, Math.round((p.done / p.tgt) * 100)));
+        const overallPct = Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length);
+        const barColor =
+          overallPct >= 100 ? '#1565C0' :
+          overallPct >= 75  ? '#2E7D32' :
+          overallPct >= 40  ? '#EF6C00' : '#C62828';
+        return (
+          <View style={styles.progressOverallWrap}>
+            <View style={styles.progressOverallHeader}>
+              <Text style={styles.progressOverallLabel}>Overall Progress</Text>
+              <Text style={[styles.progressOverallValue, { color: barColor }]}>{overallPct}%</Text>
+            </View>
+            <View style={styles.progressBarTrack}>
+              <View style={[styles.progressBarFill, { width: `${overallPct}%`, backgroundColor: barColor }]} />
+            </View>
+          </View>
+        );
+      })()}
+
       {(() => {
         const isMyTask = event.ownershipCategory === 'assigned_to_me';
         const mySimTarget = (event as any).mySimTarget;
@@ -812,6 +846,36 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 6,
     marginBottom: 12,
+  },
+  progressOverallWrap: {
+    marginBottom: 12,
+  },
+  progressOverallHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  progressOverallLabel: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    fontWeight: '600' as const,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.4,
+  },
+  progressOverallValue: {
+    fontSize: 14,
+    fontWeight: '700' as const,
+  },
+  progressBarTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#ECEFF1',
+    overflow: 'hidden' as const,
+  },
+  progressBarFill: {
+    height: '100%' as const,
+    borderRadius: 3,
   },
   categoryText: {
     fontSize: 12,

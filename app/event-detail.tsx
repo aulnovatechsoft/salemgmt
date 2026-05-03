@@ -296,6 +296,8 @@ export default function EventDetailScreen() {
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
+  const [showReopenModal, setShowReopenModal] = useState(false);
+  const [reopenReason, setReopenReason] = useState('');
   const [showEditTargetModal, setShowEditTargetModal] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState('');
   const [simTarget, setSimTarget] = useState('');
@@ -510,6 +512,36 @@ export default function EventDetailScreen() {
       Alert.alert('Error', error.message);
     },
   });
+
+  const reopenMutation = trpc.events.reopenEvent.useMutation({
+    onSuccess: () => {
+      Alert.alert('Task Reopened', 'The task is now active again. The team has been notified.');
+      refetch();
+      setShowReopenModal(false);
+      setReopenReason('');
+    },
+    onError: (error) => {
+      const code = (error as any)?.data?.code;
+      const isConflict = code === 'CONFLICT' || /changed by another user|conflict/i.test(error.message || '');
+      Alert.alert(
+        isConflict ? 'Task already changed' : 'Could not reopen',
+        isConflict
+          ? 'Someone else updated this task. Refreshing the latest state.'
+          : (error.message || 'Failed to reopen task'),
+      );
+      if (isConflict) refetch();
+    },
+  });
+
+  const submitReopen = () => {
+    const trimmed = reopenReason.trim();
+    if (trimmed.length < 5) {
+      Alert.alert('Reason required', 'Please enter at least a few words explaining why this task is being reopened.');
+      return;
+    }
+    if (!eventData) return;
+    reopenMutation.mutate({ eventId: eventData.id, reason: trimmed });
+  };
 
   const updateStatusMutation = trpc.events.updateEventStatus.useMutation({
     onSuccess: () => {
@@ -1279,12 +1311,22 @@ export default function EventDetailScreen() {
             <Text style={styles.eventName}>{eventData.name}</Text>
             <TouchableOpacity 
               style={[styles.statusBadge, { backgroundColor: statusBg }]}
-              onPress={() => canManageTeam && availableTransitions.length > 0 && setShowStatusModal(true)}
+              onPress={() => {
+                const canReopen = (dbStatus === 'completed' || dbStatus === 'cancelled') &&
+                  (employee?.role === 'ADMIN' || employee?.role === 'CMD');
+                if ((canManageTeam && availableTransitions.length > 0) || canReopen) {
+                  setShowStatusModal(true);
+                }
+              }}
             >
               <Text style={[styles.statusText, { color: statusColor }]}>
                 {getStatusLabel()}
               </Text>
-              {canManageTeam && availableTransitions.length > 0 && <ChevronRight size={14} color={statusColor} />}
+              {((canManageTeam && availableTransitions.length > 0) ||
+                ((dbStatus === 'completed' || dbStatus === 'cancelled') &&
+                  (employee?.role === 'ADMIN' || employee?.role === 'CMD'))) && (
+                <ChevronRight size={14} color={statusColor} />
+              )}
             </TouchableOpacity>
           </View>
           
@@ -3338,9 +3380,86 @@ export default function EventDetailScreen() {
                 </View>
               </TouchableOpacity>
             )}
-            {availableTransitions.length === 0 && (
+            {(dbStatus === 'completed' || dbStatus === 'cancelled') &&
+              (employee?.role === 'ADMIN' || employee?.role === 'CMD') && (
+              <TouchableOpacity
+                style={styles.statusOption}
+                onPress={() => { setShowStatusModal(false); setShowReopenModal(true); }}
+              >
+                <Play size={20} color={EVENT_STATUS_CONFIG.active.color} />
+                <View style={styles.statusOptionContent}>
+                  <Text style={styles.statusOptionText}>Reopen Task (Admin)</Text>
+                  <Text style={styles.statusOptionDesc}>
+                    Move this {dbStatus} task back to active. The team will be notified and the reason logged.
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
+            {availableTransitions.length === 0 &&
+              !((dbStatus === 'completed' || dbStatus === 'cancelled') &&
+                (employee?.role === 'ADMIN' || employee?.role === 'CMD')) && (
               <Text style={styles.noTransitionsText}>No status changes available for this event.</Text>
             )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Reopen Task — admin-only escape hatch from terminal states */}
+      <Modal
+        visible={showReopenModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => !reopenMutation.isPending && setShowReopenModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => !reopenMutation.isPending && setShowReopenModal(false)}
+        >
+          <View style={styles.statusModalContent}>
+            <View style={styles.statusModalHeader}>
+              <Text style={styles.statusModalTitle}>Reopen Task</Text>
+              <TouchableOpacity
+                onPress={() => !reopenMutation.isPending && setShowReopenModal(false)}
+                disabled={reopenMutation.isPending}
+              >
+                <X size={24} color={Colors.light.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ fontSize: 14, color: Colors.light.textSecondary, marginBottom: 12 }}>
+              Reopening moves this task back to active so the team can resume work. Please record why — the reason is logged for audit and shared with the creator and team.
+            </Text>
+            <TextInput
+              style={[styles.input, { minHeight: 96, textAlignVertical: 'top' }]}
+              placeholder="e.g. Marked complete by mistake — pending approvals still outstanding"
+              value={reopenReason}
+              onChangeText={setReopenReason}
+              multiline
+              maxLength={500}
+              placeholderTextColor={Colors.light.textSecondary}
+              editable={!reopenMutation.isPending}
+            />
+            <Text style={{ fontSize: 12, color: Colors.light.textSecondary, alignSelf: 'flex-end', marginTop: 4 }}>
+              {reopenReason.length}/500
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
+              <TouchableOpacity
+                style={[styles.secondaryButton, { flex: 1 }]}
+                onPress={() => setShowReopenModal(false)}
+                disabled={reopenMutation.isPending}
+              >
+                <Text style={styles.secondaryButtonText}>Keep Closed</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.primaryButton, { flex: 1, opacity: reopenMutation.isPending ? 0.6 : 1 }]}
+                onPress={submitReopen}
+                disabled={reopenMutation.isPending}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {reopenMutation.isPending ? 'Reopening…' : 'Reopen Task'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </TouchableOpacity>
       </Modal>

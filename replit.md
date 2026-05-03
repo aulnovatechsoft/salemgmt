@@ -430,6 +430,14 @@ Production-grade safety on the create→assign→execute→approve→complete lo
 
 - **Pre-existing bug fixed**: `events.create` role-check was `role === 'ADMIN' && role !== 'CMD'` (impossible AND, TS warned). Simplified to `role === 'ADMIN'` and switched from `Error` to `TRPCError(FORBIDDEN)` for consistent client handling.
 
+## Manager UX (Tier B)
+
+- **Admin Reopen action** (`events.reopenEvent`): a dedicated escape hatch for completed/cancelled tasks that the state-machine deliberately blocks. ADMIN/CMD only (server-checked via `employees.role`); source state must be terminal; mandatory reason 5+ chars; atomic compare-and-set against the previous terminal status (CONFLICT on race); audits as `REOPEN_EVENT`; notifies creator + assigned manager + every team member (excluding the actor) via `EVENT_STATUS_CHANGED` with `metadata.reopened=true`. UI: when an ADMIN/CMD opens a completed/cancelled task in `app/event-detail.tsx`, the status badge becomes tappable and the status modal exposes a "Reopen Task (Admin)" entry; that entry opens a reason modal (5+ char minimum, 500-char counter, "Keep Closed" escape, button disabled while pending) and surfaces server CONFLICT as "Someone else updated this task… refreshing". Auto-refetches on success.
+
+- **Unified progress endpoint** (`events.getEventProgressSummary`): single tRPC call returning `{ overallPct, breakdown[], subtasks }` for one event. Combines (a) live SIM/FTTH actuals aggregated from `event_sales_entries` (`sims_activated` + `ftth_activated`), (b) the per-category target/completed counters already on the events row (EB, Lease, BTS_DOWN, FTTH_DOWN, ROUTE_FAIL, OFC_FAIL, and the 5 finance categories), and (c) subtask roll-up from `event_subtasks` (total / done / cancelled / active / pct). `overallPct` is the simple average of every non-zero-target category pct plus the subtask pct, capped at 100 so over-collection doesn't inflate the headline. Subtasks are *displayed* but never auto-mutate `event.status` — managers retain full control of the lifecycle.
+
+- **Overall progress bar in EventCard** (`app/(tabs)/events.tsx`): every event row in the list now shows a single Overall Progress bar derived locally from the per-category target/completed pairs already on the event prop (no extra round-trip). Bar color shifts at 40% (red), 75% (orange), 100% (green→blue) so managers can scan task health at a glance. Renders only when at least one category has a target > 0.
+
 ## Deployment
 Configured for autoscale deployment:
 - Build: Exports web version using Expo

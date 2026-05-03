@@ -3955,6 +3955,213 @@ export const eventsRouter = createTRPCRouter({
       return result;
     }),
 
+  // Admin-only "reopen" action — moves a completed/cancelled task back to
+  // active so the team can resume work. The state-machine in
+  // updateEventStatus deliberately blocks this transition; this is the
+  // dedicated escape hatch (Tier B).
+  //   - Authorization: ADMIN / CMD only.
+  //   - Source state must be terminal (completed | cancelled), else NOT_ALLOWED.
+  //   - Mandatory reason (5+ chars after trim) — captured in audit + notify.
+  //   - Atomic compare-and-set against the previous terminal status.
+  //   - Notifies creator + assigned manager + every team member (excluding actor).
+  reopenEvent: authedProcedure
+    .input(z.object({
+      eventId: z.string().uuid(),
+      reason: z.string().max(500),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const actorId = ctx.employeeId;
+      const trimmedReason = input.reason?.trim() ?? '';
+      if (trimmedReason.length < 5) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Please provide at least a few words (5+ characters) explaining why this task is being reopened.',
+        });
+      }
+
+      const [actor] = await db.select({ role: employees.role })
+        .from(employees).where(eq(employees.id, actorId)).limit(1);
+      if (actor?.role !== 'ADMIN' && actor?.role !== 'CMD') {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only an admin can reopen a completed or cancelled task.',
+        });
+      }
+
+      const [existing] = await db.select().from(events).where(eq(events.id, input.eventId));
+      if (!existing) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Event not found.' });
+      }
+      const previousStatus = existing.status;
+      if (previousStatus !== 'completed' && previousStatus !== 'cancelled') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Only completed or cancelled tasks can be reopened. This task is currently "${previousStatus}".`,
+        });
+      }
+
+      // Atomic compare-and-set so two admins clicking simultaneously don't
+      // both flip; the loser sees CONFLICT and refetches.
+      const updated = await db.update(events)
+        .set({ status: 'active' as any, updatedAt: new Date() })
+        .where(and(eq(events.id, input.eventId), eq(events.status, previousStatus)))
+        .returning();
+      if (!updated[0]) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'This task was changed by another user. Please refresh and try again.',
+        });
+      }
+
+      // Audit
+      try {
+        await db.insert(auditLogs).values({
+          action: 'REOPEN_EVENT',
+          entityType: 'EVENT',
+          entityId: input.eventId,
+          performedBy: actorId,
+          details: { previousStatus, newStatus: 'active', reason: trimmedReason },
+        });
+      } catch (e) {
+        console.error(`[reopenEvent] audit insert failed for event ${input.eventId}:`, (e as Error).message);
+      }
+
+      // Notify creator + assigned manager + team (best-effort, exclude actor).
+      try {
+        const recipients = new Set<string>();
+        if (existing.assignedTo) recipients.add(existing.assignedTo);
+        if (existing.createdBy) recipients.add(existing.createdBy);
+        const teamAssigns = await db.select({ employeeId: eventAssignments.employeeId })
+          .from(eventAssignments)
+          .where(eq(eventAssignments.eventId, input.eventId));
+        for (const a of teamAssigns) recipients.add(a.employeeId);
+        recipients.delete(actorId);
+
+        let actorName = 'An admin';
+        try {
+          const [a] = await db.select({ name: employees.name })
+            .from(employees).where(eq(employees.id, actorId)).limit(1);
+          if (a?.name) actorName = a.name;
+        } catch {}
+
+        const message = `${actorName} reopened "${existing.name}". Reason: ${trimmedReason}`;
+        const rows: (typeof notifications.$inferInsert)[] = Array.from(recipients).map(rid => ({
+          recipientId: rid,
+          type: 'EVENT_STATUS_CHANGED',
+          title: 'Task Reopened',
+          message,
+          entityType: 'EVENT',
+          entityId: input.eventId,
+          metadata: {
+            eventName: existing.name,
+            previousStatus,
+            newStatus: 'active',
+            reopened: true,
+            actorName,
+            reason: trimmedReason,
+          } as Record<string, unknown>,
+        }));
+        if (rows.length > 0) await db.insert(notifications).values(rows);
+      } catch (notifyErr) {
+        console.error(`[reopenEvent] notification fan-out failed for event ${input.eventId}:`, (notifyErr as Error).message);
+      }
+
+      return updated[0];
+    }),
+
+  // Unified progress summary for a single event. Combines:
+  //   - the per-category target/completed counters already on the events row
+  //     (SIM, FTTH, EB, Lease, BTS_DOWN, FTTH_DOWN, ROUTE_FAIL, OFC_FAIL,
+  //     and finance: LC, LL_FTTH, TOWER, GSM_POSTPAID, RENT_BUILDING)
+  //   - SIM/FTTH actuals aggregated from event_sales_entries (live counts)
+  //   - subtask roll-up (total / done / pct) from event_subtasks
+  // Returns an `overallPct` averaged across all non-zero-target categories
+  // PLUS the subtask category if any subtasks exist. Designed to power the
+  // manager-facing badges/bars on the event list and detail screens.
+  getEventProgressSummary: authedProcedure
+    .input(z.object({ eventId: z.string().uuid() }))
+    .query(async ({ input }) => {
+      const [evt] = await db.select().from(events).where(eq(events.id, input.eventId)).limit(1);
+      if (!evt) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Event not found.' });
+      }
+
+      // Live SIM/FTTH actuals (the events row doesn't store these; they live
+      // in event_sales_entries). Fall back to 0 if the table isn't reachable.
+      let simSold = 0;
+      let ftthSold = 0;
+      try {
+        const sumRows = await db.execute(sql`
+          SELECT
+            COALESCE(SUM(${eventSalesEntries.simsActivated}), 0)::int AS sim_sold,
+            COALESCE(SUM(${eventSalesEntries.ftthActivated}), 0)::int AS ftth_sold
+          FROM ${eventSalesEntries}
+          WHERE ${eventSalesEntries.eventId} = ${input.eventId}
+        `);
+        const r = (sumRows as any).rows?.[0] || (sumRows as any)[0];
+        simSold = Number(r?.sim_sold ?? 0);
+        ftthSold = Number(r?.ftth_sold ?? 0);
+      } catch (e) {
+        console.warn(`[getEventProgressSummary] sales aggregate failed:`, (e as Error).message);
+      }
+
+      // Subtask roll-up
+      const subRows = await db.select({
+        status: eventSubtasks.status,
+      }).from(eventSubtasks).where(eq(eventSubtasks.eventId, input.eventId));
+      const subtasksTotal = subRows.length;
+      const subtasksDone = subRows.filter(r => r.status === 'completed').length;
+      const subtasksCancelled = subRows.filter(r => r.status === 'cancelled').length;
+      const subtasksActive = subtasksTotal - subtasksCancelled;
+      const subtasksPct = subtasksActive > 0
+        ? Math.min(100, Math.round((subtasksDone / subtasksActive) * 100))
+        : null;
+
+      // Per-category breakdown — only include categories with target > 0.
+      const cats: { key: string; label: string; target: number; completed: number }[] = [
+        { key: 'sim',          label: 'SIM',           target: evt.targetSim ?? 0,           completed: simSold },
+        { key: 'ftth',         label: 'FTTH',          target: evt.targetFtth ?? 0,          completed: ftthSold },
+        { key: 'eb',           label: 'EB',            target: evt.targetEb ?? 0,            completed: evt.ebCompleted ?? 0 },
+        { key: 'lease',        label: 'Lease',         target: evt.targetLease ?? 0,         completed: evt.leaseCompleted ?? 0 },
+        { key: 'bts_down',     label: 'BTS Down',      target: evt.targetBtsDown ?? 0,       completed: evt.btsDownCompleted ?? 0 },
+        { key: 'ftth_down',    label: 'FTTH Down',     target: evt.targetFtthDown ?? 0,      completed: evt.ftthDownCompleted ?? 0 },
+        { key: 'route_fail',   label: 'Route Fail',    target: evt.targetRouteFail ?? 0,     completed: evt.routeFailCompleted ?? 0 },
+        { key: 'ofc_fail',     label: 'OFC Fail',      target: evt.targetOfcFail ?? 0,       completed: evt.ofcFailCompleted ?? 0 },
+        { key: 'fin_lc',       label: 'LC Finance',    target: evt.targetFinLc ?? 0,         completed: evt.finLcCollected ?? 0 },
+        { key: 'fin_ll_ftth',  label: 'LL/FTTH Fin.',  target: evt.targetFinLlFtth ?? 0,     completed: evt.finLlFtthCollected ?? 0 },
+        { key: 'fin_tower',    label: 'Tower Fin.',    target: evt.targetFinTower ?? 0,      completed: evt.finTowerCollected ?? 0 },
+        { key: 'fin_gsm',      label: 'GSM Postpaid',  target: evt.targetFinGsmPostpaid ?? 0, completed: evt.finGsmPostpaidCollected ?? 0 },
+        { key: 'fin_rent',     label: 'Rent Building', target: evt.targetFinRentBuilding ?? 0, completed: evt.finRentBuildingCollected ?? 0 },
+      ];
+      const breakdown = cats
+        .filter(c => c.target > 0)
+        .map(c => ({
+          ...c,
+          pct: Math.min(100, Math.round((c.completed / c.target) * 100)),
+        }));
+
+      // Overall = simple average of category pcts + subtask pct (if any).
+      // Capped at 100 so over-collection doesn't inflate the headline.
+      const allPcts: number[] = breakdown.map(b => b.pct);
+      if (subtasksPct !== null) allPcts.push(subtasksPct);
+      const overallPct = allPcts.length > 0
+        ? Math.min(100, Math.round(allPcts.reduce((a, b) => a + b, 0) / allPcts.length))
+        : 0;
+
+      return {
+        eventId: input.eventId,
+        overallPct,
+        breakdown,
+        subtasks: {
+          total: subtasksTotal,
+          done: subtasksDone,
+          cancelled: subtasksCancelled,
+          active: subtasksActive,
+          pct: subtasksPct,
+        },
+      };
+    }),
+
   // Event-level progress (assignee posting their own work). Production-grade:
   //   - authedProcedure: actor derived from session, never trusted from input
   //   - SELECT ... FOR UPDATE on the event row to serialise concurrent +/- taps
