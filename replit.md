@@ -373,7 +373,7 @@ All preset ranges are computed in `utils/timePeriod.ts` using India-local calend
   - Default returns `ADMIN + CMD`. With `includeManagementPanel: true` returns `CMD, ADMIN, GM, CGM, DGM, AGM`.
   - Output: `{ total, byRole, users: [{ id, name, email, phone, role, circle, zone, persNo, designation, isActive, createdAt }] }`, sorted by role then name.
 - UI: app/admin.tsx renders a "Privileged Users" section visible only when `isAdminRole(role)` is true. Has Show/Hide toggle, two filter chips (Admins-only / All management roles), summary line with per-role counts, role badges, contact rows, and Refresh.
-- Note: backend reports/analytics "see-all" bypass is currently keyed on `role === 'ADMIN'` only (CMD is NOT included in that bypass). Worth revisiting if CMD should also see all-circle reports.
+- Backend reports/analytics "see-all" bypass: `isAdmin = role === 'ADMIN' || role === 'CMD'` in all 8 sales.ts endpoints (getDashboardStats, getSalesAnalytics, getTeamPerformance, getSalesTrends, getOperationsAnalytics, getFinanceAnalytics, plus the two underlying scope-resolution helpers). CMD now bypasses circle/persNo scope filters and sees all-India data, matching the role's top-of-hierarchy position.
 
 ## Deployment
 Configured for autoscale deployment:

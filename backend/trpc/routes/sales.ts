@@ -196,7 +196,7 @@ export const salesRouter = createTRPCRouter({
       
       const userRole = employee[0].role;
       const userPersNo = employee[0].persNo;
-      const isAdmin = userRole === 'ADMIN';
+      const isAdmin = userRole === 'ADMIN' || userRole === 'CMD';
       
       const typeCondition = input.type === 'sim' 
         ? sql`${eventAssignments.simTarget} > 0`
@@ -552,7 +552,7 @@ export const salesRouter = createTRPCRouter({
       
       const userRole = employee[0].role;
       const userPersNo = employee[0].persNo;
-      const isAdmin = userRole === 'ADMIN';
+      const isAdmin = userRole === 'ADMIN' || userRole === 'CMD';
       
       let baseCondition;
       if (isAdmin) {
@@ -617,7 +617,7 @@ export const salesRouter = createTRPCRouter({
       
       const userRole = employee[0].role;
       const userPersNo = employee[0].persNo;
-      const isAdmin = userRole === 'ADMIN';
+      const isAdmin = userRole === 'ADMIN' || userRole === 'CMD';
       
       let collectionConditions;
       if (isAdmin) {
@@ -731,7 +731,7 @@ export const salesRouter = createTRPCRouter({
       }
       
       const userRole = employee[0].role;
-      const isAdmin = userRole === 'ADMIN';
+      const isAdmin = userRole === 'ADMIN' || userRole === 'CMD';
       
       const buildConditions = () => {
         const conditions: any[] = [];
@@ -899,7 +899,7 @@ export const salesRouter = createTRPCRouter({
       }
       
       const userRole = employee[0].role;
-      const isAdmin = userRole === 'ADMIN';
+      const isAdmin = userRole === 'ADMIN' || userRole === 'CMD';
       
       const { start: windowStart, end: windowEnd } = resolveWindow(input);
       const conditions: any[] = [gte(eventSalesEntries.createdAt, windowStart), lte(eventSalesEntries.createdAt, windowEnd)];
@@ -977,7 +977,7 @@ export const salesRouter = createTRPCRouter({
       }
       
       const userRole = employee[0].role;
-      const isAdmin = userRole === 'ADMIN';
+      const isAdmin = userRole === 'ADMIN' || userRole === 'CMD';
       
       const { start: windowStart, end: windowEnd } = resolveWindow(input);
       const conditions: any[] = [gte(eventSalesEntries.createdAt, windowStart), lte(eventSalesEntries.createdAt, windowEnd)];
@@ -1065,7 +1065,7 @@ export const salesRouter = createTRPCRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Employee not found" });
       }
       const userRole = employee[0].role;
-      const isAdmin = userRole === 'ADMIN';
+      const isAdmin = userRole === 'ADMIN' || userRole === 'CMD';
 
       const { start: windowStart, end: windowEnd } = resolveWindow(input);
       const conditions: any[] = [gte(maintenanceEntries.createdAt, windowStart), lte(maintenanceEntries.createdAt, windowEnd)];
@@ -1187,7 +1187,7 @@ export const salesRouter = createTRPCRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Employee not found" });
       }
       const userRole = employee[0].role;
-      const isAdmin = userRole === 'ADMIN';
+      const isAdmin = userRole === 'ADMIN' || userRole === 'CMD';
 
       const { start: windowStart, end: windowEnd } = resolveWindow(input);
       const conditions: any[] = [gte(financeCollectionEntries.createdAt, windowStart), lte(financeCollectionEntries.createdAt, windowEnd)];
