@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, RefreshControl, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, RefreshControl, Modal, Platform } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { User, Link, ChevronLeft, ChevronRight, Users, Building, MapPin, Phone, Mail, UserCheck, UserX, X, CheckCircle, Settings, LogOut } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
@@ -56,7 +56,20 @@ export default function ProfileScreen() {
     });
   };
   
+  const performLogout = useCallback(async () => {
+    try {
+      await logout();
+    } finally {
+      router.replace('/login');
+    }
+  }, [logout, router]);
+
   const handleLogout = () => {
+    if (Platform.OS === 'web') {
+      const ok = typeof window !== 'undefined' && window.confirm('Are you sure you want to logout?');
+      if (ok) performLogout();
+      return;
+    }
     Alert.alert(
       'Logout',
       'Are you sure you want to logout?',
@@ -65,10 +78,7 @@ export default function ProfileScreen() {
         {
           text: 'Logout',
           style: 'destructive',
-          onPress: () => {
-            logout();
-            router.replace('/login');
-          },
+          onPress: () => { performLogout(); },
         },
       ]
     );
