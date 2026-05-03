@@ -367,6 +367,14 @@ All preset ranges are computed in `utils/timePeriod.ts` using India-local calend
 - **IST-correct daily bucketing**: Daily group-by uses `(${col} AT TIME ZONE 'Asia/Kolkata')::date` and emits `TO_CHAR(..., 'YYYY-MM-DD')` so backend day-keys align with the frontend's local-date keys (`toLocalKey`). This prevents late-night IST entries from being mis-bucketed into the prior day when the DB session timezone is UTC. Applied to `getSalesTrends`, `getOperationsAnalytics`, and `getFinanceAnalytics`.
 - **Parallel queries**: `getOperationsAnalytics` and `getFinanceAnalytics` batch their three independent aggregations (totals/byEmployee/daily and collectors/daily/status, respectively) via `Promise.all` for ~3x lower perceived latency.
 
+## Privileged Users (Admin Panel)
+- `admin.listPrivilegedUsers` (publicProcedure, role-gated): caller must be ADMIN or CMD; otherwise throws Forbidden.
+  - Input: `{ userId: uuid, includeManagementPanel?: boolean }`
+  - Default returns `ADMIN + CMD`. With `includeManagementPanel: true` returns `CMD, ADMIN, GM, CGM, DGM, AGM`.
+  - Output: `{ total, byRole, users: [{ id, name, email, phone, role, circle, zone, persNo, designation, isActive, createdAt }] }`, sorted by role then name.
+- UI: app/admin.tsx renders a "Privileged Users" section visible only when `isAdminRole(role)` is true. Has Show/Hide toggle, two filter chips (Admins-only / All management roles), summary line with per-role counts, role badges, contact rows, and Refresh.
+- Note: backend reports/analytics "see-all" bypass is currently keyed on `role === 'ADMIN'` only (CMD is NOT included in that bypass). Worth revisiting if CMD should also see all-circle reports.
+
 ## Deployment
 Configured for autoscale deployment:
 - Build: Exports web version using Expo

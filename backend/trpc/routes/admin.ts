@@ -7,6 +7,51 @@ import bcrypt from "bcryptjs";
 const SALT_ROUNDS = 10;
 
 export const adminRouter = createTRPCRouter({
+  listPrivilegedUsers: publicProcedure
+    .input(z.object({
+      userId: z.string().uuid(),
+      includeManagementPanel: z.boolean().optional().default(false),
+    }))
+    .query(async ({ input }) => {
+      const caller = await db.select({ role: employees.role })
+        .from(employees)
+        .where(eq(employees.id, input.userId))
+        .limit(1);
+
+      if (!caller[0] || (caller[0].role !== 'ADMIN' && caller[0].role !== 'CMD')) {
+        throw new Error('Forbidden: only ADMIN or CMD users can view the privileged users list.');
+      }
+
+      const targetRoles = input.includeManagementPanel
+        ? ['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM']
+        : ['ADMIN', 'CMD'];
+
+      const rows = await db
+        .select({
+          id: employees.id,
+          name: employees.name,
+          email: employees.email,
+          phone: employees.phone,
+          role: employees.role,
+          circle: employees.circle,
+          zone: employees.zone,
+          persNo: employees.persNo,
+          designation: employees.designation,
+          isActive: employees.isActive,
+          createdAt: employees.createdAt,
+        })
+        .from(employees)
+        .where(inArray(employees.role, targetRoles as any))
+        .orderBy(employees.role, employees.name);
+
+      const byRole: Record<string, number> = {};
+      for (const r of rows) {
+        byRole[r.role] = (byRole[r.role] || 0) + 1;
+      }
+
+      return { total: rows.length, byRole, users: rows };
+    }),
+
   importEmployeeMaster: publicProcedure
     .input(z.object({
       data: z.array(z.object({

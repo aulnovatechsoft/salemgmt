@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, RefreshControl, Platform, Modal, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { Upload, Users, Search, Trash2, Link, ChevronLeft, ChevronRight, FileText, CheckCircle, XCircle, BarChart3, Calendar, UserPlus, X } from 'lucide-react-native';
+import { Upload, Users, Search, Trash2, Link, ChevronLeft, ChevronRight, FileText, CheckCircle, XCircle, BarChart3, Calendar, UserPlus, X, ShieldCheck, Mail, Phone } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
@@ -31,6 +31,9 @@ export default function AdminScreen() {
   
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 100;
+
+  const [showPrivilegedSection, setShowPrivilegedSection] = useState(false);
+  const [includeManagement, setIncludeManagement] = useState(false);
   
   const trpcUtils = trpc.useUtils();
   
@@ -39,6 +42,11 @@ export default function AdminScreen() {
   const { data: circlesWithCount } = trpc.admin.getCirclesWithUnlinkedCount.useQuery(undefined, {
     enabled: showBulkActivateModal,
   });
+  const { data: privilegedUsers, isLoading: privilegedLoading, refetch: refetchPrivileged } = trpc.admin.listPrivilegedUsers.useQuery(
+    { userId: employee?.id ?? '', includeManagementPanel: includeManagement },
+    { enabled: !!employee?.id && isAdminRole(employee?.role || 'SALES_STAFF') && showPrivilegedSection }
+  );
+
   const { data: employeeList, isLoading, refetch } = trpc.admin.getEmployeeMasterList.useQuery({
     linked: filterLinked,
     limit: ITEMS_PER_PAGE,
@@ -648,6 +656,100 @@ export default function AdminScreen() {
           </View>
         )}
 
+        {isSystemAdmin && (
+          <View style={styles.statsSection}>
+            <View style={styles.privHeaderRow}>
+              <View style={styles.privHeaderTitle}>
+                <ShieldCheck size={20} color={Colors.light.primary} />
+                <Text style={styles.sectionTitle}>Privileged Users</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.privToggleBtn}
+                onPress={() => setShowPrivilegedSection((v) => !v)}
+              >
+                <Text style={styles.privToggleText}>{showPrivilegedSection ? 'Hide' : 'Show'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            {showPrivilegedSection && (
+              <>
+                <View style={styles.privFilterRow}>
+                  <TouchableOpacity
+                    style={[styles.privChip, !includeManagement && styles.privChipActive]}
+                    onPress={() => setIncludeManagement(false)}
+                  >
+                    <Text style={[styles.privChipText, !includeManagement && styles.privChipTextActive]}>
+                      Admins only (ADMIN, CMD)
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.privChip, includeManagement && styles.privChipActive]}
+                    onPress={() => setIncludeManagement(true)}
+                  >
+                    <Text style={[styles.privChipText, includeManagement && styles.privChipTextActive]}>
+                      All management roles
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {privilegedLoading ? (
+                  <View style={styles.privLoading}>
+                    <ActivityIndicator color={Colors.light.primary} />
+                    <Text style={styles.privLoadingText}>Loading users…</Text>
+                  </View>
+                ) : (
+                  <>
+                    <Text style={styles.privSummary}>
+                      Total: {privilegedUsers?.total ?? 0}
+                      {privilegedUsers?.byRole
+                        ? '  •  ' + Object.entries(privilegedUsers.byRole).map(([r, n]) => `${r}: ${n}`).join(', ')
+                        : ''}
+                    </Text>
+
+                    {(privilegedUsers?.users ?? []).length === 0 ? (
+                      <Text style={styles.privEmpty}>No users found for this filter.</Text>
+                    ) : (
+                      privilegedUsers!.users.map((u) => (
+                        <View key={u.id} style={styles.privCard}>
+                          <View style={styles.privCardHeader}>
+                            <Text style={styles.privName}>{u.name}</Text>
+                            <View style={[styles.roleBadge, u.role === 'CMD' || u.role === 'ADMIN' ? styles.roleBadgeAdmin : styles.roleBadgeMgmt]}>
+                              <Text style={styles.roleBadgeText}>{u.role}</Text>
+                            </View>
+                          </View>
+                          <Text style={styles.privDesig}>
+                            {u.designation}{u.persNo ? `  •  PersNo ${u.persNo}` : ''}
+                          </Text>
+                          <Text style={styles.privDesig}>
+                            {u.circle}{u.zone ? ` • ${u.zone}` : ''}
+                            {u.isActive ? '' : '  •  INACTIVE'}
+                          </Text>
+                          {!!u.email && (
+                            <View style={styles.privContactRow}>
+                              <Mail size={14} color={Colors.light.textSecondary} />
+                              <Text style={styles.privContactText}>{u.email}</Text>
+                            </View>
+                          )}
+                          {!!u.phone && (
+                            <View style={styles.privContactRow}>
+                              <Phone size={14} color={Colors.light.textSecondary} />
+                              <Text style={styles.privContactText}>{u.phone}</Text>
+                            </View>
+                          )}
+                        </View>
+                      ))
+                    )}
+
+                    <TouchableOpacity style={styles.privRefreshBtn} onPress={() => refetchPrivileged()}>
+                      <Text style={styles.privRefreshText}>Refresh</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </>
+            )}
+          </View>
+        )}
+
         {/* Tasks Management Section */}
         <View style={styles.statsSection}>
           <Text style={styles.sectionTitle}>Tasks Statistics</Text>
@@ -1029,6 +1131,140 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.light.textSecondary,
     marginTop: 4,
+  },
+  privHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  privHeaderTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  privToggleBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: Colors.light.primary,
+  },
+  privToggleText: {
+    color: Colors.light.background,
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  privFilterRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+    flexWrap: 'wrap',
+  },
+  privChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.light.primary,
+    backgroundColor: '#fff',
+  },
+  privChipActive: {
+    backgroundColor: Colors.light.primary,
+  },
+  privChipText: {
+    color: Colors.light.primary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  privChipTextActive: {
+    color: Colors.light.background,
+  },
+  privLoading: {
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  privLoadingText: {
+    color: Colors.light.textSecondary,
+  },
+  privSummary: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+    marginBottom: 12,
+  },
+  privEmpty: {
+    padding: 16,
+    textAlign: 'center',
+    color: Colors.light.textSecondary,
+    fontStyle: 'italic',
+  },
+  privCard: {
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: '#F8F9FB',
+    marginBottom: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.light.primary,
+  },
+  privCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  privName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.light.text,
+    flex: 1,
+    marginRight: 8,
+  },
+  roleBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  roleBadgeAdmin: {
+    backgroundColor: Colors.light.primary,
+  },
+  roleBadgeMgmt: {
+    backgroundColor: Colors.light.textSecondary,
+  },
+  roleBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+  },
+  privDesig: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginTop: 2,
+  },
+  privContactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+  },
+  privContactText: {
+    fontSize: 12,
+    color: Colors.light.text,
+  },
+  privRefreshBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.light.primary,
+  },
+  privRefreshText: {
+    color: Colors.light.primary,
+    fontWeight: '600',
+    fontSize: 12,
   },
   actionsSection: {
     flexDirection: 'row',
