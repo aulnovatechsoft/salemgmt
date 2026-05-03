@@ -375,6 +375,19 @@ All preset ranges are computed in `utils/timePeriod.ts` using India-local calend
 - UI: app/admin.tsx renders a "Privileged Users" section visible only when `isAdminRole(role)` is true. Has Show/Hide toggle, two filter chips (Admins-only / All management roles), summary line with per-role counts, role badges, contact rows, and Refresh.
 - Backend reports/analytics "see-all" bypass: `isAdmin = role === 'ADMIN' || role === 'CMD'` in all 8 sales.ts endpoints (getDashboardStats, getSalesAnalytics, getTeamPerformance, getSalesTrends, getOperationsAnalytics, getFinanceAnalytics, plus the two underlying scope-resolution helpers). CMD now bypasses circle/persNo scope filters and sees all-India data, matching the role's top-of-hierarchy position.
 
+## CMD Executive Tasks Console (`/cmd-tasks`)
+3-tier executive view of national task health for CMD/ADMIN. Linked from dashboard "Executive View" action button (visible only when `isAdminRole(role)`).
+- **Backend** (events.ts, all role-gated to CMD/ADMIN, throw Forbidden otherwise):
+  - `events.getNationalTaskKPIs({ userId, startDate, endDate })` → `{ active, overdue, atRisk, completedInPeriod, escalated }`. Active = status IN ('active','paused'); overdue adds `end_date < NOW()`; atRisk adds `end_date BETWEEN NOW() AND NOW()+48h`; completedInPeriod = `status='completed' AND updated_at` in IST [start,end]; escalated = open issues with `escalated_to IS NOT NULL`. Five `db.execute` queries via `Promise.all`.
+  - `events.getCircleHealthGrid({ userId, startDate, endDate })` → `{ grid: [{ circle, active, overdue, atRisk, completedInPeriod, escalatedOpen, overduePct, health }], totalCircles }`. Two aggregations (events-by-circle FILTER counts; issues-by-circle escalation counts). Merged with the canonical 26-entry `circleEnum` so green circles still appear with zeros; any rogue circle strings are appended sorted. Health rule: red if `overduePct ≥ 15` OR `escalatedOpen > 0`; amber if `overduePct ≥ 5` OR `atRisk > 0`; else green. Sorted red→amber→green, then by overdue desc, then alphabetically.
+  - `events.getCmdAttentionList({ userId, limit≤100 })` → `{ overdue, escalated, totalOverdue, totalEscalated }`. Overdue = active events past `end_date`, joined with `assignedTo` employee for name/role/designation. Escalated = OPEN/IN_PROGRESS issues with `escalated_to ∈ {CMD,ADMIN,GM,CGM}`, joined with raiser + escalatee + event. Each row carries `daysOverdue`/`daysOpen` computed via `EXTRACT(DAY FROM (NOW() - <ts>))`.
+- **Frontend** (`app/cmd-tasks.tsx`):
+  - Tier 1: 5-tile KPI strip (Active/Overdue/At Risk/Completed/Escalated) with the overdue tile visually highlighted (border + shadow).
+  - Tier 2: Circle health grid (cards 220px on web / 2-up on mobile) — color = health, shows active/overdue/atRisk, % late, and an escalation flag badge. Tap → `/(tabs)/events?circle=<NAME>`.
+  - Tier 3: "Needs Your Attention" — escalations group first (purple rule), then overdue group (red rule). Empty state shows green checkmark when both lists are empty. Each row taps to `/event-detail?id=<eventId>`.
+  - Header period chip uses the existing `TimePeriodPicker` component (`{value, onChange}` API). Default period = MTD. Pull-to-refresh refetches all three queries in parallel.
+  - Hard-blocks non-admin/non-CMD users with a Restricted screen (queries `enabled` flag is also gated, so no unauthorized requests fire).
+
 ## Deployment
 Configured for autoscale deployment:
 - Build: Exports web version using Expo

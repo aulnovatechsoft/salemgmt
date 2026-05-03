@@ -1,10 +1,31 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { eq, and, desc, gte, lte, sql, or, inArray, isNotNull } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure, authedProcedure } from "../create-context";
 
 const GEO_FENCE_KM = Number(process.env.GEO_FENCE_KM ?? '50');
 const GEO_FENCE_HARD_MULT = 3;
 const GEO_FENCE_ENFORCE = (process.env.GEO_FENCE_ENFORCE ?? 'soft').toLowerCase();
+
+function isValidYmd(s: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return false;
+  const y = Number(m[1]); const mo = Number(m[2]); const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
+
+async function assertCmdOrAdmin(employeeId: string): Promise<void> {
+  const caller = await db.select({ role: employees.role })
+    .from(employees).where(eq(employees.id, employeeId)).limit(1);
+  if (!caller[0]) {
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Caller not found.' });
+  }
+  if (caller[0].role !== 'CMD' && caller[0].role !== 'ADMIN') {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Only CMD or ADMIN may access this resource.' });
+  }
+}
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const toRad = (d: number) => (d * Math.PI) / 180;
@@ -40,7 +61,7 @@ function distributeFairly(total: number, count: number): number[] {
   for (let i = 0; i < count; i++) out[i] = i < remainder ? base + 1 : base;
   return out;
 }
-import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations, financeCollectionEntries, notifications, maintenanceEntries, simSaleLines, ftthSaleLines, lcSaleLines, ebSaleLines } from "@/backend/db";
+import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations, financeCollectionEntries, notifications, maintenanceEntries, simSaleLines, ftthSaleLines, lcSaleLines, ebSaleLines, issues } from "@/backend/db";
 import { 
   notifyEventAssignment, 
   notifyTaskSubmitted, 
@@ -5229,6 +5250,206 @@ export const eventsRouter = createTRPCRouter({
       return {
         totalSimsActivated: Number(result[0]?.totalSimsActivated || 0),
         totalFtthActivated: Number(result[0]?.totalFtthActivated || 0),
+      };
+    }),
+
+  getNationalTaskKPIs: authedProcedure
+    .input(z.object({
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isValidYmd, 'Invalid startDate'),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isValidYmd, 'Invalid endDate'),
+    }).refine((v) => v.startDate <= v.endDate, { message: 'startDate must be <= endDate' }))
+    .query(async ({ input, ctx }) => {
+      await assertCmdOrAdmin(ctx.employeeId);
+      const startTs = `${input.startDate}T00:00:00+05:30`;
+      const endTs = `${input.endDate}T23:59:59.999+05:30`;
+
+      const [activeRow, overdueRow, atRiskRow, completedRow, escalatedRow] = await Promise.all([
+        db.execute(sql`SELECT COUNT(*)::int AS n FROM events WHERE status IN ('active','paused')`),
+        db.execute(sql`SELECT COUNT(*)::int AS n FROM events WHERE status IN ('active','paused') AND end_date < NOW()`),
+        db.execute(sql`SELECT COUNT(*)::int AS n FROM events WHERE status IN ('active','paused') AND end_date >= NOW() AND end_date <= NOW() + INTERVAL '48 hours'`),
+        db.execute(sql`SELECT COUNT(*)::int AS n FROM events WHERE status = 'completed' AND updated_at >= ${startTs}::timestamptz AND updated_at <= ${endTs}::timestamptz`),
+        db.execute(sql`SELECT COUNT(*)::int AS n FROM issues WHERE status IN ('OPEN','IN_PROGRESS') AND escalated_to IS NOT NULL`),
+      ]);
+
+      const num = (r: unknown) => Number((r as unknown as { n?: number | string }[])[0]?.n ?? 0);
+      return {
+        active: num(activeRow),
+        overdue: num(overdueRow),
+        atRisk: num(atRiskRow),
+        completedInPeriod: num(completedRow),
+        escalated: num(escalatedRow),
+      };
+    }),
+
+  getCircleHealthGrid: authedProcedure
+    .input(z.object({
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isValidYmd, 'Invalid startDate'),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isValidYmd, 'Invalid endDate'),
+    }).refine((v) => v.startDate <= v.endDate, { message: 'startDate must be <= endDate' }))
+    .query(async ({ input, ctx }) => {
+      await assertCmdOrAdmin(ctx.employeeId);
+      const startTs = `${input.startDate}T00:00:00+05:30`;
+      const endTs = `${input.endDate}T23:59:59.999+05:30`;
+
+      const [eventsAgg, escalatedAgg] = await Promise.all([
+        db.execute(sql`
+          SELECT
+            circle,
+            COUNT(*) FILTER (WHERE status IN ('active','paused'))::int AS active,
+            COUNT(*) FILTER (WHERE status IN ('active','paused') AND end_date < NOW())::int AS overdue,
+            COUNT(*) FILTER (WHERE status IN ('active','paused') AND end_date >= NOW() AND end_date <= NOW() + INTERVAL '48 hours')::int AS at_risk,
+            COUNT(*) FILTER (WHERE status = 'completed' AND updated_at >= ${startTs}::timestamptz AND updated_at <= ${endTs}::timestamptz)::int AS completed_in_period
+          FROM events
+          WHERE circle IS NOT NULL AND circle <> ''
+          GROUP BY circle
+        `),
+        db.execute(sql`
+          SELECT e.circle, COUNT(DISTINCT i.id)::int AS escalated_open
+          FROM issues i
+          JOIN events e ON e.id = i.event_id
+          WHERE i.status IN ('OPEN','IN_PROGRESS') AND i.escalated_to IS NOT NULL
+            AND e.circle IS NOT NULL AND e.circle <> ''
+          GROUP BY e.circle
+        `),
+      ]);
+
+      const escMap = new Map<string, number>();
+      for (const r of escalatedAgg as unknown as { circle: string; escalated_open: number | string }[]) {
+        escMap.set(r.circle, Number(r.escalated_open || 0));
+      }
+
+      const ALL_CIRCLES = [
+        'ANDAMAN_NICOBAR','ANDHRA_PRADESH','ASSAM','BIHAR','CHHATTISGARH',
+        'DELHI','GUJARAT','HARYANA','HIMACHAL_PRADESH','JAMMU_KASHMIR','JHARKHAND',
+        'KARNATAKA','KERALA','MADHYA_PRADESH','MAHARASHTRA','NORTH_EAST_I',
+        'NORTH_EAST_II','ODISHA','PUNJAB','RAJASTHAN','TAMIL_NADU',
+        'TELANGANA','UTTARAKHAND','UTTAR_PRADESH_EAST','UTTAR_PRADESH_WEST','WEST_BENGAL',
+      ];
+
+      const dataMap = new Map<string, { active: number; overdue: number; atRisk: number; completedInPeriod: number }>();
+      for (const r of eventsAgg as unknown as { circle: string; active: number | string; overdue: number | string; at_risk: number | string; completed_in_period: number | string }[]) {
+        dataMap.set(r.circle, {
+          active: Number(r.active || 0),
+          overdue: Number(r.overdue || 0),
+          atRisk: Number(r.at_risk || 0),
+          completedInPeriod: Number(r.completed_in_period || 0),
+        });
+      }
+
+      const knownSet = new Set(ALL_CIRCLES);
+      const extras = new Set<string>();
+      for (const c of dataMap.keys()) if (!knownSet.has(c)) extras.add(c);
+      for (const c of escMap.keys()) if (!knownSet.has(c)) extras.add(c);
+
+      const allCircleList = [...ALL_CIRCLES, ...Array.from(extras).sort()];
+
+      const grid = allCircleList.map((circle) => {
+        const d = dataMap.get(circle) || { active: 0, overdue: 0, atRisk: 0, completedInPeriod: 0 };
+        const escalatedOpen = escMap.get(circle) || 0;
+        const overduePct = d.active > 0 ? (d.overdue / d.active) * 100 : 0;
+        let health: 'green' | 'amber' | 'red' = 'green';
+        if (overduePct >= 15 || escalatedOpen > 0) {
+          health = 'red';
+        } else if (overduePct >= 5 || d.atRisk > 0) {
+          health = 'amber';
+        }
+        return {
+          circle,
+          active: d.active,
+          overdue: d.overdue,
+          atRisk: d.atRisk,
+          completedInPeriod: d.completedInPeriod,
+          escalatedOpen,
+          overduePct: Math.round(overduePct * 10) / 10,
+          health,
+        };
+      });
+
+      const order: Record<'red' | 'amber' | 'green', number> = { red: 0, amber: 1, green: 2 };
+      grid.sort((a, b) => {
+        if (order[a.health] !== order[b.health]) return order[a.health] - order[b.health];
+        if (b.overdue !== a.overdue) return b.overdue - a.overdue;
+        return a.circle.localeCompare(b.circle);
+      });
+
+      return { grid, totalCircles: grid.length };
+    }),
+
+  getCmdAttentionList: authedProcedure
+    .input(z.object({
+      limit: z.number().int().min(1).max(100).default(25),
+    }))
+    .query(async ({ input, ctx }) => {
+      await assertCmdOrAdmin(ctx.employeeId);
+
+      const [overdueRows, escalatedRows] = await Promise.all([
+        db.execute(sql`
+          SELECT
+            e.id, e.name, e.circle, e.zone, e.end_date, e.task_category, e.assigned_to,
+            EXTRACT(DAY FROM (NOW() - e.end_date))::int AS days_overdue,
+            a.name AS assignee_name, a.designation AS assignee_designation, a.role AS assignee_role
+          FROM events e
+          LEFT JOIN employees a ON a.id = e.assigned_to
+          WHERE e.status IN ('active','paused') AND e.end_date < NOW()
+          ORDER BY e.end_date ASC
+          LIMIT ${input.limit}
+        `),
+        db.execute(sql`
+          SELECT
+            i.id AS issue_id, i.type, i.description, i.status AS issue_status, i.created_at,
+            i.escalated_to, i.event_id,
+            e.name AS event_name, e.circle, e.zone,
+            escalator.name AS escalator_name, escalator.role AS escalator_role,
+            escalatee.name AS escalatee_name, escalatee.role AS escalatee_role,
+            EXTRACT(DAY FROM (NOW() - i.created_at))::int AS days_open
+          FROM issues i
+          JOIN events e ON e.id = i.event_id
+          LEFT JOIN employees escalator ON escalator.id = i.raised_by
+          LEFT JOIN employees escalatee ON escalatee.id = i.escalated_to
+          WHERE i.status IN ('OPEN','IN_PROGRESS')
+            AND i.escalated_to IS NOT NULL
+            AND escalatee.role IN ('CMD','ADMIN','GM','CGM')
+          ORDER BY i.created_at ASC
+          LIMIT ${input.limit}
+        `),
+      ]);
+
+      const overdue = (overdueRows as unknown as Record<string, unknown>[]).map((r) => ({
+        kind: 'overdue' as const,
+        eventId: String(r.id),
+        title: String(r.name),
+        circle: String(r.circle ?? ''),
+        zone: String(r.zone ?? ''),
+        taskCategory: String(r.task_category ?? 'S&M'),
+        endDate: r.end_date ? new Date(r.end_date as string | number | Date).toISOString() : null,
+        daysOverdue: Math.max(0, Number(r.days_overdue ?? 0)),
+        assigneeName: r.assignee_name ? String(r.assignee_name) : null,
+        assigneeRole: r.assignee_role ? String(r.assignee_role) : null,
+        assigneeDesignation: r.assignee_designation ? String(r.assignee_designation) : null,
+      }));
+
+      const escalated = (escalatedRows as unknown as Record<string, unknown>[]).map((r) => ({
+        kind: 'escalated' as const,
+        issueId: String(r.issue_id),
+        eventId: String(r.event_id),
+        title: String(r.event_name),
+        circle: String(r.circle ?? ''),
+        zone: String(r.zone ?? ''),
+        issueType: String(r.type),
+        issueStatus: String(r.issue_status),
+        description: String(r.description ?? ''),
+        daysOpen: Math.max(0, Number(r.days_open ?? 0)),
+        escalatorName: r.escalator_name ? String(r.escalator_name) : null,
+        escalatorRole: r.escalator_role ? String(r.escalator_role) : null,
+        escalateeName: r.escalatee_name ? String(r.escalatee_name) : null,
+        escalateeRole: r.escalatee_role ? String(r.escalatee_role) : null,
+      }));
+
+      return {
+        overdue,
+        escalated,
+        totalOverdue: overdue.length,
+        totalEscalated: escalated.length,
       };
     }),
 });

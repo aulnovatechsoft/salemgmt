@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, Modal, FlatList, ActivityIndicator } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, ChevronDown, Clock, CalendarCheck, AlertTriangle, IndianRupee, X, Hourglass, CircleCheck, CircleDot, Send, RotateCcw, Award, DollarSign, Server, Wifi, MapPin, RefreshCw, ClipboardList } from 'lucide-react-native';
+import { TrendingUp, Calendar, Users, Target, Package, AlertCircle, Settings, ChevronRight, ChevronDown, Clock, CalendarCheck, AlertTriangle, IndianRupee, X, Hourglass, CircleCheck, CircleDot, Send, RotateCcw, Award, DollarSign, Server, Wifi, MapPin, RefreshCw, ClipboardList, Activity } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import Colors from '@/constants/colors';
@@ -599,6 +599,13 @@ export default function DashboardScreen() {
                 label={isAdminRole(employee?.role || 'SALES_STAFF') ? 'Admin Panel' : 'Employee Directory'} 
                 icon={<Settings size={24} color={Colors.light.background} />} 
                 onPress={() => router.push('/admin')}
+              />
+            )}
+            {isAdminRole(employee?.role || 'SALES_STAFF') && (
+              <ActionButton 
+                label="Executive View" 
+                icon={<Activity size={24} color={Colors.light.background} />} 
+                onPress={() => router.push('/cmd-tasks' as never)}
               />
             )}
           </View>
