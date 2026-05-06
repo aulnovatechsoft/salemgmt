@@ -9,7 +9,7 @@ import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
 import { GeoTaggedPhoto } from '@/types';
 import { uploadPhotos } from '@/lib/photoUpload';
-import { captureLocation, isNullIsland } from '@/lib/captureLocation';
+import { captureLocation, isNullIsland, isGpsTestMode, TEST_LOCATION_LABEL } from '@/lib/captureLocation';
 
 type OmTaskType = 'BTS_DOWN' | 'FTTH_DOWN' | 'ROUTE_FAIL' | 'OFC_FAIL';
 
@@ -348,6 +348,12 @@ export default function SubmitMaintenanceScreen() {
               <Text style={styles.locationCoords}>
                 Lat: {parseFloat(currentLocation.latitude).toFixed(6)}, Long: {parseFloat(currentLocation.longitude).toFixed(6)}
               </Text>
+            )}
+            {Platform.OS === 'web' && isGpsTestMode() && (
+              <View style={{ marginTop: 8, padding: 10, backgroundColor: '#FEF3C7', borderColor: '#F59E0B', borderWidth: 1, borderRadius: 6 }}>
+                <Text style={{ color: '#92400E', fontWeight: '700', fontSize: 12 }}>⚠️ TEST MODE — GPS is mocked</Text>
+                <Text style={{ color: '#92400E', fontSize: 11, marginTop: 2 }}>Using {TEST_LOCATION_LABEL} (28.6259, 77.2088). Disable EXPO_PUBLIC_GPS_TEST_MODE for production.</Text>
+              </View>
             )}
           </View>
 

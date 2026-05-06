@@ -7,7 +7,8 @@ import { useAuth } from '@/contexts/auth';
 import { trpc } from '@/lib/trpc';
 import Colors from '@/constants/colors';
 import { uploadPhotos } from '@/lib/photoUpload';
-import { captureLocation } from '@/lib/captureLocation';
+import { Platform } from 'react-native';
+import { captureLocation, isGpsTestMode, TEST_LOCATION_LABEL } from '@/lib/captureLocation';
 
 const FINANCE_TYPES = [
   { id: 'FIN_LC', label: 'LC Outstanding', targetField: 'targetFinLc', collectedField: 'finLcCollected' },
@@ -424,6 +425,12 @@ export default function SubmitFinanceScreen() {
               <Text style={styles.locationText}>
                 Lat: {location.latitude.toFixed(6)}, Long: {location.longitude.toFixed(6)}
               </Text>
+            )}
+            {Platform.OS === 'web' && isGpsTestMode() && (
+              <View style={{ marginTop: 8, padding: 10, backgroundColor: '#FEF3C7', borderColor: '#F59E0B', borderWidth: 1, borderRadius: 6 }}>
+                <Text style={{ color: '#92400E', fontWeight: '700', fontSize: 12 }}>⚠️ TEST MODE — GPS is mocked</Text>
+                <Text style={{ color: '#92400E', fontSize: 11, marginTop: 2 }}>Using {TEST_LOCATION_LABEL} (28.6259, 77.2088). Disable EXPO_PUBLIC_GPS_TEST_MODE for production.</Text>
+              </View>
             )}
           </View>
 

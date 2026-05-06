@@ -21,8 +21,35 @@ import { Platform } from 'react-native';
 import * as Location from 'expo-location';
 
 export type CaptureResult =
-  | { ok: true; latitude: number; longitude: number; capturedAt: number }
+  | { ok: true; latitude: number; longitude: number; capturedAt: number; isTestLocation?: boolean }
   | { ok: false; reason: CaptureFailureReason; title: string; message: string };
+
+// === TEST MODE =============================================================
+// Gated by EXPO_PUBLIC_GPS_TEST_MODE. When set to "1" / "true" / "on", web
+// captures bypass navigator.geolocation entirely and return a known-good
+// Indian coordinate so the QA team can exercise the full submission flow
+// without HTTPS / real GPS hardware.
+//
+// IMPORTANT: This MUST stay disabled in production builds. The
+// EXPO_PUBLIC_ prefix means the value is baked into the JS bundle at
+// build time, so the production deploy must build with the variable
+// unset (or set to "0"). The CaptureResult carries `isTestLocation:true`
+// so screens can render an unmissable "TEST MODE" banner — the helper
+// will never silently inject test coords without the UI knowing.
+//
+// Coordinates: Bharat Sanchar Bhawan (BSNL Corporate HQ), Janpath, New Delhi.
+const TEST_LOCATION = { latitude: 28.6259, longitude: 77.2088 } as const;
+export const TEST_LOCATION_LABEL = 'Bharat Sanchar Bhawan, New Delhi';
+
+export function isGpsTestMode(): boolean {
+  // Read from process.env via the EXPO_PUBLIC_ convention. Safe in both
+  // Node (server) and the bundled web/native runtimes — Metro inlines
+  // EXPO_PUBLIC_* values at build time.
+  const raw = (typeof process !== 'undefined' ? process.env?.EXPO_PUBLIC_GPS_TEST_MODE : undefined) ?? '';
+  const v = String(raw).toLowerCase().trim();
+  return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+}
+// ===========================================================================
 
 export type CaptureFailureReason =
   | 'INSECURE_ORIGIN'
@@ -82,6 +109,19 @@ const NULL_ISLAND_RESULT: CaptureResult = {
 };
 
 export async function captureLocation(opts: CaptureOptions = {}): Promise<CaptureResult> {
+  // Test-mode short-circuit (web only — native devices have real GPS).
+  // Simulates a brief acquisition delay so loading states behave naturally.
+  if (Platform.OS === 'web' && isGpsTestMode()) {
+    await new Promise((r) => setTimeout(r, 300));
+    return {
+      ok: true,
+      latitude: TEST_LOCATION.latitude,
+      longitude: TEST_LOCATION.longitude,
+      capturedAt: Date.now(),
+      isTestLocation: true,
+    };
+  }
+
   if (Platform.OS === 'web') {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
       return {

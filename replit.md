@@ -9,6 +9,7 @@ A mobile-first application for managing task assignments and tracking performanc
     - `BSNL_DATABASE_URL`: PostgreSQL connection string.
     - `GEO_FENCE_KM`: Soft geo-fence radius in km (default `50`).
     - `GEO_FENCE_ENFORCE`: `soft` (log + allow) or `hard` (reject).
+    - `EXPO_PUBLIC_GPS_TEST_MODE`: When `1`/`true`/`on`, web GPS capture returns Bharat Sanchar Bhawan (28.6259, 77.2088) instead of calling `navigator.geolocation`, and screens render an orange "TEST MODE" banner. Lets the QA team test web flows without HTTPS / real GPS. **MUST be unset (or `0`) for production builds** — the value is baked into the JS bundle at build time.
 
 ## Stack
 - **Frontend**: React Native, Expo SDK 54, React Native Web
