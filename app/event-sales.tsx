@@ -83,8 +83,14 @@ export default function EventSalesScreen() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const requestLocationPermission = async () => {
-    if (Platform.OS === 'web') return;
-    
+    // Both platforms eagerly try to capture on mount. On native this is
+    // gated by Expo's foreground-permission flow; on web `navigator.
+    // geolocation.getCurrentPosition` itself prompts the user, so we just
+    // call straight through.
+    if (Platform.OS === 'web') {
+      captureCurrentLocation();
+      return;
+    }
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status === 'granted') {
       captureCurrentLocation();
@@ -92,8 +98,47 @@ export default function EventSalesScreen() {
   };
 
   const captureCurrentLocation = async () => {
+    // PRODUCTION FIX — earlier this short-circuited on web with
+    // setCurrentLocation({lat:'0', lon:'0'}), which (a) silently lied to
+    // the user with a "Location Captured ✓" pill while populating Null
+    // Island and (b) caused every web sales submission to be hard-rejected
+    // by the backend geo-fence (~9000 km from any real BSNL circle anchor).
+    // We now use the browser's geolocation API on web so the captured GPS
+    // is the user's real position, and bubble a clear error message if
+    // the browser denies permission, fails, or times out — never silently
+    // fall back to bogus coordinates again.
     if (Platform.OS === 'web') {
-      setCurrentLocation({ latitude: '0', longitude: '0' });
+      if (typeof navigator === 'undefined' || !navigator.geolocation) {
+        Alert.alert('GPS not supported', 'This browser does not support location access. Please open the app on a device with GPS.');
+        return;
+      }
+      setIsCapturingLocation(true);
+      try {
+        const coords = await new Promise<GeolocationCoordinates>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => resolve(pos.coords),
+            (err) => reject(err),
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+          );
+        });
+        setCurrentLocation({
+          latitude: coords.latitude.toString(),
+          longitude: coords.longitude.toString(),
+        });
+        console.log('Location captured (web):', { lat: coords.latitude, lon: coords.longitude });
+      } catch (err: any) {
+        const code = err?.code;
+        const msg = code === 1
+          ? 'Location permission was denied. Enable it in your browser site settings (lock icon → Permissions → Location) and try again.'
+          : code === 2
+            ? 'Could not determine your location. Make sure GPS / Wi-Fi is on and try again outdoors.'
+            : code === 3
+              ? 'Getting your location took too long. Move to an area with better signal and try again.'
+              : 'Failed to capture GPS. Please try again.';
+        Alert.alert('GPS unavailable', msg);
+      } finally {
+        setIsCapturingLocation(false);
+      }
       return;
     }
 
@@ -109,6 +154,7 @@ export default function EventSalesScreen() {
       console.log('Location captured:', location.coords);
     } catch (error) {
       console.error('Error getting location:', error);
+      Alert.alert('GPS unavailable', 'Could not capture your GPS location. Please make sure location services are enabled and try again.');
     } finally {
       setIsCapturingLocation(false);
     }

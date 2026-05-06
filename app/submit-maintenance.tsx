@@ -83,7 +83,15 @@ export default function SubmitMaintenanceScreen() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const requestLocationPermission = async () => {
-    if (Platform.OS === 'web') return;
+    // See the parallel fix in app/event-sales.tsx — web previously
+    // hardcoded Null Island, causing every web maintenance submission to
+    // be hard-rejected by the geo-fence. Now we use navigator.geolocation
+    // on web (which itself prompts the user), so this auto-capture works
+    // identically across platforms.
+    if (Platform.OS === 'web') {
+      captureCurrentLocation();
+      return;
+    }
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status === 'granted') {
       captureCurrentLocation();
@@ -92,7 +100,36 @@ export default function SubmitMaintenanceScreen() {
 
   const captureCurrentLocation = async () => {
     if (Platform.OS === 'web') {
-      setCurrentLocation({ latitude: '0', longitude: '0' });
+      if (typeof navigator === 'undefined' || !navigator.geolocation) {
+        Alert.alert('GPS not supported', 'This browser does not support location access. Please open the app on a device with GPS.');
+        return;
+      }
+      setIsCapturingLocation(true);
+      try {
+        const coords = await new Promise<GeolocationCoordinates>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => resolve(pos.coords),
+            (err) => reject(err),
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+          );
+        });
+        setCurrentLocation({
+          latitude: coords.latitude.toString(),
+          longitude: coords.longitude.toString(),
+        });
+      } catch (err: any) {
+        const code = err?.code;
+        const msg = code === 1
+          ? 'Location permission was denied. Enable it in your browser site settings (lock icon → Permissions → Location) and try again.'
+          : code === 2
+            ? 'Could not determine your location. Make sure GPS / Wi-Fi is on and try again outdoors.'
+            : code === 3
+              ? 'Getting your location took too long. Move to an area with better signal and try again.'
+              : 'Failed to capture GPS. Please try again.';
+        Alert.alert('GPS unavailable', msg);
+      } finally {
+        setIsCapturingLocation(false);
+      }
       return;
     }
     setIsCapturingLocation(true);
