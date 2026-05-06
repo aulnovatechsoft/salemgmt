@@ -10,6 +10,7 @@ import { trpc } from '@/lib/trpc';
 import { CUSTOMER_TYPES } from '@/constants/app';
 import { GeoTaggedPhoto } from '@/types';
 import { uploadPhotos } from '@/lib/photoUpload';
+import { captureLocation, isNullIsland } from '@/lib/captureLocation';
 
 type LcLine = { circuitId: string; customerName: string; bandwidth: string };
 type EbLine = { connectionId: string; customerName: string; meterNumber: string };
@@ -82,81 +83,42 @@ export default function EventSalesScreen() {
     requestLocationPermission();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // GPS capture is centralised in lib/captureLocation.ts so all three
+  // submission screens (Sales, O&M, Finance) share one well-tested
+  // implementation that handles HTTPS-required errors, permission
+  // denials, and platform-specific quirks. It NEVER silently falls back
+  // to (0,0) — see the Gotchas section in replit.md for the production
+  // regression that motivated this contract.
   const requestLocationPermission = async () => {
-    // Both platforms eagerly try to capture on mount. On native this is
-    // gated by Expo's foreground-permission flow; on web `navigator.
-    // geolocation.getCurrentPosition` itself prompts the user, so we just
-    // call straight through.
-    if (Platform.OS === 'web') {
-      captureCurrentLocation();
-      return;
-    }
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status === 'granted') {
-      captureCurrentLocation();
+    // Auto-capture on mount runs in {onlyIfAlreadyGranted:true} mode so
+    // we don't pop the OS / browser permission prompt before the user
+    // has expressed intent. If they've already granted location for this
+    // origin (web) or app (native), we capture immediately; otherwise we
+    // stay silent and wait for them to tap the explicit Capture GPS
+    // button. This avoids the dark-pattern of preemptive permission
+    // requests on screen mount.
+    setIsCapturingLocation(true);
+    const result = await captureLocation({ onlyIfAlreadyGranted: true });
+    setIsCapturingLocation(false);
+    if (result.ok) {
+      setCurrentLocation({
+        latitude: result.latitude.toString(),
+        longitude: result.longitude.toString(),
+      });
     }
   };
 
   const captureCurrentLocation = async () => {
-    // PRODUCTION FIX — earlier this short-circuited on web with
-    // setCurrentLocation({lat:'0', lon:'0'}), which (a) silently lied to
-    // the user with a "Location Captured ✓" pill while populating Null
-    // Island and (b) caused every web sales submission to be hard-rejected
-    // by the backend geo-fence (~9000 km from any real BSNL circle anchor).
-    // We now use the browser's geolocation API on web so the captured GPS
-    // is the user's real position, and bubble a clear error message if
-    // the browser denies permission, fails, or times out — never silently
-    // fall back to bogus coordinates again.
-    if (Platform.OS === 'web') {
-      if (typeof navigator === 'undefined' || !navigator.geolocation) {
-        Alert.alert('GPS not supported', 'This browser does not support location access. Please open the app on a device with GPS.');
-        return;
-      }
-      setIsCapturingLocation(true);
-      try {
-        const coords = await new Promise<GeolocationCoordinates>((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(
-            (pos) => resolve(pos.coords),
-            (err) => reject(err),
-            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
-          );
-        });
-        setCurrentLocation({
-          latitude: coords.latitude.toString(),
-          longitude: coords.longitude.toString(),
-        });
-        console.log('Location captured (web):', { lat: coords.latitude, lon: coords.longitude });
-      } catch (err: any) {
-        const code = err?.code;
-        const msg = code === 1
-          ? 'Location permission was denied. Enable it in your browser site settings (lock icon → Permissions → Location) and try again.'
-          : code === 2
-            ? 'Could not determine your location. Make sure GPS / Wi-Fi is on and try again outdoors.'
-            : code === 3
-              ? 'Getting your location took too long. Move to an area with better signal and try again.'
-              : 'Failed to capture GPS. Please try again.';
-        Alert.alert('GPS unavailable', msg);
-      } finally {
-        setIsCapturingLocation(false);
-      }
-      return;
-    }
-
     setIsCapturingLocation(true);
-    try {
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
+    const result = await captureLocation();
+    setIsCapturingLocation(false);
+    if (result.ok) {
       setCurrentLocation({
-        latitude: location.coords.latitude.toString(),
-        longitude: location.coords.longitude.toString(),
+        latitude: result.latitude.toString(),
+        longitude: result.longitude.toString(),
       });
-      console.log('Location captured:', location.coords);
-    } catch (error) {
-      console.error('Error getting location:', error);
-      Alert.alert('GPS unavailable', 'Could not capture your GPS location. Please make sure location services are enabled and try again.');
-    } finally {
-      setIsCapturingLocation(false);
+    } else {
+      Alert.alert(result.title, result.message);
     }
   };
 
@@ -177,15 +139,25 @@ export default function EventSalesScreen() {
     if (!result.canceled && result.assets[0]) {
       let photoLocation = currentLocation;
       
+      // Native-only per-photo GPS refresh — gives a fresher geo-tag on
+      // the photo than the screen's currentLocation might be. NEVER
+      // accept (0,0): if the fresh read is Null Island (GPS not locked
+      // yet, mock, etc.) we discard it and keep the already-validated
+      // currentLocation. This preserves the helper's invariant that
+      // (0,0) cannot reach screen state or the backend submission.
       if (Platform.OS !== 'web') {
         try {
           const location = await Location.getCurrentPositionAsync({
             accuracy: Location.Accuracy.High,
           });
-          photoLocation = {
-            latitude: location.coords.latitude.toString(),
-            longitude: location.coords.longitude.toString(),
-          };
+          if (!isNullIsland(location.coords.latitude, location.coords.longitude)) {
+            photoLocation = {
+              latitude: location.coords.latitude.toString(),
+              longitude: location.coords.longitude.toString(),
+            };
+          } else {
+            console.warn('Per-photo GPS refresh returned (0,0); keeping prior location');
+          }
         } catch {
           console.log('Could not get location for photo');
         }

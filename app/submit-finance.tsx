@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
-import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Alert, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import * as Location from 'expo-location';
 import { Camera, MapPin, Trash2, ChevronDown, Check, IndianRupee, CreditCard, FileText } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { trpc } from '@/lib/trpc';
 import Colors from '@/constants/colors';
 import { uploadPhotos } from '@/lib/photoUpload';
+import { captureLocation } from '@/lib/captureLocation';
 
 const FINANCE_TYPES = [
   { id: 'FIN_LC', label: 'LC Outstanding', targetField: 'targetFinLc', collectedField: 'finLcCollected' },
@@ -118,23 +118,18 @@ export default function SubmitFinanceScreen() {
     setPhotos(photos.filter((_, i) => i !== index));
   };
 
+  // GPS capture delegated to the shared lib/captureLocation.ts helper.
+  // Earlier this screen blocked web users entirely with a "GPS location
+  // is not available on web" alert, which made web finance collections
+  // impossible. Now web works correctly via navigator.geolocation when
+  // served over HTTPS, with a clear actionable error otherwise.
   const getLocation = async () => {
-    if (Platform.OS === 'web') {
-      Alert.alert('Info', 'GPS location is not available on web');
-      return;
-    }
-
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Permission to access location is required!');
-        return;
-      }
-      const loc = await Location.getCurrentPositionAsync({});
-      setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+    const result = await captureLocation();
+    if (result.ok) {
+      setLocation({ latitude: result.latitude, longitude: result.longitude });
       Alert.alert('Success', 'Location captured successfully');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to get location');
+    } else {
+      Alert.alert(result.title, result.message);
     }
   };
 

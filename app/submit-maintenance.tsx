@@ -9,6 +9,7 @@ import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
 import { GeoTaggedPhoto } from '@/types';
 import { uploadPhotos } from '@/lib/photoUpload';
+import { captureLocation, isNullIsland } from '@/lib/captureLocation';
 
 type OmTaskType = 'BTS_DOWN' | 'FTTH_DOWN' | 'ROUTE_FAIL' | 'OFC_FAIL';
 
@@ -82,70 +83,36 @@ export default function SubmitMaintenanceScreen() {
     requestLocationPermission();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // GPS capture delegated to the shared lib/captureLocation.ts helper.
+  // It handles HTTPS-required errors, permission denials, and platform
+  // quirks uniformly. NEVER falls back to (0,0) — see Gotchas in
+  // replit.md for the production regression that motivated this contract.
   const requestLocationPermission = async () => {
-    // See the parallel fix in app/event-sales.tsx — web previously
-    // hardcoded Null Island, causing every web maintenance submission to
-    // be hard-rejected by the geo-fence. Now we use navigator.geolocation
-    // on web (which itself prompts the user), so this auto-capture works
-    // identically across platforms.
-    if (Platform.OS === 'web') {
-      captureCurrentLocation();
-      return;
-    }
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status === 'granted') {
-      captureCurrentLocation();
+    // Auto-capture on mount runs in {onlyIfAlreadyGranted:true} mode so
+    // we don't pop the permission prompt preemptively. See the matching
+    // comment in app/event-sales.tsx for the full rationale.
+    setIsCapturingLocation(true);
+    const result = await captureLocation({ onlyIfAlreadyGranted: true });
+    setIsCapturingLocation(false);
+    if (result.ok) {
+      setCurrentLocation({
+        latitude: result.latitude.toString(),
+        longitude: result.longitude.toString(),
+      });
     }
   };
 
   const captureCurrentLocation = async () => {
-    if (Platform.OS === 'web') {
-      if (typeof navigator === 'undefined' || !navigator.geolocation) {
-        Alert.alert('GPS not supported', 'This browser does not support location access. Please open the app on a device with GPS.');
-        return;
-      }
-      setIsCapturingLocation(true);
-      try {
-        const coords = await new Promise<GeolocationCoordinates>((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(
-            (pos) => resolve(pos.coords),
-            (err) => reject(err),
-            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
-          );
-        });
-        setCurrentLocation({
-          latitude: coords.latitude.toString(),
-          longitude: coords.longitude.toString(),
-        });
-      } catch (err: any) {
-        const code = err?.code;
-        const msg = code === 1
-          ? 'Location permission was denied. Enable it in your browser site settings (lock icon → Permissions → Location) and try again.'
-          : code === 2
-            ? 'Could not determine your location. Make sure GPS / Wi-Fi is on and try again outdoors.'
-            : code === 3
-              ? 'Getting your location took too long. Move to an area with better signal and try again.'
-              : 'Failed to capture GPS. Please try again.';
-        Alert.alert('GPS unavailable', msg);
-      } finally {
-        setIsCapturingLocation(false);
-      }
-      return;
-    }
     setIsCapturingLocation(true);
-    try {
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
+    const result = await captureLocation();
+    setIsCapturingLocation(false);
+    if (result.ok) {
       setCurrentLocation({
-        latitude: location.coords.latitude.toString(),
-        longitude: location.coords.longitude.toString(),
+        latitude: result.latitude.toString(),
+        longitude: result.longitude.toString(),
       });
-    } catch (error) {
-      console.error('Error getting location:', error);
-      Alert.alert('GPS Error', 'Could not capture location. Please ensure GPS is on and try again.');
-    } finally {
-      setIsCapturingLocation(false);
+    } else {
+      Alert.alert(result.title, result.message);
     }
   };
 
@@ -162,15 +129,22 @@ export default function SubmitMaintenanceScreen() {
     });
     if (!result.canceled && result.assets[0]) {
       let photoLocation = currentLocation;
+      // Native-only per-photo GPS refresh — guarded by isNullIsland so
+      // a (0,0) reading can never overwrite the validated screen-level
+      // currentLocation (see app/event-sales.tsx for full rationale).
       if (Platform.OS !== 'web') {
         try {
           const location = await Location.getCurrentPositionAsync({
             accuracy: Location.Accuracy.High,
           });
-          photoLocation = {
-            latitude: location.coords.latitude.toString(),
-            longitude: location.coords.longitude.toString(),
-          };
+          if (!isNullIsland(location.coords.latitude, location.coords.longitude)) {
+            photoLocation = {
+              latitude: location.coords.latitude.toString(),
+              longitude: location.coords.longitude.toString(),
+            };
+          } else {
+            console.warn('Per-photo GPS refresh returned (0,0); keeping prior location');
+          }
         } catch {
           // fall back to current capture
         }

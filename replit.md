@@ -23,6 +23,7 @@ A mobile-first application for managing task assignments and tracking performanc
 - `backend/db/schema.ts`: Database schema definition.
 - `backend/trpc/routes/`: tRPC API route handlers.
 - `lib/photoUpload.ts`: Photo upload logic (enforces HTTPS).
+- `lib/captureLocation.ts`: Cross-platform GPS capture used by all submission screens (handles HTTPS-required errors, permission flows, code-mapped messages).
 - `backend/trpc/routes/events.ts`: Core event/task logic.
 - `backend/trpc/routes/sales.ts`: Sales and analytics reporting logic.
 - `components/TimePeriodPicker.tsx`: Time period selection component.
@@ -53,7 +54,7 @@ _Populate as you build_
 
 ## Gotchas
 - **Photo Uploads in Native Builds**: `EXPO_PUBLIC_API_BASE_URL` must be set to an HTTPS URL for native builds; local development works with `localhost` over HTTP.
-- **GPS capture on web**: Submission screens (`app/event-sales.tsx`, `app/submit-maintenance.tsx`) must call `navigator.geolocation.getCurrentPosition` on web — never short-circuit to `{latitude:'0', longitude:'0'}`. An earlier shortcut did exactly that and silently lied to the user with a "Location Captured ✓" pill while populating Null Island, causing every web submission to be hard-rejected by the backend geo-fence (~9000 km from any real BSNL circle anchor). On any new submission screen, surface a clear error when the browser denies permission, fails, or times out — never fall back to bogus coordinates.
+- **GPS capture (all submission screens)**: For the screen-level location state (the value that gets sent to the backend on submit), ALWAYS go through `captureLocation()` in `lib/captureLocation.ts`. The helper centralises four production-critical guarantees: (1) HTTPS / secure-context detection (geolocation is silently blocked on `http://` origins by all modern browsers, returns generic PERMISSION_DENIED with misleading guidance); (2) error-code-to-actionable-message mapping; (3) preemptive-prompt avoidance — auto-capture on mount must pass `{ onlyIfAlreadyGranted: true }` so the OS/browser permission prompt only fires from an explicit user button press; (4) runtime Null Island guard — coordinates exactly at (0, 0) are rejected as `INVALID_COORDS` regardless of source, so a buggy browser/device/mock can never silently slip past the geo-fence. The original regression: an earlier `if (Platform.OS === 'web') setLocation({lat:'0', lon:'0'})` shortcut silently lied to users with a "Location Captured ✓" pill while every web submission was hard-rejected by the backend geo-fence (~9000 km from any real BSNL circle anchor). Note: it is acceptable for native photo-capture flows (`takePhoto` / `pickImage`) to call `Location.getCurrentPositionAsync` directly for a fresher per-photo geo-tag — that's a non-blocking refresh on top of an already-validated `currentLocation`, never a substitute for it.
 - **O&M Undo Gap**: Undoing O&M progress decrements the counter but doesn't delete `maintenance_entries` rows, leading to potential drift (P2 to address).
 - **Status Backdoor Closed**: Direct status changes via `events.update` are stripped; all status transitions must use `updateEventStatus` for proper state machine, auditing, and notifications.
 - **`GEO_FENCE_KM * GEO_FENCE_HARD_MULT`**: Submissions beyond this hard limit (default 150km) are always rejected.
