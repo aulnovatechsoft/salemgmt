@@ -301,10 +301,10 @@ export default function EventSalesScreen() {
       Alert.alert('Photo required', 'Please add at least one geo-tagged photo before submitting.');
       return;
     }
-    if (!currentLocation?.latitude || !currentLocation?.longitude) {
-      Alert.alert('GPS required', 'Please tap "Capture GPS Location" before submitting.');
-      return;
-    }
+   // if (!currentLocation?.latitude || !currentLocation?.longitude) {
+   //   Alert.alert('GPS required', 'Please tap "Capture GPS Location" before submitting.');
+  //    return;
+ //   }
 
     let uploadedPhotoResults: GeoTaggedPhoto[] | undefined;
 
