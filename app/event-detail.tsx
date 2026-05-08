@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert,
 import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
 import { MapPin, Calendar, Users, Plus, Trash2, Camera, User, X, Edit3, Play, Pause, CheckCircle, XCircle, ChevronRight, Clock, Flag, ListTodo, Zap, AlertCircle, Settings, Send, RotateCcw, CircleCheck, Hourglass, CircleDot, ThumbsUp, ThumbsDown, Check } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
+import { getDisplayTaskId } from '@/utils/taskId';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
 import { canCreateEvents } from '@/constants/app';
@@ -1360,7 +1361,12 @@ export default function EventDetailScreen() {
       >
         <View style={styles.header}>
           <View style={styles.headerTop}>
-            <Text style={styles.eventName}>{eventData.name}</Text>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={{ fontSize: 12, fontWeight: '700' as const, color: '#1565C0', letterSpacing: 0.5, marginBottom: 4 }}>
+                {getDisplayTaskId(eventData.id)}
+              </Text>
+              <Text style={styles.eventName}>{eventData.name}</Text>
+            </View>
             <TouchableOpacity 
               style={[styles.statusBadge, { backgroundColor: statusBg }]}
               onPress={() => {

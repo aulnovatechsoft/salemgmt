@@ -3,6 +3,7 @@ import { Stack, useRouter } from 'expo-router';
 import { Plus, Search, Calendar, MapPin, Users, Play, Pause, CheckCircle, XCircle, FileText, Edit3, ChevronRight, ChevronDown, ChevronUp, Zap, Briefcase, Clock } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
+import { getDisplayTaskId } from '@/utils/taskId';
 import Colors from '@/constants/colors';
 import { useState, useMemo } from 'react';
 import { Event, EventStatus } from '@/types';
@@ -443,7 +444,12 @@ function EventCard({ event, getDisplayStatus, canEdit, onActivate }: {
       )}
       
       <View style={styles.eventHeader}>
-        <Text style={[styles.eventName, status === 'cancelled' && styles.eventNameCancelled]}>{event.name}</Text>
+        <View style={{ flex: 1, marginRight: 8 }}>
+          <Text style={{ fontSize: 11, fontWeight: '700' as const, color: '#1565C0', letterSpacing: 0.5, marginBottom: 2 }}>
+            {getDisplayTaskId(event.id)}
+          </Text>
+          <Text style={[styles.eventName, status === 'cancelled' && styles.eventNameCancelled]}>{event.name}</Text>
+        </View>
         <View style={styles.headerActions}>
           {isDraft && canEdit && (
             <TouchableOpacity onPress={handleEdit} style={styles.editButton}>

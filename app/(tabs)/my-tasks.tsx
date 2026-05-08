@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, M
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, usePathname } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
+import { getDisplayTaskId } from '@/utils/taskId';
 import { MapPin, Calendar, Target, Check, X, Plus, Minus, Wrench, Send, RotateCcw, CircleCheck, Hourglass, CircleDot, ChevronDown, ChevronUp, Users } from 'lucide-react-native';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/auth';
@@ -194,6 +195,9 @@ export default function MyTasksScreen() {
       >
         <View style={styles.cardHeader}>
           <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 11, fontWeight: '700' as const, color: '#1565C0', letterSpacing: 0.5, marginBottom: 4 }}>
+              {getDisplayTaskId(item.id)}
+            </Text>
             <Text style={styles.taskName} numberOfLines={2}>{item.name}</Text>
             <View style={[styles.roleBadge, { backgroundColor: '#F3E8FF' }]}>
               <Text style={[styles.roleBadgeText, { color: '#6B21A8' }]}>Creator</Text>
@@ -413,6 +417,9 @@ export default function MyTasksScreen() {
       >
         <View style={styles.cardHeader}>
           <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 11, fontWeight: '700' as const, color: '#1565C0', letterSpacing: 0.5, marginBottom: 4 }}>
+              {getDisplayTaskId(item.id)}
+            </Text>
             <Text style={styles.taskName} numberOfLines={2}>{item.name}</Text>
             <View style={[styles.roleBadge, { backgroundColor: roleBadge.bgColor }]}>
               <Text style={[styles.roleBadgeText, { color: roleBadge.color }]}>
