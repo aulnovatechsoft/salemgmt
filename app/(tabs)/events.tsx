@@ -46,6 +46,7 @@ export default function EventsScreen() {
       
       return {
         id: e.id,
+        displayId: e.displayId,
         name: e.name,
         location: e.location,
         circle: e.circle,
@@ -446,7 +447,7 @@ function EventCard({ event, getDisplayStatus, canEdit, onActivate }: {
       <View style={styles.eventHeader}>
         <View style={{ flex: 1, marginRight: 8 }}>
           <Text style={{ fontSize: 11, fontWeight: '700' as const, color: '#1565C0', letterSpacing: 0.5, marginBottom: 2 }}>
-            {getDisplayTaskId(event.id)}
+            {getDisplayTaskId(event)}
           </Text>
           <Text style={[styles.eventName, status === 'cancelled' && styles.eventNameCancelled]}>{event.name}</Text>
         </View>

@@ -196,7 +196,7 @@ export default function MyTasksScreen() {
         <View style={styles.cardHeader}>
           <View style={{ flex: 1 }}>
             <Text style={{ fontSize: 11, fontWeight: '700' as const, color: '#1565C0', letterSpacing: 0.5, marginBottom: 4 }}>
-              {getDisplayTaskId(item.id)}
+              {getDisplayTaskId(item)}
             </Text>
             <Text style={styles.taskName} numberOfLines={2}>{item.name}</Text>
             <View style={[styles.roleBadge, { backgroundColor: '#F3E8FF' }]}>
@@ -418,7 +418,7 @@ export default function MyTasksScreen() {
         <View style={styles.cardHeader}>
           <View style={{ flex: 1 }}>
             <Text style={{ fontSize: 11, fontWeight: '700' as const, color: '#1565C0', letterSpacing: 0.5, marginBottom: 4 }}>
-              {getDisplayTaskId(item.id)}
+              {getDisplayTaskId(item)}
             </Text>
             <Text style={styles.taskName} numberOfLines={2}>{item.name}</Text>
             <View style={[styles.roleBadge, { backgroundColor: roleBadge.bgColor }]}>

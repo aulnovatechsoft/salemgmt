@@ -1,13 +1,21 @@
 /**
- * Derive a short, stable, human-readable Task ID from an event/task UUID.
- * Example: "f207bb75-f874-4b45-97cd-c98de9e22643" -> "TSK-F207BB75"
+ * Human-friendly Task ID display.
  *
- * Stable per row (first 8 hex chars of the UUID), case-insensitive,
- * uppercase for display. Falls back to a safe slug for non-UUID inputs.
+ * Prefers the persisted, year-scoped sequential ID stored in
+ * `events.display_id` (e.g. "TSK-2026-0001"). Falls back to a stable slug
+ * derived from the row UUID if a row hasn't been backfilled yet.
+ *
+ * Pass either an event object ({ displayId?, id }) or a UUID string.
  */
-export function getDisplayTaskId(id: string | null | undefined): string {
-  if (!id) return 'TSK-UNKNOWN';
-  const hex = String(id).replace(/-/g, '').toUpperCase();
+export function getDisplayTaskId(
+  arg: string | null | undefined | { displayId?: string | null; id?: string | null }
+): string {
+  if (!arg) return 'TSK-UNKNOWN';
+  if (typeof arg === 'object') {
+    if (arg.displayId && arg.displayId.trim()) return arg.displayId;
+    return getDisplayTaskId(arg.id ?? null);
+  }
+  const hex = String(arg).replace(/-/g, '').toUpperCase();
   const slug = hex.slice(0, 8) || 'UNKNOWN';
   return `TSK-${slug}`;
 }

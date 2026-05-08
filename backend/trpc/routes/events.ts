@@ -62,6 +62,7 @@ function distributeFairly(total: number, count: number): number[] {
   return out;
 }
 import { db, events, employees, auditLogs, eventAssignments, eventSalesEntries, eventSubtasks, employeeMaster, resources, resourceAllocations, financeCollectionEntries, notifications, maintenanceEntries, simSaleLines, ftthSaleLines, lcSaleLines, ebSaleLines, issues } from "@/backend/db";
+import { allocateTaskDisplayId } from "@/backend/db/taskIdAllocator";
 import { 
   notifyEventAssignment, 
   notifyTaskSubmitted, 
@@ -1070,7 +1071,10 @@ export const eventsRouter = createTRPCRouter({
         }
       }
       
+      const displayId = await allocateTaskDisplayId();
+
       const result = await db.insert(events).values({
+        displayId,
         name: input.name,
         location: input.location,
         circle: input.circle,
@@ -5458,6 +5462,7 @@ export const eventsRouter = createTRPCRouter({
           
           return {
             id: event.id,
+            displayId: event.displayId,
             name: event.name,
             location: event.location,
             circle: event.circle,
@@ -5575,6 +5580,7 @@ export const eventsRouter = createTRPCRouter({
         
         return {
           id: event.id,
+          displayId: event.displayId,
           name: event.name,
           location: event.location,
           circle: event.circle,

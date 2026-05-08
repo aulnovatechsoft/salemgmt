@@ -60,6 +60,7 @@ export interface Employee {
 
 export interface Event {
   id: string;
+  displayId?: string | null;
   name: string;
   location: string;
   circle: Circle;

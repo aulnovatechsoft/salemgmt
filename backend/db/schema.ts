@@ -83,6 +83,7 @@ export const employees = pgTable('employees', {
 
 export const events = pgTable('events', {
   id: uuid('id').primaryKey().defaultRandom(),
+  displayId: varchar('display_id', { length: 32 }).unique(),
   name: varchar('name', { length: 255 }).notNull(),
   location: text('location').notNull(),
   circle: varchar('circle', { length: 100 }).notNull(),

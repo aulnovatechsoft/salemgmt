@@ -1363,7 +1363,7 @@ export default function EventDetailScreen() {
           <View style={styles.headerTop}>
             <View style={{ flex: 1, marginRight: 8 }}>
               <Text style={{ fontSize: 12, fontWeight: '700' as const, color: '#1565C0', letterSpacing: 0.5, marginBottom: 4 }}>
-                {getDisplayTaskId(eventData.id)}
+                {getDisplayTaskId(eventData)}
               </Text>
               <Text style={styles.eventName}>{eventData.name}</Text>
             </View>

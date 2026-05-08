@@ -2,6 +2,7 @@ import { z } from "zod";
 import { eq, sql, desc, and, isNull, inArray, like, or } from "drizzle-orm";
 import { createTRPCRouter, publicProcedure } from "../create-context";
 import { db, employees, employeeMaster, auditLogs, events, bbmWiseOlte, outstandingFtthLcAmount } from "@/backend/db";
+import { allocateTaskDisplayId } from "@/backend/db/taskIdAllocator";
 import bcrypt from "bcryptjs";
 
 const SALT_ROUNDS = 10;
@@ -859,7 +860,9 @@ export const adminRouter = createTRPCRouter({
               .where(eq(events.id, existing[0].id));
             updated++;
           } else {
+            const displayId = await allocateTaskDisplayId();
             await db.insert(events).values({
+              displayId,
               name: nameTrimmed,
               location: locationTrimmed,
               circle: circle as any,
