@@ -2341,8 +2341,38 @@ export const eventsRouter = createTRPCRouter({
           eq(eventAssignments.employeeId, employeeId)
         ));
 
+      // Senior management roles can submit on any event within their scope
+      // (circle for CGM/DGM/AGM; global for CMD/ADMIN/GM) without being
+      // explicitly added to event_assignments. We additionally allow when the
+      // event creator is in their reporting tree, so a manager can submit on
+      // behalf of any subordinate's event regardless of circle reassignments.
+      const GLOBAL_SENIOR_ROLES = ['CMD', 'ADMIN', 'GM'];
+      const CIRCLE_SENIOR_ROLES = ['CGM', 'DGM', 'AGM'];
+      let isSeniorOverride = false;
       if (!assignment[0]) {
-        throw new Error("You are not assigned to this event. Please contact the event manager.");
+        const submitter = await db.select({ role: employees.role, circle: employees.circle })
+          .from(employees)
+          .where(eq(employees.id, employeeId));
+        const sRole = submitter[0]?.role as string | undefined;
+        if (!sRole) {
+          throw new Error("You are not assigned to this event. Please contact the event manager.");
+        }
+        if (GLOBAL_SENIOR_ROLES.includes(sRole)) {
+          isSeniorOverride = true;
+        } else if (CIRCLE_SENIOR_ROLES.includes(sRole)) {
+          const sameCircle = submitter[0]?.circle && submitter[0].circle === event[0].circle;
+          if (sameCircle) {
+            isSeniorOverride = true;
+          } else {
+            const subIds = await getAllSubordinateIds(employeeId);
+            if (subIds.includes(event[0].createdBy) || (event[0].assignedTo && subIds.includes(event[0].assignedTo))) {
+              isSeniorOverride = true;
+            }
+          }
+        }
+        if (!isSeniorOverride) {
+          throw new Error("You are not assigned to this event. Please contact the event manager.");
+        }
       }
 
       // Photo + GPS enforcement
@@ -2421,8 +2451,8 @@ export const eventsRouter = createTRPCRouter({
       }
 
       // Assignment-type checks — apply to ANY work in that subtype (sold OR activated OR lines)
-      const assignedTypes = (assignment[0].assignedTaskTypes as string[]) || [];
-      const hasAssignedTypes = assignedTypes.length > 0;
+      const assignedTypes = (assignment[0]?.assignedTaskTypes as string[]) || [];
+      const hasAssignedTypes = !isSeniorOverride && assignedTypes.length > 0;
       if (hasAssignedTypes) {
         const touchesSim = effSimsSold > 0 || effSimsActivated > 0 || input.simLines.length > 0;
         const touchesFtth = effFtthSold > 0 || effFtthActivated > 0 || input.ftthLines.length > 0;
@@ -2509,34 +2539,39 @@ export const eventsRouter = createTRPCRouter({
       // Insert parent entry + child line items in a transaction.
       // Re-read assignment with SELECT ... FOR UPDATE to prevent race conditions
       // between concurrent submissions blowing through the target.
+      // Senior override (no assignment row) skips target enforcement.
       const result = await db.transaction(async (tx) => {
-        const [lockedAssignment] = await tx.select().from(eventAssignments)
-          .where(eq(eventAssignments.id, assignment[0].id))
-          .for('update');
-        if (!lockedAssignment) {
-          throw new Error('Assignment vanished during submission. Please retry.');
-        }
+        let lockedAssignment: typeof eventAssignments.$inferSelect | undefined;
+        if (!isSeniorOverride && assignment[0]) {
+          const locked = await tx.select().from(eventAssignments)
+            .where(eq(eventAssignments.id, assignment[0].id))
+            .for('update');
+          lockedAssignment = locked[0];
+          if (!lockedAssignment) {
+            throw new Error('Assignment vanished during submission. Please retry.');
+          }
 
-        const newTotalSim = lockedAssignment.simSold + effSimsSold;
-        const newTotalFtth = lockedAssignment.ftthSold + effFtthSold;
-        const newTotalLease = (lockedAssignment.leaseCompleted || 0) + effLeaseSold;
-        const newTotalEb = (lockedAssignment.ebCompleted || 0) + effEbSold;
+          const newTotalSim = lockedAssignment.simSold + effSimsSold;
+          const newTotalFtth = lockedAssignment.ftthSold + effFtthSold;
+          const newTotalLease = (lockedAssignment.leaseCompleted || 0) + effLeaseSold;
+          const newTotalEb = (lockedAssignment.ebCompleted || 0) + effEbSold;
 
-        if (effSimsSold > 0 && newTotalSim > lockedAssignment.simTarget) {
-          const remaining = lockedAssignment.simTarget - lockedAssignment.simSold;
-          throw new Error(`Cannot sell ${effSimsSold} SIMs. Only ${remaining} remaining in your target. Contact manager to increase target.`);
-        }
-        if (effFtthSold > 0 && newTotalFtth > lockedAssignment.ftthTarget) {
-          const remaining = lockedAssignment.ftthTarget - lockedAssignment.ftthSold;
-          throw new Error(`Cannot sell ${effFtthSold} FTTH. Only ${remaining} remaining in your target. Contact manager to increase target.`);
-        }
-        if (effLeaseSold > 0 && newTotalLease > (lockedAssignment.leaseTarget || 0)) {
-          const remaining = (lockedAssignment.leaseTarget || 0) - (lockedAssignment.leaseCompleted || 0);
-          throw new Error(`Cannot sell ${effLeaseSold} Lease Circuit. Only ${remaining} remaining in your target. Contact manager to increase target.`);
-        }
-        if (effEbSold > 0 && newTotalEb > (lockedAssignment.ebTarget || 0)) {
-          const remaining = (lockedAssignment.ebTarget || 0) - (lockedAssignment.ebCompleted || 0);
-          throw new Error(`Cannot sell ${effEbSold} EB. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+          if (effSimsSold > 0 && newTotalSim > lockedAssignment.simTarget) {
+            const remaining = lockedAssignment.simTarget - lockedAssignment.simSold;
+            throw new Error(`Cannot sell ${effSimsSold} SIMs. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+          }
+          if (effFtthSold > 0 && newTotalFtth > lockedAssignment.ftthTarget) {
+            const remaining = lockedAssignment.ftthTarget - lockedAssignment.ftthSold;
+            throw new Error(`Cannot sell ${effFtthSold} FTTH. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+          }
+          if (effLeaseSold > 0 && newTotalLease > (lockedAssignment.leaseTarget || 0)) {
+            const remaining = (lockedAssignment.leaseTarget || 0) - (lockedAssignment.leaseCompleted || 0);
+            throw new Error(`Cannot sell ${effLeaseSold} Lease Circuit. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+          }
+          if (effEbSold > 0 && newTotalEb > (lockedAssignment.ebTarget || 0)) {
+            const remaining = (lockedAssignment.ebTarget || 0) - (lockedAssignment.ebCompleted || 0);
+            throw new Error(`Cannot sell ${effEbSold} EB. Only ${remaining} remaining in your target. Contact manager to increase target.`);
+          }
         }
 
         const [entry] = await tx.insert(eventSalesEntries).values({
@@ -2609,17 +2644,20 @@ export const eventsRouter = createTRPCRouter({
           })));
         }
 
-        // Atomic increment using SQL expression (the row is FOR UPDATE-locked above)
-        const assignmentUpdate: any = {
-          simSold: sql`${eventAssignments.simSold} + ${effSimsSold}`,
-          ftthSold: sql`${eventAssignments.ftthSold} + ${effFtthSold}`,
-          updatedAt: new Date(),
-        };
-        if (effLeaseSold > 0) assignmentUpdate.leaseCompleted = sql`${eventAssignments.leaseCompleted} + ${effLeaseSold}`;
-        if (effEbSold > 0) assignmentUpdate.ebCompleted = sql`${eventAssignments.ebCompleted} + ${effEbSold}`;
-        await tx.update(eventAssignments)
-          .set(assignmentUpdate)
-          .where(eq(eventAssignments.id, lockedAssignment.id));
+        // Atomic increment using SQL expression (the row is FOR UPDATE-locked above).
+        // Senior override has no assignment row to increment — skip.
+        if (lockedAssignment) {
+          const assignmentUpdate: any = {
+            simSold: sql`${eventAssignments.simSold} + ${effSimsSold}`,
+            ftthSold: sql`${eventAssignments.ftthSold} + ${effFtthSold}`,
+            updatedAt: new Date(),
+          };
+          if (effLeaseSold > 0) assignmentUpdate.leaseCompleted = sql`${eventAssignments.leaseCompleted} + ${effLeaseSold}`;
+          if (effEbSold > 0) assignmentUpdate.ebCompleted = sql`${eventAssignments.ebCompleted} + ${effEbSold}`;
+          await tx.update(eventAssignments)
+            .set(assignmentUpdate)
+            .where(eq(eventAssignments.id, lockedAssignment.id));
+        }
 
         return entry;
       });

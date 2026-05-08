@@ -50,6 +50,7 @@ export default function EventSalesScreen() {
   // flash on web (where Alert.alert ignores onPress callbacks) and on fast
   // backends (where mutation.isPending flips back before navigation lands).
   const [hasSubmitted, setHasSubmitted] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const { data: eventData } = trpc.events.getEventWithDetails.useQuery(
     { id: eventId || '' },
@@ -75,7 +76,9 @@ export default function EventSalesScreen() {
       }, 50);
     },
     onError: (error) => {
-      Alert.alert('Error', error.message || 'Failed to submit sales entry');
+      const msg = error.message || 'Failed to submit sales entry';
+      setSubmitError(msg);
+      Alert.alert('Error', msg);
     },
   });
 
@@ -209,9 +212,15 @@ export default function EventSalesScreen() {
     setPhotos(photos.filter((_, i) => i !== index));
   };
 
+  const showError = (title: string, message: string) => {
+    setSubmitError(`${title}: ${message}`);
+    Alert.alert(title, message);
+  };
+
   const handleSubmit = async () => {
+    setSubmitError(null);
     if (!employee?.id || !eventId) {
-      Alert.alert('Error', 'Invalid session. Please login again.');
+      showError('Error', 'Invalid session. Please login again.');
       return;
     }
 
@@ -225,17 +234,17 @@ export default function EventSalesScreen() {
     if (simMobileNumbers.length > 0) {
       const invalid = simMobileNumbers.filter(n => !MOBILE_RE.test(n));
       if (invalid.length > 0) {
-        Alert.alert('Invalid Mobile Numbers', `These are not valid 10-digit Indian mobile numbers:\n${invalid.join(', ')}`);
+        showError('Invalid Mobile Numbers', `These are not valid 10-digit Indian mobile numbers:\n${invalid.join(', ')}`);
         return;
       }
       const dupes = simMobileNumbers.filter((n, i) => simMobileNumbers.indexOf(n) !== i);
       if (dupes.length > 0) {
-        Alert.alert('Duplicate Mobile Numbers', `Duplicate entries: ${[...new Set(dupes)].join(', ')}`);
+        showError('Duplicate Mobile Numbers', `Duplicate entries: ${[...new Set(dupes)].join(', ')}`);
         return;
       }
       // Auto-set activated count from line count
       if (simsActivatedNum && simsActivatedNum !== simMobileNumbers.length) {
-        Alert.alert('Mismatch', `You entered ${simMobileNumbers.length} mobile numbers but said ${simsActivatedNum} activated. They must match.`);
+        showError('Mismatch', `You entered ${simMobileNumbers.length} mobile numbers but said ${simsActivatedNum} activated. They must match.`);
         return;
       }
     }
@@ -245,11 +254,11 @@ export default function EventSalesScreen() {
     if (ftthIds.length > 0) {
       const dupes = ftthIds.filter((n, i) => ftthIds.indexOf(n) !== i);
       if (dupes.length > 0) {
-        Alert.alert('Duplicate FTTH IDs', `Duplicate entries: ${[...new Set(dupes)].join(', ')}`);
+        showError('Duplicate FTTH IDs', `Duplicate entries: ${[...new Set(dupes)].join(', ')}`);
         return;
       }
       if (ftthActivatedNum && ftthActivatedNum !== ftthIds.length) {
-        Alert.alert('Mismatch', `You entered ${ftthIds.length} FTTH IDs but said ${ftthActivatedNum} activated. They must match.`);
+        showError('Mismatch', `You entered ${ftthIds.length} FTTH IDs but said ${ftthActivatedNum} activated. They must match.`);
         return;
       }
     }
@@ -264,12 +273,12 @@ export default function EventSalesScreen() {
       }));
     if (showLcSection && lcLinesClean.length > 0) {
       for (const l of lcLinesClean) {
-        if (!l.circuitId) { Alert.alert('Missing', 'Each Lease Circuit row needs a Circuit ID.'); return; }
-        if (!l.customerName) { Alert.alert('Missing', 'Each Lease Circuit row needs a Customer Name.'); return; }
+        if (!l.circuitId) { showError('Missing', 'Each Lease Circuit row needs a Circuit ID.'); return; }
+        if (!l.customerName) { showError('Missing', 'Each Lease Circuit row needs a Customer Name.'); return; }
       }
       const ids = lcLinesClean.map(l => l.circuitId);
       const dupes = ids.filter((n, i) => ids.indexOf(n) !== i);
-      if (dupes.length > 0) { Alert.alert('Duplicate Circuit IDs', `Duplicate: ${[...new Set(dupes)].join(', ')}`); return; }
+      if (dupes.length > 0) { showError('Duplicate Circuit IDs', `Duplicate: ${[...new Set(dupes)].join(', ')}`); return; }
     }
 
     // Build EB line items
@@ -282,23 +291,23 @@ export default function EventSalesScreen() {
       }));
     if (showEbSection && ebLinesClean.length > 0) {
       for (const l of ebLinesClean) {
-        if (!l.connectionId) { Alert.alert('Missing', 'Each EB row needs a Connection ID.'); return; }
-        if (!l.customerName) { Alert.alert('Missing', 'Each EB row needs a Customer Name.'); return; }
+        if (!l.connectionId) { showError('Missing', 'Each EB row needs a Connection ID.'); return; }
+        if (!l.customerName) { showError('Missing', 'Each EB row needs a Customer Name.'); return; }
       }
       const ids = ebLinesClean.map(l => l.connectionId);
       const dupes = ids.filter((n, i) => ids.indexOf(n) !== i);
-      if (dupes.length > 0) { Alert.alert('Duplicate Connection IDs', `Duplicate: ${[...new Set(dupes)].join(', ')}`); return; }
+      if (dupes.length > 0) { showError('Duplicate Connection IDs', `Duplicate: ${[...new Set(dupes)].join(', ')}`); return; }
     }
 
     const totalEntries =
       simsSoldNum + ftthSoldNum + lcLinesClean.length + ebLinesClean.length;
     if (totalEntries === 0) {
-      Alert.alert('Error', 'Please enter at least one sales entry');
+      showError('Error', 'Please enter at least one sales entry');
       return;
     }
 
     if (photos.length === 0) {
-      Alert.alert('Photo required', 'Please add at least one geo-tagged photo before submitting.');
+      showError('Photo required', 'Please add at least one geo-tagged photo before submitting.');
       return;
     }
    // if (!currentLocation?.latitude || !currentLocation?.longitude) {
@@ -319,7 +328,7 @@ export default function EventSalesScreen() {
         );
       } catch (err) {
         console.error('Photo upload failed:', err);
-        Alert.alert('Upload Error', 'Failed to upload photos. Please try again.');
+        showError('Upload Error', 'Failed to upload photos. Please try again.');
         setIsUploadingPhotos(false);
         return;
       }
@@ -717,6 +726,13 @@ export default function EventSalesScreen() {
             <Text style={{ color: '#C62828', fontSize: 13, textAlign: 'center', marginBottom: 8 }}>
               At least one photo is required to submit.
             </Text>
+          )}
+          {submitError && (
+            <View style={{ backgroundColor: '#FFEBEE', borderColor: '#C62828', borderWidth: 1, borderRadius: 6, padding: 10, marginBottom: 8 }}>
+              <Text style={{ color: '#B71C1C', fontSize: 13, fontWeight: '600' as const }}>
+                {submitError}
+              </Text>
+            </View>
           )}
           <TouchableOpacity 
             style={[
