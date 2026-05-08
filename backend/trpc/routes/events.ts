@@ -2349,49 +2349,48 @@ export const eventsRouter = createTRPCRouter({
       if (!input.photos || input.photos.length === 0) {
         throw new Error("At least one geo-tagged photo is required to submit a sales entry.");
       }
-      if (!input.gpsLatitude || !input.gpsLongitude) {
-        throw new Error("GPS location is required. Please tap 'Capture GPS Location' before submitting.");
-      }
-      const submitLat = parseFloat(input.gpsLatitude);
-      const submitLng = parseFloat(input.gpsLongitude);
-      if (!Number.isFinite(submitLat) || !Number.isFinite(submitLng)) {
-        throw new Error("Invalid GPS coordinates.");
-      }
-
-      // Geo-fence: anchor = avg GPS of prior active entries for this event (lazy-init from first entry)
-      const priorWithGps = await db.select({
-        lat: eventSalesEntries.gpsLatitude,
-        lng: eventSalesEntries.gpsLongitude,
-      })
-        .from(eventSalesEntries)
-        .where(and(
-          eq(eventSalesEntries.eventId, input.eventId),
-          eq(eventSalesEntries.entryStatus, 'active'),
-          isNotNull(eventSalesEntries.gpsLatitude),
-          isNotNull(eventSalesEntries.gpsLongitude),
-        ))
-        .limit(50);
-
       let geoWarning: string | null = null;
-      if (priorWithGps.length > 0) {
-        const valid = priorWithGps
-          .map(p => ({ lat: parseFloat(p.lat as string), lng: parseFloat(p.lng as string) }))
-          .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng));
-        if (valid.length > 0) {
-          const anchorLat = valid.reduce((s, p) => s + p.lat, 0) / valid.length;
-          const anchorLng = valid.reduce((s, p) => s + p.lng, 0) / valid.length;
-          const distKm = haversineKm(anchorLat, anchorLng, submitLat, submitLng);
-          if (distKm > GEO_FENCE_KM * GEO_FENCE_HARD_MULT) {
-            throw new Error(
-              `Submission location is ${distKm.toFixed(1)} km from the event area (limit ${GEO_FENCE_KM * GEO_FENCE_HARD_MULT} km). Please verify your GPS location.`
-            );
-          }
-          if (distKm > GEO_FENCE_KM) {
-            geoWarning = `Submission location is ${distKm.toFixed(1)} km from the event area (soft limit ${GEO_FENCE_KM} km).`;
-            if (GEO_FENCE_ENFORCE === 'hard') {
-              throw new Error(geoWarning);
+      if (input.gpsLatitude && input.gpsLongitude) {
+        const submitLat = parseFloat(input.gpsLatitude);
+        const submitLng = parseFloat(input.gpsLongitude);
+        if (!Number.isFinite(submitLat) || !Number.isFinite(submitLng)) {
+          throw new Error("Invalid GPS coordinates.");
+        }
+
+        // Geo-fence: anchor = avg GPS of prior active entries for this event (lazy-init from first entry)
+        const priorWithGps = await db.select({
+          lat: eventSalesEntries.gpsLatitude,
+          lng: eventSalesEntries.gpsLongitude,
+        })
+          .from(eventSalesEntries)
+          .where(and(
+            eq(eventSalesEntries.eventId, input.eventId),
+            eq(eventSalesEntries.entryStatus, 'active'),
+            isNotNull(eventSalesEntries.gpsLatitude),
+            isNotNull(eventSalesEntries.gpsLongitude),
+          ))
+          .limit(50);
+
+        if (priorWithGps.length > 0) {
+          const valid = priorWithGps
+            .map(p => ({ lat: parseFloat(p.lat as string), lng: parseFloat(p.lng as string) }))
+            .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+          if (valid.length > 0) {
+            const anchorLat = valid.reduce((s, p) => s + p.lat, 0) / valid.length;
+            const anchorLng = valid.reduce((s, p) => s + p.lng, 0) / valid.length;
+            const distKm = haversineKm(anchorLat, anchorLng, submitLat, submitLng);
+            if (distKm > GEO_FENCE_KM * GEO_FENCE_HARD_MULT) {
+              throw new Error(
+                `Submission location is ${distKm.toFixed(1)} km from the event area (limit ${GEO_FENCE_KM * GEO_FENCE_HARD_MULT} km). Please verify your GPS location.`
+              );
             }
-            console.warn(`[geo-fence] event=${input.eventId} employee=${employeeId} distKm=${distKm.toFixed(2)}`);
+            if (distKm > GEO_FENCE_KM) {
+              geoWarning = `Submission location is ${distKm.toFixed(1)} km from the event area (soft limit ${GEO_FENCE_KM} km).`;
+              if (GEO_FENCE_ENFORCE === 'hard') {
+                throw new Error(geoWarning);
+              }
+              console.warn(`[geo-fence] event=${input.eventId} employee=${employeeId} distKm=${distKm.toFixed(2)}`);
+            }
           }
         }
       }

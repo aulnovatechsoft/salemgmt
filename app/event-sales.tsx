@@ -713,22 +713,18 @@ export default function EventSalesScreen() {
             />
           </View>
 
-          {(photos.length === 0 || !currentLocation) && (
+          {photos.length === 0 && (
             <Text style={{ color: '#C62828', fontSize: 13, textAlign: 'center', marginBottom: 8 }}>
-              {photos.length === 0 && !currentLocation
-                ? 'Photo and GPS location are required to submit.'
-                : photos.length === 0
-                  ? 'At least one photo is required to submit.'
-                  : 'GPS location is required to submit.'}
+              At least one photo is required to submit.
             </Text>
           )}
           <TouchableOpacity 
             style={[
               styles.submitButton,
-              (hasSubmitted || submitSalesMutation.isPending || isUploadingPhotos || photos.length === 0 || !currentLocation) && styles.submitButtonDisabled,
+              (hasSubmitted || submitSalesMutation.isPending || isUploadingPhotos || photos.length === 0) && styles.submitButtonDisabled,
             ]}
             onPress={handleSubmit}
-            disabled={hasSubmitted || submitSalesMutation.isPending || isUploadingPhotos || photos.length === 0 || !currentLocation}
+            disabled={hasSubmitted || submitSalesMutation.isPending || isUploadingPhotos || photos.length === 0}
           >
             {(isUploadingPhotos || submitSalesMutation.isPending) && <ActivityIndicator color="#fff" style={{ marginRight: 8 }} />}
             <Text style={styles.submitButtonText}>
