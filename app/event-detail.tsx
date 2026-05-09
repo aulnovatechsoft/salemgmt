@@ -4112,7 +4112,14 @@ export default function EventDetailScreen() {
           activeOpacity={1}
           onPress={() => !updateStatusMutation.isPending && setShowCancelReasonModal(false)}
         >
-          <View style={styles.statusModalContent}>
+          {/* Inner card swallows the press so taps on the TextInput /
+              buttons don't bubble up to the overlay and dismiss the
+              modal mid-typing — classic RN Web modal-overlay bug. */}
+          <TouchableOpacity
+            activeOpacity={1}
+            style={styles.statusModalContent}
+            onPress={(e) => { e.stopPropagation?.(); }}
+          >
             <View style={styles.statusModalHeader}>
               <Text style={styles.statusModalTitle}>Cancel Task</Text>
               <TouchableOpacity
@@ -4156,14 +4163,21 @@ export default function EventDetailScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
 
       {/* Reject Task Modal */}
       <Modal visible={rejectModalVisible} animationType="fade" transparent={true} onRequestClose={() => setRejectModalVisible(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setRejectModalVisible(false)}>
-          <View style={styles.statusModalContent}>
+          {/* Inner card swallows the press so taps on the TextInput /
+              buttons don't bubble up to the overlay and dismiss the
+              modal mid-typing — same RN Web fix as the Cancel modal. */}
+          <TouchableOpacity
+            activeOpacity={1}
+            style={styles.statusModalContent}
+            onPress={(e) => { e.stopPropagation?.(); }}
+          >
             <View style={styles.statusModalHeader}>
               <Text style={styles.statusModalTitle}>Reject Task</Text>
               <TouchableOpacity onPress={() => setRejectModalVisible(false)}>
@@ -4194,7 +4208,7 @@ export default function EventDetailScreen() {
                 <Text style={styles.secondaryButtonText}>Cancel</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
 
@@ -4210,7 +4224,11 @@ export default function EventDetailScreen() {
           activeOpacity={1}
           onPress={() => setDeleteEntryTarget(null)}
         >
-          <View style={styles.modalCard}>
+          <TouchableOpacity
+            activeOpacity={1}
+            style={styles.modalCard}
+            onPress={(e) => { e.stopPropagation?.(); }}
+          >
             <Text style={styles.modalTitle}>Delete Sales Entry</Text>
             <Text style={styles.modalHint}>
               This will soft-delete the entry and reduce the related counters. Provide a reason for the audit log.
@@ -4240,7 +4258,7 @@ export default function EventDetailScreen() {
                 <Text style={styles.dangerButtonText}>{deleteSalesEntryMutation.isPending ? 'Deleting…' : 'Delete'}</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
 
@@ -4256,7 +4274,11 @@ export default function EventDetailScreen() {
           activeOpacity={1}
           onPress={() => setActivateModalEntry(null)}
         >
-          <View style={styles.modalCard}>
+          <TouchableOpacity
+            activeOpacity={1}
+            style={styles.modalCard}
+            onPress={(e) => { e.stopPropagation?.(); }}
+          >
             <Text style={styles.modalTitle}>
               Add {activateModalEntry?.kind === 'sim' ? 'SIM' : 'FTTH'} Activations
             </Text>
@@ -4293,7 +4315,7 @@ export default function EventDetailScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
     </>
