@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, and, desc, gte, asc, inArray } from "drizzle-orm";
+import { eq, and, desc, gte, asc, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, authedProcedure } from "../create-context";
 import {
@@ -90,17 +90,24 @@ type EnrichedIssue = typeof issues.$inferSelect & {
   raisedByEmployee: EmployeeRef;
   escalatedToEmployee: EmployeeRef;
   resolvedByEmployee: EmployeeRef;
+  commentCount: number;
 };
 
 async function enrichIssues(rows: (typeof issues.$inferSelect)[]): Promise<EnrichedIssue[]> {
   if (rows.length === 0) return [];
 
+  const issueIds = rows.map(r => r.id);
   const eventIds = Array.from(new Set(rows.map(r => r.eventId).filter(Boolean) as string[]));
   const employeeIds = Array.from(new Set(
     rows.flatMap(r => [r.raisedBy, r.escalatedTo, r.resolvedBy].filter(Boolean) as string[]),
   ));
 
-  const [eventRows, employeeRows] = await Promise.all([
+  // Three parallel batched queries — O(1) round-trips regardless of
+  // result-set size. Without the comment-count aggregate the UI would
+  // either have to fetch every thread up-front (N+1) or hide the
+  // comment count entirely; the GROUP BY here is cheap and indexed
+  // on (issue_id, created_at).
+  const [eventRows, employeeRows, commentCountRows] = await Promise.all([
     eventIds.length > 0
       ? db.select({
           id: events.id,
@@ -120,12 +127,20 @@ async function enrichIssues(rows: (typeof issues.$inferSelect)[]): Promise<Enric
           persNo: employees.persNo,
         }).from(employees).where(inArray(employees.id, employeeIds))
       : Promise.resolve([] as EmployeeRef[]),
+    db.select({
+      issueId: issueComments.issueId,
+      count: sql<number>`count(*)::int`,
+    }).from(issueComments)
+      .where(inArray(issueComments.issueId, issueIds))
+      .groupBy(issueComments.issueId),
   ]);
 
   const eventById = new Map<string, EventRef>();
   for (const e of eventRows as Exclude<EventRef, null>[]) eventById.set(e.id, e);
   const employeeById = new Map<string, EmployeeRef>();
   for (const e of employeeRows as Exclude<EmployeeRef, null>[]) employeeById.set(e.id, e);
+  const commentCountById = new Map<string, number>();
+  for (const c of commentCountRows) commentCountById.set(c.issueId, Number(c.count));
 
   return rows.map(r => ({
     ...r,
@@ -133,6 +148,7 @@ async function enrichIssues(rows: (typeof issues.$inferSelect)[]): Promise<Enric
     raisedByEmployee: r.raisedBy ? (employeeById.get(r.raisedBy) ?? null) : null,
     escalatedToEmployee: r.escalatedTo ? (employeeById.get(r.escalatedTo) ?? null) : null,
     resolvedByEmployee: r.resolvedBy ? (employeeById.get(r.resolvedBy) ?? null) : null,
+    commentCount: commentCountById.get(r.id) ?? 0,
   }));
 }
 
@@ -233,7 +249,13 @@ export const issuesRouter = createTRPCRouter({
   addComment: authedProcedure
     .input(z.object({
       issueId: z.string().uuid(),
-      body: z.string().min(1).max(2000),
+      // Pre-trim + reject whitespace-only bodies. Plain `.min(1)` lets
+      // "   " through, which then becomes an empty comment after the
+      // server-side trim and clutters the thread with blank rows.
+      body: z.string().max(2000).transform(s => s.trim()).refine(
+        s => s.length > 0,
+        { message: 'Comment cannot be empty.' },
+      ),
     }))
     .mutation(async ({ input, ctx }) => {
       const actorId = ctx.employeeId;
@@ -245,7 +267,7 @@ export const issuesRouter = createTRPCRouter({
         const [comment] = await tx.insert(issueComments).values({
           issueId: input.issueId,
           authorId: actorId,
-          body: input.body.trim(),
+          body: input.body,
         }).returning();
 
         await tx.insert(auditLogs).values({
@@ -256,12 +278,16 @@ export const issuesRouter = createTRPCRouter({
           details: { commentId: comment.id },
         });
 
-        // Notify all participants except the actor: raiser + escalatedTo
-        // (the two "owners" of the issue). Skip when the recipient has
-        // turned ISSUE_COMMENT off in their preferences.
+        // Notify EVERY participant except the actor:
+        //   · raiser, escalatedTo  — the two issue "owners"
+        //   · task creator, task assignee — also authorised (per
+        //     loadAndAuthorize) and likely tracking the discussion
+        // Skip per-recipient if they've turned ISSUE_COMMENT off.
         const recipients = new Set<string>();
         if (issue.raisedBy && issue.raisedBy !== actorId) recipients.add(issue.raisedBy);
         if (issue.escalatedTo && issue.escalatedTo !== actorId) recipients.add(issue.escalatedTo);
+        if (event?.createdBy && event.createdBy !== actorId) recipients.add(event.createdBy);
+        if (event?.assignedTo && event.assignedTo !== actorId) recipients.add(event.assignedTo);
 
         if (recipients.size > 0) {
           const [actorRow] = await tx.select({ name: employees.name })
@@ -306,8 +332,16 @@ export const issuesRouter = createTRPCRouter({
       });
 
       // Push dispatch outside tx — best-effort, must never roll back.
-      for (const p of result.pushList) {
-        await dispatchPushForNotification({
+      // Parallelised because each recipient's push is independent and
+      // a slow Expo round-trip for one user shouldn't delay the next.
+      // We use allSettled so a failure for one recipient doesn't
+      // surface as a 500 to the commenter (the in-app notification
+      // is already persisted at this point), but we DO log every
+      // rejection — silent push failures (invalid Expo tokens,
+      // service outage) are the kind of thing only ops can fix and
+      // they need a breadcrumb to grep for.
+      const pushResults = await Promise.allSettled(result.pushList.map(p =>
+        dispatchPushForNotification({
           notificationId: p.notificationId,
           recipientId: p.recipientId,
           type: 'ISSUE_COMMENT',
@@ -315,8 +349,17 @@ export const issuesRouter = createTRPCRouter({
           message: p.message,
           entityType: 'ISSUE',
           entityId: input.issueId,
-        });
-      }
+        }),
+      ));
+      pushResults.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          const p = result.pushList[i];
+          console.error(
+            `[issues.addComment] push failed for recipient=${p.recipientId} notification=${p.notificationId}:`,
+            r.reason,
+          );
+        }
+      });
 
       return result.comment;
     }),
@@ -510,7 +553,9 @@ export const issuesRouter = createTRPCRouter({
       }
       const actorId = ctx.employeeId;
 
-      await loadAndAuthorize(input.id, actorId);
+      // No pre-tx auth probe here — the in-tx select-for-update below
+      // is the real authority and a stale pre-tx answer would just
+      // produce a misleading error message under concurrent escalation.
 
       type PushParams = { notificationId: string; recipientId: string; title: string; message: string };
       const result = await db.transaction(async (tx) => {
@@ -519,6 +564,24 @@ export const issuesRouter = createTRPCRouter({
           .where(eq(issues.id, input.id)).for('update').limit(1);
         if (!existing) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Issue not found.' });
+        }
+        // Reject re-acting on an already terminal issue. Without this
+        // a manager could "re-resolve" a CLOSED (withdrawn) issue and
+        // overwrite the resolvedBy/resolvedAt, masking the original
+        // withdrawal in the audit trail.
+        if (existing.status === 'RESOLVED' || existing.status === 'CLOSED') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `This issue is already ${existing.status.toLowerCase()} and cannot be changed.`,
+          });
+        }
+        // No-op transition — reject so the UI doesn't pile audit rows
+        // when a button is double-tapped.
+        if (existing.status === input.status) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Issue is already ${input.status.replace('_', ' ').toLowerCase()}.`,
+          });
         }
         const [event] = await tx.select().from(events)
           .where(eq(events.id, existing.eventId)).limit(1);
@@ -855,6 +918,22 @@ export const issuesRouter = createTRPCRouter({
         }
         if (input.escalatedTo === existing.raisedBy) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot escalate an issue back to its original raiser.' });
+        }
+        // No-op escalate — reject so the timeline doesn't fill up
+        // with "Escalated to <same person>" rows on accidental
+        // double-taps, and so we don't fan out a redundant push.
+        if (input.escalatedTo === existing.escalatedTo) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'This issue is already assigned to that manager.',
+          });
+        }
+        // Cannot re-escalate a terminal issue.
+        if (existing.status === 'RESOLVED' || existing.status === 'CLOSED') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `This issue is already ${existing.status.toLowerCase()} and cannot be re-escalated.`,
+          });
         }
 
         const currentTimeline = (existing.timeline as { action: string; performedBy: string; timestamp: string }[]) || [];

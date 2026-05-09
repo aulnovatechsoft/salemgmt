@@ -170,8 +170,11 @@ export default function IssuesScreen() {
     const isCreator = issue.event?.createdBy === employee?.id;
     const isManager = issue.event?.assignedTo === employee?.id;
     const isClosed = issue.status === 'RESOLVED' || issue.status === 'CLOSED';
+    // Resolve is for actual managers only. The raiser-only-no-other-role
+    // case is naturally excluded because none of the four manager
+    // booleans are true for them — no need for a redundant guard.
     return {
-      canResolve: !isClosed && (isPriv || isEscalatedTo || isCreator || isManager) && !(isRaiser && !isEscalatedTo && !isCreator && !isManager && !isPriv),
+      canResolve: !isClosed && (isPriv || isEscalatedTo || isCreator || isManager),
       canWithdraw: !isClosed && isRaiser,
       canComment: true,
     };
@@ -547,7 +550,13 @@ function IssueCard({
       <View style={styles.actionsRow}>
         <TouchableOpacity style={styles.commentsToggle} onPress={onToggleComments}>
           <MessageSquare size={16} color={Colors.light.primary} />
-          <Text style={styles.commentsToggleText}>{commentsOpen ? 'Hide comments' : 'Comments'}</Text>
+          <Text style={styles.commentsToggleText}>
+            {commentsOpen
+              ? 'Hide comments'
+              : (issue.commentCount && issue.commentCount > 0
+                  ? `Comments (${issue.commentCount})`
+                  : 'Add comment')}
+          </Text>
         </TouchableOpacity>
 
         {permissions.canWithdraw && onWithdraw && (
@@ -581,7 +590,13 @@ function CommentsThread({ issueId }: { issueId: string }) {
   const addCommentMutation = trpc.issues.addComment.useMutation({
     onSuccess: async () => {
       setBody('');
-      await utils.issues.listComments.invalidate({ issueId });
+      // Invalidate BOTH the thread (new row appears) AND the parent
+      // list (so the count badge on the toggle reflects the new
+      // comment without a manual pull-to-refresh).
+      await Promise.all([
+        utils.issues.listComments.invalidate({ issueId }),
+        utils.issues.getAll.invalidate(),
+      ]);
     },
   });
 
