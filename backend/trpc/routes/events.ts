@@ -4180,7 +4180,7 @@ export const eventsRouter = createTRPCRouter({
         // length, and target-state validation were already enforced above.
         const completionGuard =
           input.status === 'completed' && previousStatus !== 'cancelled' && !isForceComplete
-            ? sql`AND NOT EXISTS (
+            ? sql`NOT EXISTS (
                 SELECT 1 FROM ${eventAssignments}
                 WHERE ${eventAssignments.eventId} = ${input.eventId}
                   AND ${eventAssignments.submissionStatus} <> 'approved'
