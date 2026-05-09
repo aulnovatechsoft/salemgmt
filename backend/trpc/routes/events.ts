@@ -366,7 +366,17 @@ async function _completeExpiredEventsCore(
   // not flip. The candidate set is also re-narrowed by the existing
   // status='active' guard, so a concurrent pause/cancel is also safe.
   const flipped = await db.update(events)
-    .set({ status: 'completed', updatedAt: new Date() })
+    .set({
+      status: 'completed',
+      updatedAt: new Date(),
+      // Sweep only completes tasks where every active category target is
+      // met AND every assignment is approved → always 'on_target'. The
+      // sweep never auto-closes a shortfall (those are left active for
+      // an admin to either chase or force-complete).
+      completionOutcome: 'on_target',
+      completedAt: new Date(),
+      completionReason: 'Auto-completed by scheduler (all targets met, all approvals in)',
+    })
     .where(and(
       inArray(events.id, toComplete.map(c => c.id)),
       eq(events.status, 'active'),
@@ -3985,64 +3995,136 @@ export const eventsRouter = createTRPCRouter({
       }
 
       // ============================================================
-      // Phase 1 hardening — block premature Complete.
+      // Phase 1/2 hardening — completion gating & Force Complete.
       //
-      // A task may only transition active|paused -> completed when EVERY
-      // assignment with a non-zero target is in `submissionStatus = approved`.
-      // The UI already mirrors this with a disabled button + reason summary;
-      // this server-side guard exists so a direct API caller can't bypass.
+      // Normal Complete (input.force !== true):
+      //   active|paused -> completed only when every assignment with a
+      //   non-zero target is submission_status='approved'. The UI mirrors
+      //   this with a disabled button; this server-side guard is the
+      //   actual enforcement (atomic NOT EXISTS in the CAS UPDATE below).
       //
-      // Reopens (cancelled -> completed via admin) are NOT subject to this
-      // — only fresh completions of work that was actually being executed.
+      // Force Complete (Phase 2, input.force === true):
+      //   ADMIN/CMD only, target state must be 'completed', previous state
+      //   must be active|paused (no force-cancel, no force-draft, no
+      //   force-reopen), AND a free-text reason >= 5 chars is required.
+      //   When force-completed, any still-pending assignment submissions
+      //   are auto-rejected inside the same tx with a system reason so
+      //   the audit trail makes it clear why their work was closed out.
       //
-      // The `force` flag is reserved for the Phase 2 "Force Complete with
-      // reason" admin path. Until that path ships with role gating + reason
-      // validation + audit, we EXPLICITLY REJECT force here so the field
-      // can never function as an unprotected bypass to a critical workflow
-      // control.
+      // Reopens (cancelled -> completed via admin) are out of scope
+      // here — they go through reopenEvent.
       // ============================================================
-      if (input.force) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Force-complete is not yet enabled. Every assignee must be approved before this task can be marked completed.',
-        });
-      }
-      // Pre-transaction probe: gives the user a friendly, specific error
-      // message ("3 of 5 assignees still need approval") before we even try
-      // the CAS. The actual atomicity is enforced inside the transaction
-      // below by a NOT EXISTS clause in the same UPDATE that flips status,
-      // so a race between this check and the commit still cannot let an
-      // unapproved task slip through.
-      let pendingProbeCount = 0;
-      let realProbeCount = 0;
-      if (input.status === 'completed' && previousStatus !== 'cancelled') {
-        const assignmentsForEvent = await db.select({
-          id: eventAssignments.id,
-          submissionStatus: eventAssignments.submissionStatus,
-          simTarget: eventAssignments.simTarget,
-          ftthTarget: eventAssignments.ftthTarget,
-          leaseTarget: eventAssignments.leaseTarget,
-          ebTarget: eventAssignments.ebTarget,
-          btsDownTarget: eventAssignments.btsDownTarget,
-          routeFailTarget: eventAssignments.routeFailTarget,
-          ftthDownTarget: eventAssignments.ftthDownTarget,
-          ofcFailTarget: eventAssignments.ofcFailTarget,
-        }).from(eventAssignments).where(eq(eventAssignments.eventId, input.eventId));
-
-        const realAssignments = assignmentsForEvent.filter(a => {
-          const t = (a.simTarget || 0) + (a.ftthTarget || 0) + (a.leaseTarget || 0) + (a.ebTarget || 0)
-                  + (a.btsDownTarget || 0) + (a.routeFailTarget || 0) + (a.ftthDownTarget || 0) + (a.ofcFailTarget || 0);
-          return t > 0;
-        });
-        realProbeCount = realAssignments.length;
-        pendingProbeCount = realAssignments.filter(a => a.submissionStatus !== 'approved').length;
-
-        if (pendingProbeCount > 0) {
+      const trimmedReasonForce = input.reason?.trim() ?? '';
+      const isForceComplete = input.force === true;
+      if (isForceComplete) {
+        if (input.status !== 'completed') {
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: `Cannot complete: ${pendingProbeCount} of ${realProbeCount} assignees still need approval. Every team member must submit their work and be approved before this task can be marked completed.`,
+            message: 'Force flag is only valid when completing a task.',
           });
         }
+        if (previousStatus !== 'active' && previousStatus !== 'paused') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Cannot force-complete a task that is ${previousStatus}.`,
+          });
+        }
+        if (!isPriv) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only ADMIN or CMD users may force-complete a task.',
+          });
+        }
+        if (trimmedReasonForce.length < 5) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Please provide at least a few words (5+ characters) explaining why this task is being force-completed.',
+          });
+        }
+      }
+
+      // Pre-transaction probe (only for normal complete): gives the user a
+      // friendly, specific error message ("3 of 5 assignees still need
+      // approval") before we even try the CAS. The actual atomicity is
+      // enforced inside the transaction below by a NOT EXISTS clause in
+      // the same UPDATE that flips status, so a race between this check
+      // and the commit still cannot let an unapproved task slip through.
+      // The probe is SKIPPED for force-complete by design — that's the
+      // whole point of force.
+      let pendingProbeCount = 0;
+      let realProbeCount = 0;
+      // Per-event completion summary (sums of *Completed counters across
+      // assignments) — used to derive the completion outcome (on_target
+      // vs shortfall) for normal Complete. Computed once here so the tx
+      // doesn't have to re-query.
+      let completionOutcomeForUpdate: 'on_target' | 'shortfall' | 'force_completed' | 'cancelled' | null = null;
+      if (input.status === 'completed' && previousStatus !== 'cancelled') {
+        if (!isForceComplete) {
+          const assignmentsForEvent = await db.select({
+            id: eventAssignments.id,
+            submissionStatus: eventAssignments.submissionStatus,
+            simTarget: eventAssignments.simTarget,
+            ftthTarget: eventAssignments.ftthTarget,
+            leaseTarget: eventAssignments.leaseTarget,
+            ebTarget: eventAssignments.ebTarget,
+            btsDownTarget: eventAssignments.btsDownTarget,
+            routeFailTarget: eventAssignments.routeFailTarget,
+            ftthDownTarget: eventAssignments.ftthDownTarget,
+            ofcFailTarget: eventAssignments.ofcFailTarget,
+          }).from(eventAssignments).where(eq(eventAssignments.eventId, input.eventId));
+
+          const realAssignments = assignmentsForEvent.filter(a => {
+            const t = (a.simTarget || 0) + (a.ftthTarget || 0) + (a.leaseTarget || 0) + (a.ebTarget || 0)
+                    + (a.btsDownTarget || 0) + (a.routeFailTarget || 0) + (a.ftthDownTarget || 0) + (a.ofcFailTarget || 0);
+            return t > 0;
+          });
+          realProbeCount = realAssignments.length;
+          pendingProbeCount = realAssignments.filter(a => a.submissionStatus !== 'approved').length;
+
+          if (pendingProbeCount > 0) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `Cannot complete: ${pendingProbeCount} of ${realProbeCount} assignees still need approval. Every team member must submit their work and be approved before this task can be marked completed.`,
+            });
+          }
+        }
+
+        // Derive outcome from aggregate completed-vs-target progress.
+        // Force-complete is always 'force_completed' regardless of progress
+        // — that's its whole identity.
+        if (isForceComplete) {
+          completionOutcomeForUpdate = 'force_completed';
+        } else {
+          const [progress] = await db.select({
+            sim: sql<number>`COALESCE(SUM(${eventAssignments.simSold}), 0)::integer`,
+            ftth: sql<number>`COALESCE(SUM(${eventAssignments.ftthSold}), 0)::integer`,
+            lease: sql<number>`COALESCE(SUM(${eventAssignments.leaseCompleted}), 0)::integer`,
+            eb: sql<number>`COALESCE(SUM(${eventAssignments.ebCompleted}), 0)::integer`,
+            btsDown: sql<number>`COALESCE(SUM(${eventAssignments.btsDownCompleted}), 0)::integer`,
+            routeFail: sql<number>`COALESCE(SUM(${eventAssignments.routeFailCompleted}), 0)::integer`,
+            ftthDown: sql<number>`COALESCE(SUM(${eventAssignments.ftthDownCompleted}), 0)::integer`,
+            ofcFail: sql<number>`COALESCE(SUM(${eventAssignments.ofcFailCompleted}), 0)::integer`,
+          }).from(eventAssignments).where(eq(eventAssignments.eventId, input.eventId));
+          const checks: { target: number; progress: number }[] = [
+            { target: existing.targetSim ?? 0, progress: Number(progress?.sim ?? 0) },
+            { target: existing.targetFtth ?? 0, progress: Number(progress?.ftth ?? 0) },
+            { target: existing.targetLease ?? 0, progress: Number(progress?.lease ?? 0) },
+            { target: existing.targetEb ?? 0, progress: Number(progress?.eb ?? 0) },
+            { target: existing.targetBtsDown ?? 0, progress: Number(progress?.btsDown ?? 0) },
+            { target: existing.targetRouteFail ?? 0, progress: Number(progress?.routeFail ?? 0) },
+            { target: existing.targetFtthDown ?? 0, progress: Number(progress?.ftthDown ?? 0) },
+            { target: existing.targetOfcFail ?? 0, progress: Number(progress?.ofcFail ?? 0) },
+          ];
+          const activeCategories = checks.filter(c => c.target > 0);
+          // No active categories at all -> on_target (vacuously true).
+          // At least one short -> shortfall. Otherwise on_target.
+          completionOutcomeForUpdate =
+            activeCategories.length === 0 ? 'on_target'
+            : activeCategories.every(c => c.progress >= c.target) ? 'on_target'
+            : 'shortfall';
+        }
+      } else if (input.status === 'cancelled') {
+        completionOutcomeForUpdate = 'cancelled';
       }
 
       // Cancel reason is mandatory so the team has context.
@@ -4093,8 +4175,11 @@ export const eventsRouter = createTRPCRouter({
         // un-approved (or a brand-new submission appears) between our probe
         // and the CAS will harmlessly fail the WHERE clause, return 0 rows,
         // and the caller is told to refresh. No half-completed state.
+        // Force-complete intentionally bypasses the approval guard — that
+        // is its sole reason to exist. Authorization (ADMIN/CMD), reason
+        // length, and target-state validation were already enforced above.
         const completionGuard =
-          input.status === 'completed' && previousStatus !== 'cancelled'
+          input.status === 'completed' && previousStatus !== 'cancelled' && !isForceComplete
             ? sql`AND NOT EXISTS (
                 SELECT 1 FROM ${eventAssignments}
                 WHERE ${eventAssignments.eventId} = ${input.eventId}
@@ -4112,8 +4197,28 @@ export const eventsRouter = createTRPCRouter({
               )`
             : sql``;
 
+        // Build the SET payload. For completed/cancelled we additionally
+        // stamp completion_outcome / completion_reason / completed_at /
+        // completed_by so the audit trail and reports can distinguish a
+        // clean on-target completion from a shortfall, a force-complete,
+        // or a cancellation.
+        const setPayload: Record<string, unknown> = {
+          status: newStatus,
+          updatedAt: new Date(),
+        };
+        if (completionOutcomeForUpdate) {
+          setPayload.completionOutcome = completionOutcomeForUpdate;
+          setPayload.completedAt = new Date();
+          setPayload.completedBy = actorId;
+          // Always set the reason to the current transition's reason
+          // (or null if none was supplied). Preserving a stale reason from
+          // a prior terminal state would mislead reviewers after a
+          // reopen + re-complete cycle.
+          setPayload.completionReason = trimmedReasonForce.length > 0 ? trimmedReasonForce : null;
+        }
+
         const updated = await tx.update(events)
-          .set({ status: newStatus, updatedAt: new Date() })
+          .set(setPayload)
           .where(and(
             eq(events.id, input.eventId),
             eq(events.status, prevStatus),
@@ -4124,7 +4229,7 @@ export const eventsRouter = createTRPCRouter({
           // Disambiguate: if the row still exists with the expected status
           // then the failure was the completion guard — surface a clear
           // approval-race message instead of the generic conflict error.
-          if (input.status === 'completed' && previousStatus !== 'cancelled') {
+          if (input.status === 'completed' && previousStatus !== 'cancelled' && !isForceComplete) {
             const [stillThere] = await tx.select({ status: events.status })
               .from(events).where(eq(events.id, input.eventId));
             if (stillThere && stillThere.status === prevStatus) {
@@ -4141,12 +4246,63 @@ export const eventsRouter = createTRPCRouter({
         }
 
         await tx.insert(auditLogs).values({
-          action: 'UPDATE_EVENT_STATUS',
+          action: isForceComplete ? 'FORCE_COMPLETE_EVENT' : 'UPDATE_EVENT_STATUS',
           entityType: 'EVENT',
           entityId: input.eventId,
           performedBy: actorId,
-          details: { previousStatus, newStatus: input.status, reason: input.reason ?? null },
+          details: {
+            previousStatus,
+            newStatus: input.status,
+            reason: input.reason ?? null,
+            outcome: completionOutcomeForUpdate ?? null,
+            forced: isForceComplete,
+          },
         });
+
+        // Force-complete auto-rejects any still-pending assignment so the
+        // workflow doesn't leave reviewers staring at submissions for a
+        // task that's already closed. Each affected row is moved to
+        // 'rejected' with a system reason; assignees can see it on their
+        // submission screen and the audit log captures the bulk action.
+        if (isForceComplete) {
+          const systemReason = `Auto-rejected: task was force-completed. Reason: ${trimmedReasonForce}`;
+          const autoRejected = await tx.update(eventAssignments)
+            .set({
+              submissionStatus: 'rejected',
+              rejectionReason: systemReason,
+              reviewedBy: actorId,
+              reviewedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(and(
+              eq(eventAssignments.eventId, input.eventId),
+              sql`${eventAssignments.submissionStatus} IN ('submitted', 'in_progress', 'not_started')`,
+              sql`(
+                COALESCE(${eventAssignments.simTarget}, 0)
+              + COALESCE(${eventAssignments.ftthTarget}, 0)
+              + COALESCE(${eventAssignments.leaseTarget}, 0)
+              + COALESCE(${eventAssignments.ebTarget}, 0)
+              + COALESCE(${eventAssignments.btsDownTarget}, 0)
+              + COALESCE(${eventAssignments.routeFailTarget}, 0)
+              + COALESCE(${eventAssignments.ftthDownTarget}, 0)
+              + COALESCE(${eventAssignments.ofcFailTarget}, 0)
+              ) > 0`,
+            ))
+            .returning({ id: eventAssignments.id, employeeId: eventAssignments.employeeId });
+          if (autoRejected.length > 0) {
+            await tx.insert(auditLogs).values({
+              action: 'AUTO_REJECT_ON_FORCE_COMPLETE',
+              entityType: 'EVENT',
+              entityId: input.eventId,
+              performedBy: actorId,
+              details: {
+                count: autoRejected.length,
+                affectedAssignmentIds: autoRejected.map(r => r.id),
+                reason: systemReason,
+              },
+            });
+          }
+        }
 
         // Inventory return on cancel — see Tier C section in replit.md.
         // For each allocation row: decrement `resources.allocated`,
@@ -4255,20 +4411,26 @@ export const eventsRouter = createTRPCRouter({
           } catch {}
 
           const verb =
+            isForceComplete ? 'force-completed' :
             input.status === 'paused' ? 'paused' :
             input.status === 'cancelled' ? 'cancelled' : 'marked completed';
           const title =
+            isForceComplete ? 'Task Force-Completed' :
             input.status === 'paused' ? 'Task Paused' :
             input.status === 'cancelled' ? 'Task Cancelled' : 'Task Completed';
           const reasonSuffix = input.reason?.trim() ? ` Reason: ${input.reason.trim()}` : '';
-          const message = `${actorName} ${verb} "${existing.name}".${reasonSuffix}`;
+          const message = isForceComplete
+            ? `${actorName} force-completed "${existing.name}". Any pending submissions were auto-rejected.${reasonSuffix}`
+            : `${actorName} ${verb} "${existing.name}".${reasonSuffix}`;
 
-          // notification_type is a Postgres enum; 'EVENT_STATUS_CHANGED' is
-          // the canonical type for paused/cancelled/completed transitions.
-          // The exact transition lives in metadata.{previousStatus,newStatus}.
+          // notification_type is a Postgres enum. Force-complete gets its
+          // own canonical type ('TASK_FORCE_COMPLETED'); paused/cancelled/
+          // normal-complete keep using 'EVENT_STATUS_CHANGED' (the exact
+          // transition lives in metadata.{previousStatus,newStatus}).
+          const notifyType = isForceComplete ? 'TASK_FORCE_COMPLETED' : 'EVENT_STATUS_CHANGED';
           const notifyRows: (typeof notifications.$inferInsert)[] = Array.from(recipients).map(rid => ({
             recipientId: rid,
-            type: 'EVENT_STATUS_CHANGED',
+            type: notifyType,
             title,
             message,
             entityType: 'EVENT',
@@ -4279,6 +4441,8 @@ export const eventsRouter = createTRPCRouter({
               newStatus: input.status,
               actorName,
               reason: input.reason ?? null,
+              outcome: completionOutcomeForUpdate ?? null,
+              forced: isForceComplete,
             } as Record<string, unknown>,
           }));
           if (notifyRows.length > 0) {
@@ -4353,8 +4517,18 @@ export const eventsRouter = createTRPCRouter({
 
       // Atomic compare-and-set so two admins clicking simultaneously don't
       // both flip; the loser sees CONFLICT and refetches.
+      // Phase 2 — clear the terminal completion stamp so the outcome
+      // badge / completedAt don't leak into the reopened active state.
+      // The audit log + REOPEN_EVENT row preserves the historical fact.
       const updated = await db.update(events)
-        .set({ status: 'active' as any, updatedAt: new Date() })
+        .set({
+          status: 'active' as any,
+          updatedAt: new Date(),
+          completionOutcome: null,
+          completionReason: null,
+          completedAt: null,
+          completedBy: null,
+        })
         .where(and(eq(events.id, input.eventId), eq(events.status, previousStatus)))
         .returning();
       if (!updated[0]) {

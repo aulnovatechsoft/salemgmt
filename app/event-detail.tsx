@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, RefreshControl, Modal, Platform } from 'react-native';
 import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
-import { MapPin, Calendar, Users, Plus, Trash2, Camera, User, X, Edit3, Play, Pause, CheckCircle, XCircle, ChevronRight, Clock, Flag, ListTodo, Zap, AlertCircle, Settings, Send, RotateCcw, CircleCheck, Hourglass, CircleDot, ThumbsUp, ThumbsDown, Check, ArrowLeft } from 'lucide-react-native';
+import { MapPin, Calendar, Users, Plus, Trash2, Camera, User, X, Edit3, Play, Pause, CheckCircle, XCircle, ChevronRight, Clock, Flag, ListTodo, Zap, AlertCircle, Settings, Send, RotateCcw, CircleCheck, Hourglass, CircleDot, ThumbsUp, ThumbsDown, Check, ArrowLeft, AlertTriangle } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { getDisplayTaskId } from '@/utils/taskId';
 import Colors from '@/constants/colors';
@@ -330,6 +330,11 @@ export default function EventDetailScreen() {
   const closeConfirm = () => setConfirmModal((c) => ({ ...c, visible: false, onConfirm: null }));
   const [showReopenModal, setShowReopenModal] = useState(false);
   const [reopenReason, setReopenReason] = useState('');
+  // Phase 2 — Force Complete (admin override past end-date when team can't
+  // get to approval). Captured separately from cancelReason so the two
+  // confirmation flows can't accidentally feed each other.
+  const [showForceCompleteModal, setShowForceCompleteModal] = useState(false);
+  const [forceCompleteReason, setForceCompleteReason] = useState('');
   const [showEditTargetModal, setShowEditTargetModal] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState('');
   const [simTarget, setSimTarget] = useState('');
@@ -611,12 +616,24 @@ export default function EventDetailScreen() {
         title = 'Task Paused';
         message = 'Team has been notified.';
       }
+      // Phase 2 — distinguish force-complete success in the toast so the
+      // admin sees confirmation that the override actually went through.
+      const outcome = (data as any)?.completionOutcome;
+      if (outcome === 'force_completed') {
+        title = 'Task Force-Completed';
+        message = 'Task closed by admin override. Any pending submissions were auto-rejected and the team has been notified.';
+      } else if (outcome === 'shortfall' && newStatus === 'completed') {
+        title = 'Task Completed (Shortfall)';
+        message = 'Marked as completed, but one or more category targets were not fully met.';
+      }
       Alert.alert(title, message);
       refetch();
       progressQuery.refetch();
       setShowStatusModal(false);
       setShowCancelReasonModal(false);
       setCancelReason('');
+      setShowForceCompleteModal(false);
+      setForceCompleteReason('');
     },
     onError: (error) => {
       // Friendly message when another user changed the task underneath us
@@ -633,6 +650,8 @@ export default function EventDetailScreen() {
       // reason after a backend rejection — user can re-open and retry cleanly.
       setShowCancelReasonModal(false);
       setCancelReason('');
+      setShowForceCompleteModal(false);
+      setForceCompleteReason('');
     },
   });
 
@@ -1092,6 +1111,25 @@ export default function EventDetailScreen() {
     });
   };
 
+  // Phase 2 — submit a force-complete. Only ADMIN/CMD can reach this UI;
+  // server independently re-validates role + reason length so a tampered
+  // client payload still gets rejected.
+  const submitForceComplete = () => {
+    const trimmed = forceCompleteReason.trim();
+    if (trimmed.length < 5) {
+      Alert.alert('Reason required', 'Please enter at least a few words explaining why this task is being force-completed.');
+      return;
+    }
+    if (!eventData || !employee?.id) return;
+    updateStatusMutation.mutate({
+      eventId: eventData.id,
+      status: 'completed',
+      reason: trimmed,
+      force: true,
+      updatedBy: employee.id,
+    });
+  };
+
   const handleCreateSubtask = () => {
     if (!subtaskTitle.trim()) {
       Alert.alert('Error', 'Please enter subtask title');
@@ -1512,6 +1550,46 @@ export default function EventDetailScreen() {
                 {getDisplayTaskId(eventData)}
               </Text>
               <Text style={styles.eventName}>{eventData.name}</Text>
+              {/* Phase 2 — completion outcome badge. Sits directly under the
+                  task name so reviewers can tell at a glance whether a
+                  completed task hit its targets, finished short, was
+                  force-closed by an admin, or was cancelled. Only renders
+                  for terminal states where an outcome was stamped. */}
+              {(() => {
+                // Defense-in-depth: only render outcome metadata for
+                // terminal states. The backend now clears these fields on
+                // reopen, but a stale render would be very misleading so
+                // we double-gate here.
+                if (dbStatus !== 'completed' && dbStatus !== 'cancelled') return null;
+                const oc = (eventData as any)?.completionOutcome as
+                  'on_target' | 'shortfall' | 'force_completed' | 'cancelled' | null | undefined;
+                if (!oc) return null;
+                const map = {
+                  on_target:       { label: 'On Target',       bg: '#E8F5E9', fg: '#2E7D32' },
+                  shortfall:       { label: 'Shortfall',       bg: '#FFF3E0', fg: '#E65100' },
+                  force_completed: { label: 'Force-Completed', bg: '#FFE0B2', fg: '#BF360C' },
+                  cancelled:       { label: 'Cancelled',       bg: '#ECEFF1', fg: '#455A64' },
+                }[oc];
+                if (!map) return null;
+                const reason = (eventData as any)?.completionReason as string | null | undefined;
+                return (
+                  <View style={{ marginTop: 6, alignSelf: 'flex-start' }}>
+                    <View style={{
+                      paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8,
+                      backgroundColor: map.bg, alignSelf: 'flex-start',
+                    }}>
+                      <Text style={{ fontSize: 11, fontWeight: '700' as const, color: map.fg, letterSpacing: 0.3 }}>
+                        {map.label}
+                      </Text>
+                    </View>
+                    {reason ? (
+                      <Text style={{ fontSize: 11, color: Colors.light.textSecondary, marginTop: 3, fontStyle: 'italic' }} numberOfLines={2}>
+                        {reason}
+                      </Text>
+                    ) : null}
+                  </View>
+                );
+              })()}
             </View>
             <TouchableOpacity 
               style={[styles.statusBadge, { backgroundColor: statusBg }]}
@@ -1744,6 +1822,33 @@ export default function EventDetailScreen() {
                 >
                   <CheckCircle size={16} color="#fff" />
                   <Text style={styles.actionBtnText}>Complete</Text>
+                </TouchableOpacity>
+              )}
+              {/* Phase 2 — Force Complete (admin override). Visible only when:
+                  · The current user is ADMIN or CMD
+                  · The task is in active|paused (the only states 'completed' is reachable from)
+                  · The task has passed its end date (this is an override for
+                    expired work that didn't get full approval, not a way for
+                    admins to short-circuit live tasks)
+                  · The regular Complete is NOT available (i.e. the all-approved
+                    gate is failing) — otherwise the normal green button is the
+                    correct path and we don't want to confuse the admin.
+                  Tapping opens a dedicated reason-capture modal. */}
+              {availableTransitions.includes('completed')
+                && !completionReadiness.allApproved
+                && (employee?.role === 'ADMIN' || employee?.role === 'CMD')
+                && eventData?.endDate
+                && new Date(eventData.endDate).setHours(23,59,59,999) < Date.now()
+                && (
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.forceCompleteBtn]}
+                  onPress={() => {
+                    setForceCompleteReason('');
+                    setShowForceCompleteModal(true);
+                  }}
+                >
+                  <AlertTriangle size={16} color="#fff" />
+                  <Text style={styles.actionBtnText}>Force Complete</Text>
                 </TouchableOpacity>
               )}
               {availableTransitions.includes('cancelled') && (
@@ -3874,6 +3979,84 @@ export default function EventDetailScreen() {
         </TouchableOpacity>
       </Modal>
 
+      {/* Phase 2 — Force Complete modal (admin override). Captures the
+          mandatory reason; on submit, fires updateStatusMutation with
+          force=true. Server independently re-validates role + length so a
+          tampered client can't bypass authorization. */}
+      <Modal
+        visible={showForceCompleteModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => !updateStatusMutation.isPending && setShowForceCompleteModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => !updateStatusMutation.isPending && setShowForceCompleteModal(false)}
+        >
+          <View style={styles.statusModalContent}>
+            <View style={styles.statusModalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <AlertTriangle size={20} color="#E65100" />
+                <Text style={styles.statusModalTitle}>Force Complete Task</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => !updateStatusMutation.isPending && setShowForceCompleteModal(false)}
+                disabled={updateStatusMutation.isPending}
+              >
+                <X size={24} color={Colors.light.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <View style={{
+              backgroundColor: '#FFF3E0', borderRadius: 8, padding: 12, marginBottom: 12,
+              borderLeftWidth: 3, borderLeftColor: '#E65100',
+            }}>
+              <Text style={{ fontSize: 13, color: '#BF360C', lineHeight: 18 }}>
+                This is an admin override. The task will be marked as completed even though not all assignments are approved. Any pending submissions will be auto-rejected and the team will be notified. This action is logged for audit.
+              </Text>
+            </View>
+            <Text style={{ fontSize: 14, color: Colors.light.textSecondary, marginBottom: 8 }}>
+              Reason (required, 5+ characters):
+            </Text>
+            <TextInput
+              style={[styles.input, { minHeight: 96, textAlignVertical: 'top' }]}
+              placeholder="e.g. End date passed; field team unavailable to submit. Closing per circle head approval."
+              value={forceCompleteReason}
+              onChangeText={setForceCompleteReason}
+              multiline
+              maxLength={500}
+              placeholderTextColor={Colors.light.textSecondary}
+              editable={!updateStatusMutation.isPending}
+            />
+            <Text style={{ fontSize: 12, color: Colors.light.textSecondary, alignSelf: 'flex-end', marginTop: 4 }}>
+              {forceCompleteReason.length}/500
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
+              <TouchableOpacity
+                style={[styles.secondaryButton, { flex: 1 }]}
+                onPress={() => setShowForceCompleteModal(false)}
+                disabled={updateStatusMutation.isPending}
+              >
+                <Text style={styles.secondaryButtonText}>Keep Open</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.primaryButton, {
+                  flex: 1,
+                  backgroundColor: '#E65100',
+                  opacity: updateStatusMutation.isPending ? 0.6 : 1,
+                }]}
+                onPress={submitForceComplete}
+                disabled={updateStatusMutation.isPending}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {updateStatusMutation.isPending ? 'Completing…' : 'Force Complete'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* Generic in-app confirm dialog — replaces window.confirm so users
           never see the raw "<host> says" browser dialog in production. */}
       <Modal
@@ -4216,6 +4399,7 @@ const styles = StyleSheet.create({
   completeBtn: { backgroundColor: '#2E7D32' },
   cancelBtn: { backgroundColor: Colors.light.error },
   draftBtn: { backgroundColor: '#78909C' },
+  forceCompleteBtn: { backgroundColor: '#E65100' },
   summarySection: { backgroundColor: Colors.light.card, padding: 16, marginBottom: 12 },
   sectionTitle: { fontSize: 16, fontWeight: 'bold' as const, color: Colors.light.text, marginBottom: 12 },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },

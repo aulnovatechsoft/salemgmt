@@ -592,6 +592,20 @@ async function createTables() {
     }
     console.log(`Finance bigint migration: ${widened} widened, ${skipped} skipped`);
 
+    // Phase 2 — completion outcome tracking columns on events.
+    // Idempotent ALTER TABLEs so the same migrate run is safe on prod
+    // (where the columns already exist) and on a fresh DB.
+    try {
+      await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS completion_outcome VARCHAR(32)`;
+      await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS completion_reason TEXT`;
+      await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP`;
+      await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS completed_by UUID REFERENCES employees(id)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_events_completion_outcome ON events(completion_outcome)`;
+      console.log("events completion-outcome columns ensured");
+    } catch (e: any) {
+      console.log(`events completion-outcome columns: ${e?.message || e}`);
+    }
+
     // Run ad-hoc sub-migrations so a single `bun run backend/db/migrate.ts`
     // is sufficient — no separate scripts to remember.
     await syncReviewSnapshotColumns(sql);

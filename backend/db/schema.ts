@@ -56,7 +56,8 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'TASK_ENDING_TODAY',
   'FINANCE_COLLECTION_SUBMITTED',
   'FINANCE_COLLECTION_APPROVED',
-  'FINANCE_COLLECTION_REJECTED'
+  'FINANCE_COLLECTION_REJECTED',
+  'TASK_FORCE_COMPLETED'
 ]);
 
 export const auditEntityTypeEnum = pgEnum('audit_entity_type', ['EVENT', 'SALES', 'RESOURCE', 'ISSUE', 'EMPLOYEE', 'FINANCE']);
@@ -133,6 +134,19 @@ export const events = pgTable('events', {
   ofcFailStartedAt: timestamp('ofc_fail_started_at'),
   keyInsight: text('key_insight'),
   status: varchar('status', { length: 50 }).default('active'),
+  // Phase 2 — completion outcome tracking. Stamped whenever the task
+  // transitions to a terminal state (completed | cancelled). Values:
+  //   'on_target'        — completed with every category target met
+  //   'shortfall'        — completed (all approved) but ≥1 target was short
+  //   'force_completed'  — admin force-completed past end-date / with shortfall
+  //   'cancelled'        — task was cancelled
+  // Null while the task is still active/paused/draft. Surfaces as a badge
+  // on the task header and in reports so the org can distinguish the four
+  // very different "this task is over" outcomes.
+  completionOutcome: varchar('completion_outcome', { length: 32 }),
+  completionReason: text('completion_reason'),
+  completedAt: timestamp('completed_at'),
+  completedBy: uuid('completed_by').references(() => employees.id),
   assignedTo: uuid('assigned_to').references(() => employees.id),
   createdBy: uuid('created_by').notNull().references(() => employees.id),
   createdAt: timestamp('created_at').defaultNow().notNull(),
