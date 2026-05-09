@@ -23,6 +23,7 @@ export default function IssuesScreen() {
   // used everywhere else in the app.
   const [resultModal, setResultModal] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
 
+  const utils = trpc.useUtils();
   const { data: allIssues, isLoading, refetch } = trpc.issues.getAll.useQuery(undefined, {
     enabled: !!employee?.id,
   });
@@ -42,13 +43,24 @@ export default function IssuesScreen() {
   }, []);
 
   const updateStatusMutation = trpc.issues.updateStatus.useMutation({
-    onSuccess: () => {
+    onSuccess: async (updated) => {
       closeResolveModal();
-      refetch();
-      // Use the in-screen result modal (same look as the Resolve modal)
-      // instead of window.alert. window.alert shows the browser's
-      // chrome-y "<host> says" dialog, which feels broken inside the
-      // app shell.
+      // Optimistic cache update so the card flips to RESOLVED instantly,
+      // BEFORE the await refetch below completes. Without this, the
+      // success modal pops on top of a card that still says OPEN, which
+      // looks broken even though the server already accepted the change.
+      if (updated?.id) {
+        utils.issues.getAll.setData(undefined, (prev) => {
+          if (!Array.isArray(prev)) return prev;
+          return prev.map((i) => (i.id === updated.id ? { ...i, ...updated } : i));
+        });
+      }
+      // Then re-pull from the server to pick up timeline / resolvedAt /
+      // any concurrent edits. We invalidate so any other mounted
+      // consumer of issues.getAll (e.g. notification badge) also refreshes.
+      await utils.issues.getAll.invalidate();
+      await refetch();
+      // In-screen result modal (matches the rest of the app's style).
       setResultModal({ kind: 'success', message: 'Issue resolved successfully' });
     },
     onError: (error) => {
