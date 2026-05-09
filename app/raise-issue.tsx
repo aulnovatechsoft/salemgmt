@@ -119,7 +119,9 @@ export default function RaiseIssueScreen() {
             onPress={() => setShowEventPicker(true)}
           >
             <Text style={selectedEvent ? styles.selectorText : styles.selectorPlaceholder}>
-              {selectedEvent ? `${selectedEvent.name} - ${selectedEvent.location}` : 'Select a task'}
+              {selectedEvent
+                ? `${selectedEvent.displayId ? selectedEvent.displayId + ' · ' : ''}${selectedEvent.name}${selectedEvent.location ? ' — ' + selectedEvent.location : ''}`
+                : 'Select a task'}
             </Text>
             <ChevronDown size={20} color={Colors.light.textSecondary} />
           </TouchableOpacity>
@@ -201,8 +203,13 @@ export default function RaiseIssueScreen() {
                     }}
                   >
                     <View style={styles.modalItemContent}>
+                      {event.displayId ? (
+                        <Text style={styles.modalItemId}>{event.displayId}</Text>
+                      ) : null}
                       <Text style={styles.modalItemTitle}>{event.name}</Text>
-                      <Text style={styles.modalItemSubtitle}>{event.location}</Text>
+                      {event.location ? (
+                        <Text style={styles.modalItemSubtitle}>{event.location}</Text>
+                      ) : null}
                     </View>
                     {selectedEventId === event.id && (
                       <Check size={20} color={Colors.light.primary} />
@@ -378,6 +385,13 @@ const styles = StyleSheet.create({
   },
   modalItemContent: {
     flex: 1,
+  },
+  modalItemId: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.light.primary,
+    marginBottom: 2,
+    letterSpacing: 0.3,
   },
   modalItemTitle: {
     fontSize: 15,
