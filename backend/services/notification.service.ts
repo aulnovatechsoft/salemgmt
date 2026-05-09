@@ -299,6 +299,72 @@ export async function createNotification(params: CreateNotificationParams): Prom
   }
 }
 
+/**
+ * Best-effort push dispatch for an already-inserted notification row.
+ * Use after a `tx.insert(notifications)` that ran inside a DB transaction —
+ * the bell is already durable; this fans out the Expo push outside the tx
+ * so a network outage never rolls back the original commit. Honours
+ * push-disabled user prefs, dedupes by reading nothing (caller is
+ * responsible for the bell-side dedupe inside the tx).
+ *
+ * Mirrors the push half of `createNotification` so behaviour stays consistent.
+ */
+export async function dispatchPushForNotification(params: {
+  notificationId: string;
+  recipientId: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  entityType?: string;
+  entityId?: string;
+}): Promise<void> {
+  try {
+    const prefs = await checkUserPreference(params.recipientId, params.type);
+    if (!prefs.pushEnabled) return;
+
+    const tokenRecords = await db.select()
+      .from(pushTokens)
+      .where(and(
+        eq(pushTokens.employeeId, params.recipientId),
+        eq(pushTokens.isActive, true),
+        lt(pushTokens.failureCount, MAX_FAILURE_COUNT)
+      ));
+    if (tokenRecords.length === 0) return;
+
+    const messages: PushMessage[] = tokenRecords.map(record => ({
+      to: record.token,
+      sound: 'default',
+      title: params.title,
+      body: params.message,
+      data: {
+        notificationId: params.notificationId,
+        type: params.type,
+        entityType: params.entityType,
+        entityId: params.entityId,
+      },
+    }));
+
+    const tickets = await sendExpoPushNotificationsBatch(messages);
+    for (let i = 0; i < tickets.length; i++) {
+      const ticket = tickets[i];
+      const tokenRecord = tokenRecords[i];
+      if (!tokenRecord) continue;
+      if (ticket.status === 'error') {
+        await queuePushNotification(params.notificationId, tokenRecord.token, messages[i]);
+        await db.update(pushTokens)
+          .set({ failureCount: tokenRecord.failureCount + 1, updatedAt: new Date() })
+          .where(eq(pushTokens.id, tokenRecord.id));
+      } else if (ticket.status === 'ok') {
+        await db.update(pushTokens)
+          .set({ lastUsedAt: new Date(), failureCount: 0, updatedAt: new Date() })
+          .where(eq(pushTokens.id, tokenRecord.id));
+      }
+    }
+  } catch (error) {
+    console.error('dispatchPushForNotification failed (non-fatal):', error);
+  }
+}
+
 export async function createBulkNotifications(
   recipientIds: string[],
   params: Omit<CreateNotificationParams, 'recipientId'>

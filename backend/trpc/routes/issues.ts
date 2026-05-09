@@ -1,274 +1,636 @@
 import { z } from "zod";
-import { eq, and, desc } from "drizzle-orm";
-import { createTRPCRouter, publicProcedure } from "../create-context";
-import { db, issues, auditLogs, events, employees } from "@/backend/db";
-import { notifyIssueRaised, notifyIssueResolved, notifyIssueEscalated } from "@/backend/services/notification.service";
+import { eq, and, desc, gte } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
+import { createTRPCRouter, authedProcedure } from "../create-context";
+import { db, issues, auditLogs, events, employees, notifications, notificationPreferences } from "@/backend/db";
+import { dispatchPushForNotification } from "@/backend/services/notification.service";
+
+// 5-minute dedupe window — matches the in-tx pattern used elsewhere
+// (see submitTaskForReview). Same value as DEDUPE_WINDOW_MS in the
+// notification service.
+const DEDUPE_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * Authorization helper: who is allowed to act on a given issue.
+ * Returns the loaded issue + event rows for downstream use, or throws.
+ *
+ * Allowed actors:
+ *   · Original raiser
+ *   · Currently escalated-to manager
+ *   · The task's creator (createdBy)
+ *   · The task's assigned manager (assignedTo)
+ *   · Any ADMIN or CMD
+ *
+ * This intentionally mirrors `events.ts` `isPriv / isOwner / isManager`
+ * shape so behaviour is consistent across the app. Frontend gating
+ * (canResolve etc.) is purely cosmetic — this server check is the
+ * actual security boundary.
+ */
+async function loadAndAuthorize(
+  issueId: string,
+  actorId: string,
+): Promise<{ issue: typeof issues.$inferSelect; event: typeof events.$inferSelect | null; actor: typeof employees.$inferSelect }> {
+  const [actor] = await db.select().from(employees).where(eq(employees.id, actorId)).limit(1);
+  if (!actor) {
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Your session is no longer valid. Please log in again.' });
+  }
+
+  const [issue] = await db.select().from(issues).where(eq(issues.id, issueId)).limit(1);
+  if (!issue) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Issue not found.' });
+  }
+
+  const [event] = await db.select().from(events).where(eq(events.id, issue.eventId)).limit(1);
+
+  const isPriv = actor.role === 'ADMIN' || actor.role === 'CMD';
+  const isRaiser = issue.raisedBy === actorId;
+  const isEscalatedTo = issue.escalatedTo === actorId;
+  const isCreator = event?.createdBy === actorId;
+  const isManager = event?.assignedTo === actorId;
+
+  if (!isPriv && !isRaiser && !isEscalatedTo && !isCreator && !isManager) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You are not authorised to act on this issue.',
+    });
+  }
+
+  return { issue, event: event ?? null, actor };
+}
 
 export const issuesRouter = createTRPCRouter({
-  getAll: publicProcedure
+  // ─── Queries ──────────────────────────────────────────────────────────────
+  // All queries require auth so anonymous callers can't pull issue data.
+  // (Per-recipient filtering for getAll is part of the High-severity sprint;
+  // this Critical pass only locks down the writes + auth boundary.)
+
+  getAll: authedProcedure
     .input(z.object({
       eventId: z.string().uuid().optional(),
       status: z.enum(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']).optional(),
     }).optional())
     .query(async ({ input }) => {
       console.log("Fetching all issues", input);
-      const results = await db.select().from(issues).orderBy(desc(issues.createdAt));
+      // Honour input filters that were previously silently ignored.
+      const conds = [] as any[];
+      if (input?.eventId) conds.push(eq(issues.eventId, input.eventId));
+      if (input?.status) conds.push(eq(issues.status, input.status));
+      const q = db.select().from(issues);
+      const results = conds.length > 0
+        ? await q.where(and(...conds)).orderBy(desc(issues.createdAt))
+        : await q.orderBy(desc(issues.createdAt));
       return results;
     }),
 
-  getById: publicProcedure
+  getById: authedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
-      console.log("Fetching issue by id:", input.id);
       const result = await db.select().from(issues).where(eq(issues.id, input.id));
       return result[0] || null;
     }),
 
-  getByEvent: publicProcedure
+  getByEvent: authedProcedure
     .input(z.object({ eventId: z.string().uuid() }))
     .query(async ({ input }) => {
-      console.log("Fetching issues by event:", input.eventId);
       const result = await db.select().from(issues)
         .where(eq(issues.eventId, input.eventId))
         .orderBy(desc(issues.createdAt));
       return result;
     }),
 
-  getByRaisedBy: publicProcedure
+  getByRaisedBy: authedProcedure
     .input(z.object({ raisedBy: z.string().uuid() }))
-    .query(async ({ input }) => {
-      console.log("Fetching issues raised by:", input.raisedBy);
+    .query(async ({ input, ctx }) => {
+      // A user can only query their own raised-issues list. Privileged
+      // roles (ADMIN/CMD) can query anyone's. Otherwise we'd leak the
+      // count + content of issues raised by other employees.
+      if (input.raisedBy !== ctx.employeeId) {
+        const [actor] = await db.select({ role: employees.role })
+          .from(employees).where(eq(employees.id, ctx.employeeId)).limit(1);
+        if (!actor || (actor.role !== 'ADMIN' && actor.role !== 'CMD')) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only view your own raised issues.' });
+        }
+      }
       const result = await db.select().from(issues)
         .where(eq(issues.raisedBy, input.raisedBy))
         .orderBy(desc(issues.createdAt));
       return result;
     }),
 
-  getByStatus: publicProcedure
+  getByStatus: authedProcedure
     .input(z.object({ status: z.enum(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']) }))
     .query(async ({ input }) => {
-      console.log("Fetching issues by status:", input.status);
       const result = await db.select().from(issues)
         .where(eq(issues.status, input.status))
         .orderBy(desc(issues.createdAt));
       return result;
     }),
 
-  create: publicProcedure
+  getOpenCount: authedProcedure
+    .query(async () => {
+      const result = await db.select().from(issues)
+        .where(eq(issues.status, 'OPEN'));
+      return result.length;
+    }),
+
+  // ─── Mutations ────────────────────────────────────────────────────────────
+
+  create: authedProcedure
     .input(z.object({
       eventId: z.string().uuid(),
-      raisedBy: z.string().uuid(),
+      // Legacy: clients may still send their own id. Authority comes from
+      // ctx.employeeId — input is accepted only if it matches the session.
+      raisedBy: z.string().uuid().optional(),
       type: z.enum(['MATERIAL_SHORTAGE', 'SITE_ACCESS', 'EQUIPMENT', 'NETWORK_PROBLEM', 'OTHER']),
       description: z.string().min(1),
       escalatedTo: z.string().uuid().optional().nullable(),
     }))
-    .mutation(async ({ input }) => {
-      console.log("Creating issue for event:", input.eventId);
-      console.log("Issue input:", JSON.stringify(input, null, 2));
-      
-      const timeline = [{
-        action: 'Issue Created',
-        performedBy: input.raisedBy,
-        timestamp: new Date().toISOString(),
-      }];
+    .mutation(async ({ input, ctx }) => {
+      if (input.raisedBy && input.raisedBy !== ctx.employeeId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only raise issues as yourself.',
+        });
+      }
+      const actorId = ctx.employeeId;
 
-      try {
-        const result = await db.insert(issues).values({
+      // Validate event exists (also gives us the creator for escalation
+      // fallback + the in-tx notification recipient).
+      const [eventRow] = await db.select().from(events)
+        .where(eq(events.id, input.eventId)).limit(1);
+      if (!eventRow) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Task not found.' });
+      }
+
+      // Validate the explicit escalation target if the client sent one.
+      let escalateTargetId: string | null = input.escalatedTo ?? null;
+      if (escalateTargetId) {
+        if (escalateTargetId === actorId) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot escalate an issue to yourself.' });
+        }
+        const [target] = await db.select({ id: employees.id })
+          .from(employees).where(eq(employees.id, escalateTargetId)).limit(1);
+        if (!target) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Escalation target is not a valid employee.' });
+        }
+      } else {
+        // Fall back to the task creator if no explicit target was supplied
+        // and the actor is not themselves the creator.
+        if (eventRow.createdBy && eventRow.createdBy !== actorId) {
+          escalateTargetId = eventRow.createdBy;
+        }
+      }
+
+      // ────────────────────────────────────────────────────────────────────
+      // Wrap the insert + audit + notification in a SINGLE transaction.
+      // Same production-grade pattern as submitTaskForReview: a server
+      // restart between the insert and the notification fan-out must
+      // never leave the issue created but the manager's bell silent.
+      // Push dispatch is best-effort and stays outside the tx (so an
+      // Expo / network outage never rolls back a successful issue create).
+      // ────────────────────────────────────────────────────────────────────
+      type PushParams = { notificationId: string; recipientId: string; title: string; message: string };
+      const result = await db.transaction(async (tx) => {
+        let pushParams: PushParams | null = null;
+        const timeline = [{
+          action: 'Issue Created',
+          performedBy: actorId,
+          timestamp: new Date().toISOString(),
+        }];
+
+        const [created] = await tx.insert(issues).values({
           eventId: input.eventId,
-          raisedBy: input.raisedBy,
+          raisedBy: actorId,
           type: input.type,
           description: input.description,
-          escalatedTo: input.escalatedTo || null,
-          timeline: timeline,
+          escalatedTo: escalateTargetId,
+          timeline,
         }).returning();
 
-        console.log("Issue created successfully:", result[0]?.id);
-
-        await db.insert(auditLogs).values({
+        await tx.insert(auditLogs).values({
           action: 'CREATE_ISSUE',
           entityType: 'ISSUE',
-          entityId: result[0].id,
-          performedBy: input.raisedBy,
-          details: { 
+          entityId: created.id,
+          performedBy: actorId,
+          details: {
             eventId: input.eventId,
             type: input.type,
+            escalatedTo: escalateTargetId,
           },
         });
 
-        // Send notification to task creator
-        try {
-          const event = await db.select().from(events)
-            .where(eq(events.id, input.eventId));
-          const raiser = await db.select().from(employees)
-            .where(eq(employees.id, input.raisedBy));
-          
-          if (event[0] && raiser[0]) {
-            await notifyIssueRaised(
-              event[0].createdBy,
-              result[0].id,
-              input.type,
-              event[0].name,
-              raiser[0].name
-            );
-            console.log("Issue notification sent to task creator:", event[0].createdBy);
+        // Bell notification (in-tx, atomic with the insert).
+        let createdNotificationId: string | null = null;
+        if (escalateTargetId && escalateTargetId !== actorId) {
+          const [pref] = await tx.select({
+            enabled: notificationPreferences.enabled,
+          }).from(notificationPreferences).where(and(
+            eq(notificationPreferences.employeeId, escalateTargetId),
+            eq(notificationPreferences.notificationType, 'ISSUE_RAISED'),
+          )).limit(1);
+          const enabled = pref?.enabled ?? true;
+          if (enabled) {
+            const [actorRow] = await tx.select({ name: employees.name })
+              .from(employees).where(eq(employees.id, actorId)).limit(1);
+            // Include actor in dedupeKey so two different raisers can each
+            // notify the same manager about the same event within the
+            // 5-min window without colliding (matches submit-for-review
+            // dedupe pattern).
+            const dedupeKey = `ISSUE:${created.id}:ISSUE_RAISED:${actorId}`;
+            const windowStart = new Date(Date.now() - DEDUPE_WINDOW_MS);
+            const [dup] = await tx.select({ id: notifications.id })
+              .from(notifications).where(and(
+                eq(notifications.recipientId, escalateTargetId),
+                eq(notifications.type, 'ISSUE_RAISED'),
+                eq(notifications.dedupeKey, dedupeKey),
+                gte(notifications.createdAt, windowStart),
+              )).limit(1);
+            if (!dup) {
+              const title = 'New Issue Raised';
+              const message = `${actorRow?.name ?? 'A team member'} raised a ${input.type} issue for "${eventRow.name}"`;
+              const [inserted] = await tx.insert(notifications).values({
+                recipientId: escalateTargetId,
+                type: 'ISSUE_RAISED',
+                title,
+                message,
+                entityType: 'ISSUE',
+                entityId: created.id,
+                metadata: {
+                  issueType: input.type,
+                  eventName: eventRow.name,
+                  raisedByName: actorRow?.name ?? null,
+                },
+                dedupeKey,
+              }).returning({ id: notifications.id });
+              createdNotificationId = inserted?.id ?? null;
+              if (createdNotificationId) {
+                pushParams = {
+                  notificationId: createdNotificationId,
+                  recipientId: escalateTargetId,
+                  title,
+                  message,
+                };
+              }
+            }
           }
-        } catch (notifError) {
-          console.error("Failed to send issue notification:", notifError);
         }
 
-        return result[0];
-      } catch (error: any) {
-        console.error("Error creating issue:", error.message);
-        throw new Error(`Failed to create issue: ${error.message}`);
+        return { created, createdNotificationId, escalateTargetId, pushParams };
+      });
+
+      // Push dispatch — outside tx, best-effort. The bell row is durable;
+      // a push outage must never roll back a successful issue create.
+      if (result.pushParams) {
+        await dispatchPushForNotification({
+          notificationId: result.pushParams.notificationId,
+          recipientId: result.pushParams.recipientId,
+          type: 'ISSUE_RAISED',
+          title: result.pushParams.title,
+          message: result.pushParams.message,
+          entityType: 'ISSUE',
+          entityId: result.created.id,
+        });
       }
+
+      return result.created;
     }),
 
-  updateStatus: publicProcedure
+  updateStatus: authedProcedure
     .input(z.object({
       id: z.string().uuid(),
       status: z.enum(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']),
-      updatedBy: z.string().uuid(),
+      // Legacy field retained for client compatibility; ignored if it
+      // doesn't match ctx.employeeId.
+      updatedBy: z.string().uuid().optional(),
       remarks: z.string().optional(),
     }))
-    .mutation(async ({ input }) => {
-      console.log("Updating issue status:", input.id);
-      
-      const existing = await db.select().from(issues).where(eq(issues.id, input.id));
-      if (!existing[0]) {
-        throw new Error("Issue not found");
+    .mutation(async ({ input, ctx }) => {
+      if (input.updatedBy && input.updatedBy !== ctx.employeeId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only update issues as yourself.',
+        });
       }
+      const actorId = ctx.employeeId;
 
-      const currentTimeline = (existing[0].timeline as { action: string; performedBy: string; timestamp: string }[]) || [];
-      const newTimeline = [
-        ...currentTimeline,
-        {
-          action: `Status changed to ${input.status}${input.remarks ? `: ${input.remarks}` : ''}`,
-          performedBy: input.updatedBy,
-          timestamp: new Date().toISOString(),
-        },
-      ];
+      // Friendly pre-tx authorization probe (cheap, gives nice error
+      // messages without opening a tx). The authoritative check is the
+      // re-read with `for update` inside the tx below — that closes the
+      // TOCTOU window where a concurrent escalation/close could otherwise
+      // slip past the outer check.
+      await loadAndAuthorize(input.id, actorId);
 
-      const updateData: Record<string, unknown> = {
-        status: input.status,
-        timeline: newTimeline,
-        updatedAt: new Date(),
-      };
+      type PushParams = { notificationId: string; recipientId: string; title: string; message: string };
+      const result = await db.transaction(async (tx) => {
+        let pushParams: PushParams | null = null;
+        // ── In-tx authorization re-check with row lock ──────────────────
+        // SELECT ... FOR UPDATE on the issue row blocks any concurrent
+        // escalation/status change until this tx commits or rolls back.
+        // We then re-evaluate the same authorization predicate against
+        // the now-locked row. If a concurrent escalation has changed
+        // `escalatedTo` away from the actor (and the actor wasn't the
+        // raiser/creator/manager/admin), this throws FORBIDDEN before
+        // any UPDATE runs.
+        const [existing] = await tx.select().from(issues)
+          .where(eq(issues.id, input.id)).for('update').limit(1);
+        if (!existing) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Issue not found.' });
+        }
+        const [event] = await tx.select().from(events)
+          .where(eq(events.id, existing.eventId)).limit(1);
+        const [actor] = await tx.select({ role: employees.role })
+          .from(employees).where(eq(employees.id, actorId)).limit(1);
+        if (!actor) {
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Your session is no longer valid.' });
+        }
+        const isPriv = actor.role === 'ADMIN' || actor.role === 'CMD';
+        const isRaiser = existing.raisedBy === actorId;
+        const isEscalatedTo = existing.escalatedTo === actorId;
+        const isCreator = event?.createdBy === actorId;
+        const isManager = event?.assignedTo === actorId;
+        if (!isPriv && !isRaiser && !isEscalatedTo && !isCreator && !isManager) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You are no longer authorised to act on this issue (it may have just been re-escalated).',
+          });
+        }
+        // SALES_STAFF / SD_JTO cannot resolve issues raised by others.
+        if (!isRaiser && (actor.role === 'SALES_STAFF' || actor.role === 'SD_JTO')) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only managers can resolve issues raised by other employees.',
+          });
+        }
 
-      if (input.status === 'RESOLVED' || input.status === 'CLOSED') {
-        updateData.resolvedBy = input.updatedBy;
-        updateData.resolvedAt = new Date();
-      }
+        const currentTimeline = (existing.timeline as { action: string; performedBy: string; timestamp: string }[]) || [];
+        const newTimeline = [
+          ...currentTimeline,
+          {
+            action: `Status changed to ${input.status}${input.remarks ? `: ${input.remarks}` : ''}`,
+            performedBy: actorId,
+            timestamp: new Date().toISOString(),
+          },
+        ];
 
-      const result = await db.update(issues)
-        .set(updateData)
-        .where(eq(issues.id, input.id))
-        .returning();
+        const updateData: Record<string, unknown> = {
+          status: input.status,
+          timeline: newTimeline,
+          updatedAt: new Date(),
+        };
+        if (input.status === 'RESOLVED' || input.status === 'CLOSED') {
+          updateData.resolvedBy = actorId;
+          updateData.resolvedAt = new Date();
+        }
 
-      await db.insert(auditLogs).values({
-        action: 'UPDATE_ISSUE_STATUS',
-        entityType: 'ISSUE',
-        entityId: input.id,
-        performedBy: input.updatedBy,
-        details: { status: input.status },
+        const [updated] = await tx.update(issues)
+          .set(updateData)
+          .where(eq(issues.id, input.id))
+          .returning();
+
+        await tx.insert(auditLogs).values({
+          action: 'UPDATE_ISSUE_STATUS',
+          entityType: 'ISSUE',
+          entityId: input.id,
+          performedBy: actorId,
+          details: {
+            status: input.status,
+            remarks: input.remarks ?? null,
+            previousStatus: existing.status,
+          },
+        });
+
+        // Resolution notification (in-tx, atomic). Skip when the actor is
+        // notifying themselves (raiser self-resolves their own issue).
+        let createdNotificationId: string | null = null;
+        if ((input.status === 'RESOLVED' || input.status === 'CLOSED')
+            && existing.raisedBy !== actorId) {
+          const [pref] = await tx.select({
+            enabled: notificationPreferences.enabled,
+          }).from(notificationPreferences).where(and(
+            eq(notificationPreferences.employeeId, existing.raisedBy),
+            eq(notificationPreferences.notificationType, 'ISSUE_RESOLVED'),
+          )).limit(1);
+          const enabled = pref?.enabled ?? true;
+          if (enabled) {
+            const [actorRow] = await tx.select({ name: employees.name })
+              .from(employees).where(eq(employees.id, actorId)).limit(1);
+            const dedupeKey = `ISSUE:${input.id}:ISSUE_RESOLVED:${actorId}`;
+            const windowStart = new Date(Date.now() - DEDUPE_WINDOW_MS);
+            const [dup] = await tx.select({ id: notifications.id })
+              .from(notifications).where(and(
+                eq(notifications.recipientId, existing.raisedBy),
+                eq(notifications.type, 'ISSUE_RESOLVED'),
+                eq(notifications.dedupeKey, dedupeKey),
+                gte(notifications.createdAt, windowStart),
+              )).limit(1);
+            if (!dup) {
+              const title = 'Issue Resolved';
+              const message = `Your ${existing.type} issue for "${event?.name ?? 'a task'}" has been resolved by ${actorRow?.name ?? 'a manager'}`;
+              const [inserted] = await tx.insert(notifications).values({
+                recipientId: existing.raisedBy,
+                type: 'ISSUE_RESOLVED',
+                title,
+                message,
+                entityType: 'ISSUE',
+                entityId: input.id,
+                metadata: {
+                  issueType: existing.type,
+                  eventName: event?.name ?? null,
+                  resolvedByName: actorRow?.name ?? null,
+                },
+                dedupeKey,
+              }).returning({ id: notifications.id });
+              createdNotificationId = inserted?.id ?? null;
+              if (createdNotificationId) {
+                pushParams = {
+                  notificationId: createdNotificationId,
+                  recipientId: existing.raisedBy,
+                  title,
+                  message,
+                };
+              }
+            }
+          }
+        }
+
+        return { updated, createdNotificationId, pushParams };
       });
 
-      // Send notification when issue is resolved
-      if (input.status === 'RESOLVED' || input.status === 'CLOSED') {
-        try {
-          const event = await db.select().from(events)
-            .where(eq(events.id, existing[0].eventId));
-          const resolver = await db.select().from(employees)
-            .where(eq(employees.id, input.updatedBy));
-          
-          if (event[0] && resolver[0]) {
-            await notifyIssueResolved(
-              existing[0].raisedBy,
-              input.id,
-              existing[0].type,
-              event[0].name,
-              resolver[0].name
-            );
-            console.log("Issue resolution notification sent to raiser:", existing[0].raisedBy);
-          }
-        } catch (notifError) {
-          console.error("Failed to send issue resolution notification:", notifError);
-        }
+      if (result.pushParams) {
+        await dispatchPushForNotification({
+          notificationId: result.pushParams.notificationId,
+          recipientId: result.pushParams.recipientId,
+          type: 'ISSUE_RESOLVED',
+          title: result.pushParams.title,
+          message: result.pushParams.message,
+          entityType: 'ISSUE',
+          entityId: input.id,
+        });
       }
 
-      return result[0];
+      return result.updated;
     }),
 
-  escalate: publicProcedure
+  escalate: authedProcedure
     .input(z.object({
       id: z.string().uuid(),
       escalatedTo: z.string().uuid(),
-      escalatedBy: z.string().uuid(),
+      // Legacy field — ignored if it doesn't match ctx.employeeId.
+      escalatedBy: z.string().uuid().optional(),
     }))
-    .mutation(async ({ input }) => {
-      console.log("Escalating issue:", input.id);
-      
-      const existing = await db.select().from(issues).where(eq(issues.id, input.id));
-      if (!existing[0]) {
-        throw new Error("Issue not found");
+    .mutation(async ({ input, ctx }) => {
+      if (input.escalatedBy && input.escalatedBy !== ctx.employeeId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only escalate issues as yourself.',
+        });
+      }
+      const actorId = ctx.employeeId;
+
+      // Friendly pre-tx authorization probe + target validation. The
+      // authoritative auth check is the FOR UPDATE re-read inside the tx
+      // below — that closes the TOCTOU window where a concurrent
+      // escalation could otherwise change `escalatedTo` between this
+      // check and the UPDATE.
+      await loadAndAuthorize(input.id, actorId);
+      if (input.escalatedTo === actorId) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot escalate an issue to yourself.' });
+      }
+      const [target] = await db.select({ id: employees.id, name: employees.name })
+        .from(employees).where(eq(employees.id, input.escalatedTo)).limit(1);
+      if (!target) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Escalation target is not a valid employee.' });
       }
 
-      const currentTimeline = (existing[0].timeline as { action: string; performedBy: string; timestamp: string }[]) || [];
-      const newTimeline = [
-        ...currentTimeline,
-        {
-          action: `Escalated to ${input.escalatedTo}`,
-          performedBy: input.escalatedBy,
-          timestamp: new Date().toISOString(),
-        },
-      ];
+      type PushParams = { notificationId: string; recipientId: string; title: string; message: string };
+      const result = await db.transaction(async (tx) => {
+        let pushParams: PushParams | null = null;
+        // ── In-tx authorization re-check with row lock ──────────────────
+        const [existing] = await tx.select().from(issues)
+          .where(eq(issues.id, input.id)).for('update').limit(1);
+        if (!existing) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Issue not found.' });
+        }
+        const [event] = await tx.select().from(events)
+          .where(eq(events.id, existing.eventId)).limit(1);
+        const [actor] = await tx.select({ role: employees.role })
+          .from(employees).where(eq(employees.id, actorId)).limit(1);
+        if (!actor) {
+          throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Your session is no longer valid.' });
+        }
+        const isPriv = actor.role === 'ADMIN' || actor.role === 'CMD';
+        const isRaiser = existing.raisedBy === actorId;
+        const isEscalatedTo = existing.escalatedTo === actorId;
+        const isCreator = event?.createdBy === actorId;
+        const isManager = event?.assignedTo === actorId;
+        if (!isPriv && !isRaiser && !isEscalatedTo && !isCreator && !isManager) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You are no longer authorised to escalate this issue.',
+          });
+        }
+        // Re-validate target against the locked row (raisedBy is immutable
+        // but defensive coding keeps the invariant explicit).
+        if (input.escalatedTo === existing.raisedBy) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot escalate an issue back to its original raiser.' });
+        }
 
-      const result = await db.update(issues)
-        .set({
-          escalatedTo: input.escalatedTo,
-          status: 'IN_PROGRESS',
-          timeline: newTimeline,
-          updatedAt: new Date(),
-        })
-        .where(eq(issues.id, input.id))
-        .returning();
+        const currentTimeline = (existing.timeline as { action: string; performedBy: string; timestamp: string }[]) || [];
+        const newTimeline = [
+          ...currentTimeline,
+          {
+            action: `Escalated to ${target.name}`,
+            performedBy: actorId,
+            timestamp: new Date().toISOString(),
+          },
+        ];
 
-      await db.insert(auditLogs).values({
-        action: 'ESCALATE_ISSUE',
-        entityType: 'ISSUE',
-        entityId: input.id,
-        performedBy: input.escalatedBy,
-        details: { escalatedTo: input.escalatedTo },
+        const [updated] = await tx.update(issues)
+          .set({
+            escalatedTo: input.escalatedTo,
+            status: 'IN_PROGRESS',
+            timeline: newTimeline,
+            updatedAt: new Date(),
+          })
+          .where(eq(issues.id, input.id))
+          .returning();
+
+        await tx.insert(auditLogs).values({
+          action: 'ESCALATE_ISSUE',
+          entityType: 'ISSUE',
+          entityId: input.id,
+          performedBy: actorId,
+          details: {
+            escalatedTo: input.escalatedTo,
+            previousEscalatedTo: existing.escalatedTo,
+          },
+        });
+
+        // Escalation notification (in-tx, atomic).
+        let createdNotificationId: string | null = null;
+        const [pref] = await tx.select({
+          enabled: notificationPreferences.enabled,
+        }).from(notificationPreferences).where(and(
+          eq(notificationPreferences.employeeId, input.escalatedTo),
+          eq(notificationPreferences.notificationType, 'ISSUE_ESCALATED'),
+        )).limit(1);
+        const enabled = pref?.enabled ?? true;
+        if (enabled) {
+          const [actorRow] = await tx.select({ name: employees.name })
+            .from(employees).where(eq(employees.id, actorId)).limit(1);
+          const dedupeKey = `ISSUE:${input.id}:ISSUE_ESCALATED:${actorId}`;
+          const windowStart = new Date(Date.now() - DEDUPE_WINDOW_MS);
+          const [dup] = await tx.select({ id: notifications.id })
+            .from(notifications).where(and(
+              eq(notifications.recipientId, input.escalatedTo),
+              eq(notifications.type, 'ISSUE_ESCALATED'),
+              eq(notifications.dedupeKey, dedupeKey),
+              gte(notifications.createdAt, windowStart),
+            )).limit(1);
+          if (!dup) {
+            const title = 'Issue Escalated to You';
+            const message = `A ${existing.type} issue for "${event?.name ?? 'a task'}" has been escalated to you by ${actorRow?.name ?? 'a manager'}`;
+            const [inserted] = await tx.insert(notifications).values({
+              recipientId: input.escalatedTo,
+              type: 'ISSUE_ESCALATED',
+              title,
+              message,
+              entityType: 'ISSUE',
+              entityId: input.id,
+              metadata: {
+                issueType: existing.type,
+                eventName: event?.name ?? null,
+                escalatedByName: actorRow?.name ?? null,
+              },
+              dedupeKey,
+            }).returning({ id: notifications.id });
+            createdNotificationId = inserted?.id ?? null;
+            if (createdNotificationId) {
+              pushParams = {
+                notificationId: createdNotificationId,
+                recipientId: input.escalatedTo,
+                title,
+                message,
+              };
+            }
+          }
+        }
+
+        return { updated, createdNotificationId, pushParams };
       });
 
-      // Send notification to the person the issue is escalated to
-      try {
-        const event = await db.select().from(events)
-          .where(eq(events.id, existing[0].eventId));
-        const escalator = await db.select().from(employees)
-          .where(eq(employees.id, input.escalatedBy));
-        
-        if (event[0] && escalator[0]) {
-          await notifyIssueEscalated(
-            input.escalatedTo,
-            input.id,
-            existing[0].type,
-            event[0].name,
-            escalator[0].name
-          );
-          console.log("Issue escalation notification sent to:", input.escalatedTo);
-        }
-      } catch (notifError) {
-        console.error("Failed to send issue escalation notification:", notifError);
+      if (result.pushParams) {
+        await dispatchPushForNotification({
+          notificationId: result.pushParams.notificationId,
+          recipientId: result.pushParams.recipientId,
+          type: 'ISSUE_ESCALATED',
+          title: result.pushParams.title,
+          message: result.pushParams.message,
+          entityType: 'ISSUE',
+          entityId: input.id,
+        });
       }
 
-      return result[0];
-    }),
-
-  getOpenCount: publicProcedure
-    .query(async () => {
-      console.log("Fetching open issues count");
-      const result = await db.select().from(issues)
-        .where(eq(issues.status, 'OPEN'));
-      return result.length;
+      return result.updated;
     }),
 });
