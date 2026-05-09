@@ -304,6 +304,30 @@ export default function EventDetailScreen() {
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
+  // Generic in-app confirm modal — replaces window.confirm on web so users
+  // don't see the raw "<host> says" browser dialog (looks unprofessional in
+  // production). Same component is used on native to avoid the broken
+  // Alert.alert([buttons]) onPress on RN Web.
+  const [confirmModal, setConfirmModal] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    confirmLabel: string;
+    confirmColor: string;
+    onConfirm: (() => void) | null;
+  }>({ visible: false, title: '', message: '', confirmLabel: 'Confirm', confirmColor: Colors.light.primary, onConfirm: null });
+
+  const showConfirm = (opts: { title: string; message: string; confirmLabel?: string; confirmColor?: string; onConfirm: () => void }) => {
+    setConfirmModal({
+      visible: true,
+      title: opts.title,
+      message: opts.message,
+      confirmLabel: opts.confirmLabel ?? 'Confirm',
+      confirmColor: opts.confirmColor ?? Colors.light.primary,
+      onConfirm: opts.onConfirm,
+    });
+  };
+  const closeConfirm = () => setConfirmModal((c) => ({ ...c, visible: false, onConfirm: null }));
   const [showReopenModal, setShowReopenModal] = useState(false);
   const [reopenReason, setReopenReason] = useState('');
   const [showEditTargetModal, setShowEditTargetModal] = useState(false);
@@ -817,23 +841,13 @@ export default function EventDetailScreen() {
   const handleApproveTask = (assignmentId: string) => {
     if (!employee?.id) return;
     const doApprove = () => approveTaskMutation.mutate({ assignmentId, reviewerId: employee.id });
-    if (Platform.OS === 'web') {
-      // Alert.alert([...buttons]) is unreliable on RN Web — the press handler
-      // frequently never fires, so the mutation silently never runs.
-      // See replit.md "Alert.alert confirm on RN Web" gotcha.
-      if (window.confirm('Are you sure you want to approve this task?')) {
-        doApprove();
-      }
-      return;
-    }
-    Alert.alert(
-      'Approve Task',
-      'Are you sure you want to approve this task?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Approve', onPress: doApprove }
-      ]
-    );
+    showConfirm({
+      title: 'Approve Task',
+      message: 'Are you sure you want to approve this task?',
+      confirmLabel: 'Approve',
+      confirmColor: '#2E7D32',
+      onConfirm: doApprove,
+    });
   };
 
   const handleRejectTask = (assignmentId: string) => {
@@ -1041,28 +1055,26 @@ export default function EventDetailScreen() {
       });
     };
 
-    if (Platform.OS === 'web') {
-      // Alert.alert([...buttons]) is unreliable on RN Web — the press handler
-      // frequently never fires, so the mutation silently never runs.
-      // See replit.md "Alert.alert confirm on RN Web" gotcha.
-      if (typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}`)) {
-        doConfirm();
-      }
-      return;
-    }
+    const confirmColors: Partial<Record<EventStatus, string>> = {
+      paused: '#F57C00',
+      completed: '#2E7D32',
+      active: Colors.light.primary,
+      draft: Colors.light.textSecondary,
+    };
+    const confirmLabels: Partial<Record<EventStatus, string>> = {
+      paused: 'Pause Task',
+      completed: 'Complete Task',
+      active: 'Activate',
+      draft: 'Revert to Draft',
+    };
 
-    Alert.alert(
+    showConfirm({
       title,
       message,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm',
-          style: 'default',
-          onPress: doConfirm,
-        },
-      ]
-    );
+      confirmLabel: confirmLabels[newStatus] ?? 'Confirm',
+      confirmColor: confirmColors[newStatus] ?? Colors.light.primary,
+      onConfirm: doConfirm,
+    });
   };
 
   const submitCancellation = () => {
@@ -2796,18 +2808,13 @@ export default function EventDetailScreen() {
             const msg = isResubmit
               ? 'Send your latest numbers to the task creator?'
               : 'Are you sure you want to submit this task for review by the task creator?';
-            // Alert.alert's confirm button is unreliable on RN Web — fall back
-            // to native window.confirm so the click actually fires the mutation.
-            if (Platform.OS === 'web') {
-              if (typeof window !== 'undefined' && window.confirm(msg)) {
-                doSubmit();
-              }
-            } else {
-              Alert.alert('Submit for Review', msg, [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Submit', onPress: doSubmit },
-              ]);
-            }
+            showConfirm({
+              title: 'Submit for Review',
+              message: msg,
+              confirmLabel: isResubmit ? 'Re-submit' : 'Submit',
+              confirmColor: '#1565C0',
+              onConfirm: doSubmit,
+            });
           };
           return (
             <TouchableOpacity
@@ -3692,6 +3699,49 @@ export default function EventDetailScreen() {
               </TouchableOpacity>
             </View>
           </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Generic in-app confirm dialog — replaces window.confirm so users
+          never see the raw "<host> says" browser dialog in production. */}
+      <Modal
+        visible={confirmModal.visible}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={closeConfirm}
+      >
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={closeConfirm}>
+          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+            <View style={styles.statusModalContent}>
+              <View style={styles.statusModalHeader}>
+                <Text style={styles.statusModalTitle}>{confirmModal.title}</Text>
+                <TouchableOpacity onPress={closeConfirm}>
+                  <X size={24} color={Colors.light.textSecondary} />
+                </TouchableOpacity>
+              </View>
+              <Text style={{ fontSize: 14, color: Colors.light.textSecondary, marginBottom: 20, lineHeight: 20 }}>
+                {confirmModal.message}
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <TouchableOpacity
+                  style={[styles.secondaryButton, { flex: 1 }]}
+                  onPress={closeConfirm}
+                >
+                  <Text style={styles.secondaryButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.primaryButton, { flex: 1, backgroundColor: confirmModal.confirmColor }]}
+                  onPress={() => {
+                    const fn = confirmModal.onConfirm;
+                    closeConfirm();
+                    if (fn) fn();
+                  }}
+                >
+                  <Text style={styles.primaryButtonText}>{confirmModal.confirmLabel}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
 
