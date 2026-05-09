@@ -303,7 +303,7 @@ export default function ProfileScreen() {
         )}
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Task Information</Text>
+          <Text style={styles.sectionTitle}>Work Information</Text>
           
           <View style={styles.infoCard}>
             <InfoItem
