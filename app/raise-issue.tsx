@@ -27,22 +27,32 @@ export default function RaiseIssueScreen() {
   );
 
   const createIssueMutation = trpc.issues.create.useMutation({
-    onSuccess: () => {
+    onSuccess: (created) => {
       refetchIssues();
-      // Web gotcha: Alert.alert([buttons]) onPress handlers frequently
-      // never fire on RN Web — user clicks OK and stays stuck on the
-      // form (same gotcha as the Submit-for-Review / Complete-Task flows).
-      // Branch on Platform so web users actually get navigated back.
-      if (Platform.OS === 'web') {
-        if (typeof window !== 'undefined') window.alert('Issue raised successfully');
-        router.back();
-      } else {
-        Alert.alert('Success', 'Issue raised successfully', [
-          { text: 'OK', onPress: () => router.back() },
-        ]);
+      // Don't use Alert.alert([buttons]) or window.alert on success —
+      // both have proven unreliable in our stack:
+      //  · `Alert.alert([buttons]).onPress` silently never fires on
+      //    RN Web (documented in replit.md gotchas).
+      //  · `window.alert()` is blocked / queued inside the Replit
+      //    preview iframe (and inside many embedded webviews), leaving
+      //    the user with no feedback AND no navigation.
+      //  · `router.back()` fails when the form was opened from a deep
+      //    link / fresh tab (no prior history entry).
+      // Always navigating to the issues list with `replace` is the
+      // robust choice: the new issue card is the success indicator,
+      // and the list works as the back-stack root.
+      router.replace('/(tabs)/issues');
+      if (created?.displayId && Platform.OS !== 'web') {
+        // Native: toast-style confirmation is fine because Alert's
+        // single-button form is reliable on iOS/Android.
+        Alert.alert('Issue Raised', `Issue ${created.displayId} has been raised.`);
       }
     },
     onError: (error) => {
+      // Errors MUST be surfaced — the user needs to know to retry. On
+      // web we use the only modal that's guaranteed to render: the
+      // browser's blocking alert. (Acceptable here because failure
+      // is rare and visibility matters more than polish.)
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.alert(error.message || 'Failed to raise issue');
       } else {

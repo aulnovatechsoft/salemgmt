@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import { syncNotificationTypeEnum } from "./migrate-notification-enum";
 import { syncReviewSnapshotColumns } from "./migrate-review-snapshot";
+import { syncIssueDisplayId } from "./migrate-issue-display-id";
 
 const connectionString = process.env.BSNL_DATABASE_URL || process.env.DATABASE_URL!;
 
@@ -610,6 +611,7 @@ async function createTables() {
     // is sufficient — no separate scripts to remember.
     await syncReviewSnapshotColumns(sql);
     await syncNotificationTypeEnum(sql);
+    await syncIssueDisplayId(sql);
 
     console.log("All tables created successfully!");
     await sql.end();

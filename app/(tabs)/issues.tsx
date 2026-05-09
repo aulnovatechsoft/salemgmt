@@ -1,6 +1,6 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, RefreshControl, ActivityIndicator, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, RefreshControl, ActivityIndicator, Platform, Modal, TextInput } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { Plus, AlertCircle, Clock, CheckCircle, XCircle } from 'lucide-react-native';
+import { Plus, AlertCircle, Clock, CheckCircle, XCircle, X } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import Colors from '@/constants/colors';
 import { useMemo, useCallback, useState } from 'react';
@@ -11,31 +11,44 @@ export default function IssuesScreen() {
   const router = useRouter();
   const { employee } = useAuth();
   const [refreshing, setRefreshing] = useState(false);
-  
-  // Fetch issues from database using tRPC
+  // Resolve modal state — replaces the unreliable window.confirm /
+  // Alert.alert([buttons]) flow that left users stuck without an actual
+  // resolve. The modal also gives the resolver a place to record notes
+  // (passed to the server as `remarks` and appended to the issue
+  // timeline so the raiser can see WHY it was marked resolved).
+  const [resolveTargetId, setResolveTargetId] = useState<string | null>(null);
+  const [resolveNotes, setResolveNotes] = useState('');
+
   const { data: allIssues, isLoading, refetch } = trpc.issues.getAll.useQuery(undefined, {
     enabled: !!employee?.id,
   });
 
-  // Fetch events for issue context
   const { data: myEventsData } = trpc.events.getMyEvents.useQuery(
     { employeeId: employee?.id || '' },
     { enabled: !!employee?.id }
   );
 
-  // Fetch employees for display
   const { data: allEmployees } = trpc.employees.getAll.useQuery(undefined, {
     enabled: !!employee?.id,
   });
 
+  const closeResolveModal = useCallback(() => {
+    setResolveTargetId(null);
+    setResolveNotes('');
+  }, []);
+
   const updateStatusMutation = trpc.issues.updateStatus.useMutation({
     onSuccess: () => {
+      closeResolveModal();
+      refetch();
+      // Single-button feedback. Reliable on both platforms (web's
+      // window.alert is fine for a one-shot OK; iframe-blocking only
+      // affects subsequent dialogs in the same tick).
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.alert('Issue resolved successfully');
       } else {
         Alert.alert('Success', 'Issue resolved successfully');
       }
-      refetch();
     },
     onError: (error) => {
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -48,7 +61,7 @@ export default function IssuesScreen() {
 
   const myIssues = useMemo(() => {
     if (!allIssues || !employee) return [];
-    
+
     if (employee.role === 'SALES_STAFF' || employee.role === 'SD_JTO') {
       // Sales staff sees issues they raised
       return allIssues.filter(i => i.raisedBy === employee.id);
@@ -66,31 +79,23 @@ export default function IssuesScreen() {
     setRefreshing(false);
   }, [refetch]);
 
-  const handleResolveIssue = async (issueId: string) => {
-    // Web gotcha: the "Resolve" button inside Alert.alert([buttons])
-    // frequently never fires on RN Web — the user taps Resolve and
-    // nothing happens (no error, no log, no DB write). Same pattern as
-    // the Submit-for-Review / Complete-Task confirms documented in
-    // replit.md. Branch on Platform so web users can actually resolve.
-    const doResolve = () => updateStatusMutation.mutate({
-      id: issueId,
+  const handleResolveIssue = (issueId: string) => {
+    // Open the in-screen modal instead of using window.confirm /
+    // Alert.alert([buttons]) — both are unreliable in our preview-iframe
+    // / RN-Web stack and were leaving users with no working resolve
+    // button. The modal also collects optional resolution notes.
+    setResolveNotes('');
+    setResolveTargetId(issueId);
+  };
+
+  const submitResolve = () => {
+    if (!resolveTargetId || !employee?.id) return;
+    updateStatusMutation.mutate({
+      id: resolveTargetId,
       status: 'RESOLVED',
-      updatedBy: employee?.id || '',
+      updatedBy: employee.id,
+      remarks: resolveNotes.trim() || undefined,
     });
-    if (Platform.OS === 'web') {
-      if (typeof window !== 'undefined' && window.confirm('Mark this issue as resolved?')) {
-        doResolve();
-      }
-      return;
-    }
-    Alert.alert(
-      'Resolve Issue',
-      'Mark this issue as resolved?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Resolve', onPress: doResolve },
-      ],
-    );
   };
 
   const getEventForIssue = (eventId: string | null) => {
@@ -106,14 +111,14 @@ export default function IssuesScreen() {
   if (isLoading) {
     return (
       <>
-        <Stack.Screen 
-          options={{ 
+        <Stack.Screen
+          options={{
             title: 'Issues',
             headerStyle: { backgroundColor: Colors.light.primary },
             headerTintColor: Colors.light.background,
             headerTitleStyle: { fontWeight: 'bold' as const },
             headerShown: true,
-          }} 
+          }}
         />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={Colors.light.primary} />
@@ -125,8 +130,8 @@ export default function IssuesScreen() {
 
   return (
     <>
-      <Stack.Screen 
-        options={{ 
+      <Stack.Screen
+        options={{
           title: 'Issues',
           headerStyle: {
             backgroundColor: Colors.light.primary,
@@ -137,16 +142,16 @@ export default function IssuesScreen() {
           },
           headerShown: true,
           headerRight: () => (
-            <TouchableOpacity 
+            <TouchableOpacity
               onPress={() => router.push('/raise-issue')}
               style={styles.headerButton}
             >
               <Plus size={24} color={Colors.light.background} />
             </TouchableOpacity>
           ),
-        }} 
+        }}
       />
-      <ScrollView 
+      <ScrollView
         style={styles.container}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.light.primary]} />
@@ -158,13 +163,24 @@ export default function IssuesScreen() {
             {openIssues.map(issue => {
               const event = getEventForIssue(issue.eventId);
               const raisedByUser = getEmployeeForIssue(issue.raisedBy);
+              const escalatedToUser = getEmployeeForIssue(issue.escalatedTo);
+              // Mirror the server's `updateStatus` authorization rule:
+              // SALES_STAFF / SD_JTO are blocked from resolving issues
+              // raised by OTHERS, but they can still resolve their own.
+              // Anyone else (managers/ADMIN/CMD) can resolve. The server
+              // is the actual security boundary; this is just so the UI
+              // doesn't hide the button on issues the user can act on.
+              const isOwnIssue = issue.raisedBy === employee?.id;
+              const isSalesTier = employee?.role === 'SALES_STAFF' || employee?.role === 'SD_JTO';
+              const canResolve = isOwnIssue || !isSalesTier;
               return (
-                <IssueCard 
-                  key={issue.id} 
-                  issue={issue} 
+                <IssueCard
+                  key={issue.id}
+                  issue={issue}
                   event={event}
                   raisedByUser={raisedByUser}
-                  canResolve={employee?.role !== 'SALES_STAFF'}
+                  escalatedToUser={escalatedToUser}
+                  canResolve={canResolve}
                   onResolve={() => handleResolveIssue(issue.id)}
                 />
               );
@@ -178,12 +194,14 @@ export default function IssuesScreen() {
             {closedIssues.map(issue => {
               const event = getEventForIssue(issue.eventId);
               const raisedByUser = getEmployeeForIssue(issue.raisedBy);
+              const escalatedToUser = getEmployeeForIssue(issue.escalatedTo);
               return (
-                <IssueCard 
-                  key={issue.id} 
-                  issue={issue} 
+                <IssueCard
+                  key={issue.id}
+                  issue={issue}
                   event={event}
                   raisedByUser={raisedByUser}
+                  escalatedToUser={escalatedToUser}
                   canResolve={false}
                 />
               );
@@ -205,14 +223,72 @@ export default function IssuesScreen() {
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
+
+      {/* In-screen Resolve modal — replaces the unreliable
+          Alert.alert/window.confirm and adds a notes field. */}
+      <Modal
+        visible={!!resolveTargetId}
+        animationType="slide"
+        transparent
+        onRequestClose={closeResolveModal}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Resolve Issue</Text>
+              <TouchableOpacity onPress={closeResolveModal} disabled={updateStatusMutation.isPending}>
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalBody}>
+              <Text style={styles.modalLabel}>Resolution notes (optional)</Text>
+              <TextInput
+                style={styles.modalTextArea}
+                placeholder="Describe how the issue was resolved…"
+                placeholderTextColor={Colors.light.textSecondary}
+                value={resolveNotes}
+                onChangeText={setResolveNotes}
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+                editable={!updateStatusMutation.isPending}
+              />
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={[styles.modalCancelBtn, updateStatusMutation.isPending && styles.modalBtnDisabled]}
+                  onPress={closeResolveModal}
+                  disabled={updateStatusMutation.isPending}
+                >
+                  <Text style={styles.modalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalConfirmBtn, updateStatusMutation.isPending && styles.modalBtnDisabled]}
+                  onPress={submitResolve}
+                  disabled={updateStatusMutation.isPending}
+                >
+                  {updateStatusMutation.isPending ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <>
+                      <CheckCircle size={18} color="#fff" />
+                      <Text style={styles.modalConfirmText}>Mark as Resolved</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }
 
-function IssueCard({ issue, event, raisedByUser, canResolve, onResolve }: { 
-  issue: any; 
+function IssueCard({ issue, event, raisedByUser, escalatedToUser, canResolve, onResolve }: {
+  issue: any;
   event?: any;
   raisedByUser?: any;
+  escalatedToUser?: any;
   canResolve: boolean;
   onResolve?: () => void;
 }) {
@@ -239,12 +315,20 @@ function IssueCard({ issue, event, raisedByUser, canResolve, onResolve }: {
   const statusColor = getStatusColor();
   const issueTypeLabel = ISSUE_TYPES.find(t => t.value === issue.type)?.label || issue.type;
   const timeline = Array.isArray(issue.timeline) ? issue.timeline : [];
+  // Display ID falls back to the first 8 chars of the UUID for legacy
+  // rows that haven't been backfilled yet (or rows created before the
+  // migration ran in dev). Always shows SOMETHING so the user has a
+  // shareable handle.
+  const shortId = issue.displayId || `ISS-${String(issue.id).slice(0, 8).toUpperCase()}`;
 
   return (
     <View style={styles.issueCard}>
       <View style={styles.issueHeader}>
-        <View style={styles.issueTypeContainer}>
-          <Text style={styles.issueType}>{issueTypeLabel}</Text>
+        <View style={styles.issueHeaderLeft}>
+          <Text style={styles.issueId}>{shortId}</Text>
+          <View style={styles.issueTypeContainer}>
+            <Text style={styles.issueType}>{issueTypeLabel}</Text>
+          </View>
         </View>
         <View style={[styles.statusBadge, { backgroundColor: statusColor.bg }]}>
           {getStatusIcon()}
@@ -260,16 +344,22 @@ function IssueCard({ issue, event, raisedByUser, canResolve, onResolve }: {
 
       <Text style={styles.issueDescription}>{issue.description}</Text>
 
-      {raisedByUser && (
+      {/* Always render Raised by line — fall back to "Unknown" rather
+          than hiding the row when the employees lookup hasn't loaded
+          or the raiser is outside the current viewer's hierarchy. */}
+      <Text style={styles.raisedBy}>
+        Raised by: {raisedByUser ? `${raisedByUser.name} (${raisedByUser.role})` : 'Unknown'}
+      </Text>
+      {escalatedToUser && (
         <Text style={styles.raisedBy}>
-          Raised by: {raisedByUser.name} ({raisedByUser.role})
+          Escalated to: {escalatedToUser.name} ({escalatedToUser.role})
         </Text>
       )}
 
       <Text style={styles.issueDate}>
-        {new Date(issue.createdAt).toLocaleDateString('en-IN', { 
-          day: 'numeric', 
-          month: 'short', 
+        {new Date(issue.createdAt).toLocaleDateString('en-IN', {
+          day: 'numeric',
+          month: 'short',
           year: 'numeric',
           hour: '2-digit',
           minute: '2-digit'
@@ -285,8 +375,8 @@ function IssueCard({ issue, event, raisedByUser, canResolve, onResolve }: {
               <View style={styles.timelineContent}>
                 <Text style={styles.timelineAction}>{item.action}</Text>
                 <Text style={styles.timelineDate}>
-                  {new Date(item.timestamp).toLocaleDateString('en-IN', { 
-                    day: 'numeric', 
+                  {new Date(item.timestamp).toLocaleDateString('en-IN', {
+                    day: 'numeric',
                     month: 'short',
                     hour: '2-digit',
                     minute: '2-digit'
@@ -376,6 +466,19 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
+    gap: 8,
+  },
+  issueHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 1,
+  },
+  issueId: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.light.textSecondary,
+    letterSpacing: 0.5,
   },
   issueTypeContainer: {
     backgroundColor: '#E3F2FD',
@@ -471,5 +574,84 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: Colors.light.background,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 24,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: Colors.light.text,
+  },
+  modalBody: {
+    padding: 16,
+  },
+  modalLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.light.text,
+    marginBottom: 8,
+  },
+  modalTextArea: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    fontSize: 15,
+    color: Colors.light.text,
+    minHeight: 100,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+  },
+  modalCancelBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    color: Colors.light.text,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalConfirmBtn: {
+    flex: 2,
+    flexDirection: 'row',
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: Colors.light.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  modalConfirmText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalBtnDisabled: {
+    opacity: 0.6,
   },
 });

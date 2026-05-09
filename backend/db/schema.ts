@@ -190,6 +190,7 @@ export const resources = pgTable('resources', {
 
 export const issues = pgTable('issues', {
   id: uuid('id').primaryKey().defaultRandom(),
+  displayId: varchar('display_id', { length: 32 }).unique(),
   eventId: uuid('event_id').notNull().references(() => events.id),
   raisedBy: uuid('raised_by').notNull().references(() => employees.id),
   type: issueTypeEnum('type').notNull(),

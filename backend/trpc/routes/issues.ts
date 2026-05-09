@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, authedProcedure } from "../create-context";
 import { db, issues, auditLogs, events, employees, notifications, notificationPreferences } from "@/backend/db";
 import { dispatchPushForNotification } from "@/backend/services/notification.service";
+import { allocateIssueDisplayId } from "@/backend/db/issueIdAllocator";
 
 // 5-minute dedupe window — matches the in-tx pattern used elsewhere
 // (see submitTaskForReview). Same value as DEDUPE_WINDOW_MS in the
@@ -185,6 +186,29 @@ export const issuesRouter = createTRPCRouter({
         escalateTargetId = eventRow.createdBy;
       }
 
+      // Final fallback: when the raiser IS the task creator (manager
+      // raising on their own task), there's no upstream creator to
+      // escalate to. Walk one step up the reporting chain via the
+      // raiser's `reportingPersNo` → resolve to the manager's
+      // `employees.id`. Without this, self-created issues end up with
+      // `escalatedTo = null` and only the raiser sees them — defeating
+      // the purpose of "Raise Issue" (which the form's info banner
+      // describes as "escalated to your task manager or reporting
+      // manager for resolution").
+      if (!escalateTargetId) {
+        const [raiserRow] = await db.select({
+          reportingPersNo: employees.reportingPersNo,
+        }).from(employees).where(eq(employees.id, actorId)).limit(1);
+        const reportingPersNo = raiserRow?.reportingPersNo?.trim();
+        if (reportingPersNo) {
+          const [manager] = await db.select({ id: employees.id })
+            .from(employees).where(eq(employees.persNo, reportingPersNo)).limit(1);
+          if (manager && manager.id !== actorId) {
+            escalateTargetId = manager.id;
+          }
+        }
+      }
+
       // ────────────────────────────────────────────────────────────────────
       // Wrap the insert + audit + notification in a SINGLE transaction.
       // Same production-grade pattern as submitTaskForReview: a server
@@ -193,6 +217,12 @@ export const issuesRouter = createTRPCRouter({
       // Push dispatch is best-effort and stays outside the tx (so an
       // Expo / network outage never rolls back a successful issue create).
       // ────────────────────────────────────────────────────────────────────
+      // Allocate a human-friendly display id (ISS-YYYY-MM-NNNN). Done
+      // OUTSIDE the tx because the allocator is its own atomic
+      // upsert+returning sequence — and a tx rollback should NOT free
+      // the sequence number (matches how task display ids work for events).
+      const displayId = await allocateIssueDisplayId();
+
       type PushParams = { notificationId: string; recipientId: string; title: string; message: string };
       const result = await db.transaction(async (tx) => {
         let pushParams: PushParams | null = null;
@@ -203,6 +233,7 @@ export const issuesRouter = createTRPCRouter({
         }];
 
         const [created] = await tx.insert(issues).values({
+          displayId,
           eventId: input.eventId,
           raisedBy: actorId,
           type: input.type,
