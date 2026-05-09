@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, RefreshControl, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, RefreshControl, Modal, Platform } from 'react-native';
 import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
 import { MapPin, Calendar, Users, Plus, Trash2, Camera, User, X, Edit3, Play, Pause, CheckCircle, XCircle, ChevronRight, Clock, Flag, ListTodo, Zap, AlertCircle, Settings, Send, RotateCcw, CircleCheck, Hourglass, CircleDot, ThumbsUp, ThumbsDown, Check } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
@@ -2752,29 +2752,47 @@ export default function EventDetailScreen() {
           );
         })()}
 
-        {/* Submit for Review button - for team members who have an assignment */}
+        {/* Submit for Review button - for team members who have an assignment.
+            Available for any status except approved (matches the rolling-submission
+            flow on my-tasks). Backend re-validates and rejects no-op resubmits. */}
         {isTeamMember && !isEventCreator && dbStatus === 'active' && (() => {
           const myAllocation = eventData.teamWithAllocations?.find((t: any) => t.employeeId === employee?.id);
           if (!myAllocation) return null;
           const status = myAllocation.submissionStatus;
-          const canSubmitForReview = status === 'in_progress' || status === 'rejected' || status === 'not_started';
-          if (!canSubmitForReview) return null;
+          if (status === 'approved') return null;
+          const isResubmit = status === 'submitted' || status === 'rejected';
+          const buttonLabel = isResubmit ? 'Re-submit for Review' : 'Submit for Review';
+          const doSubmit = () => submitForReviewMutation.mutate({
+            assignmentId: myAllocation.id,
+            employeeId: employee?.id || '',
+          });
+          const onPress = () => {
+            const msg = isResubmit
+              ? 'Send your latest numbers to the task creator?'
+              : 'Are you sure you want to submit this task for review by the task creator?';
+            // Alert.alert's confirm button is unreliable on RN Web — fall back
+            // to native window.confirm so the click actually fires the mutation.
+            if (Platform.OS === 'web') {
+              if (typeof window !== 'undefined' && window.confirm(msg)) {
+                doSubmit();
+              }
+            } else {
+              Alert.alert('Submit for Review', msg, [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Submit', onPress: doSubmit },
+              ]);
+            }
+          };
           return (
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.submitSalesButton, { backgroundColor: '#1565C0' }]}
-              onPress={() => {
-                Alert.alert(
-                  'Submit for Review',
-                  'Are you sure you want to submit this task for review by the task creator?',
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Submit', onPress: () => submitForReviewMutation.mutate({ assignmentId: myAllocation.id, employeeId: employee?.id || '' }) }
-                  ]
-                );
-              }}
+              onPress={onPress}
+              disabled={submitForReviewMutation.isPending}
             >
               <Send size={20} color="#fff" />
-              <Text style={styles.submitSalesText}>Submit for Review</Text>
+              <Text style={styles.submitSalesText}>
+                {submitForReviewMutation.isPending ? 'Submitting...' : buttonLabel}
+              </Text>
             </TouchableOpacity>
           );
         })()}
