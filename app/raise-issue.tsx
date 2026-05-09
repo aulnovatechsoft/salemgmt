@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal } from 'react-native';
+import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, Platform } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
@@ -29,12 +29,25 @@ export default function RaiseIssueScreen() {
   const createIssueMutation = trpc.issues.create.useMutation({
     onSuccess: () => {
       refetchIssues();
-      Alert.alert('Success', 'Issue raised successfully', [
-        { text: 'OK', onPress: () => router.back() },
-      ]);
+      // Web gotcha: Alert.alert([buttons]) onPress handlers frequently
+      // never fire on RN Web — user clicks OK and stays stuck on the
+      // form (same gotcha as the Submit-for-Review / Complete-Task flows).
+      // Branch on Platform so web users actually get navigated back.
+      if (Platform.OS === 'web') {
+        if (typeof window !== 'undefined') window.alert('Issue raised successfully');
+        router.back();
+      } else {
+        Alert.alert('Success', 'Issue raised successfully', [
+          { text: 'OK', onPress: () => router.back() },
+        ]);
+      }
     },
     onError: (error) => {
-      Alert.alert('Error', error.message || 'Failed to raise issue');
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.alert(error.message || 'Failed to raise issue');
+      } else {
+        Alert.alert('Error', error.message || 'Failed to raise issue');
+      }
     },
   });
 

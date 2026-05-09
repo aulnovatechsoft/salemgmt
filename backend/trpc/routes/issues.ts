@@ -163,22 +163,26 @@ export const issuesRouter = createTRPCRouter({
       }
 
       // Validate the explicit escalation target if the client sent one.
+      // The raise-issue form auto-fills `escalatedTo` with `event.createdBy`,
+      // which equals the actor whenever a manager raises an issue on their
+      // OWN task — a common, valid case. Treat self-escalation as "no
+      // escalation" (silently drop) instead of rejecting, so the form keeps
+      // working for creator-as-raiser. Same with target-equals-original-
+      // raiser at create time (raisedBy === actor here, so this is the
+      // same case).
       let escalateTargetId: string | null = input.escalatedTo ?? null;
+      if (escalateTargetId === actorId) {
+        escalateTargetId = null;
+      }
       if (escalateTargetId) {
-        if (escalateTargetId === actorId) {
-          throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot escalate an issue to yourself.' });
-        }
         const [target] = await db.select({ id: employees.id })
           .from(employees).where(eq(employees.id, escalateTargetId)).limit(1);
         if (!target) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'Escalation target is not a valid employee.' });
         }
-      } else {
-        // Fall back to the task creator if no explicit target was supplied
-        // and the actor is not themselves the creator.
-        if (eventRow.createdBy && eventRow.createdBy !== actorId) {
-          escalateTargetId = eventRow.createdBy;
-        }
+      } else if (eventRow.createdBy && eventRow.createdBy !== actorId) {
+        // Fall back to the task creator only if it isn't the actor themselves.
+        escalateTargetId = eventRow.createdBy;
       }
 
       // ────────────────────────────────────────────────────────────────────

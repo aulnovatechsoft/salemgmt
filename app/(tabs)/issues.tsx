@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, RefreshControl, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, RefreshControl, ActivityIndicator, Platform } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { Plus, AlertCircle, Clock, CheckCircle, XCircle } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
@@ -30,11 +30,19 @@ export default function IssuesScreen() {
 
   const updateStatusMutation = trpc.issues.updateStatus.useMutation({
     onSuccess: () => {
-      Alert.alert('Success', 'Issue resolved successfully');
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.alert('Issue resolved successfully');
+      } else {
+        Alert.alert('Success', 'Issue resolved successfully');
+      }
       refetch();
     },
     onError: (error) => {
-      Alert.alert('Error', error.message || 'Failed to resolve issue');
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.alert(error.message || 'Failed to resolve issue');
+      } else {
+        Alert.alert('Error', error.message || 'Failed to resolve issue');
+      }
     },
   });
 
@@ -59,22 +67,29 @@ export default function IssuesScreen() {
   }, [refetch]);
 
   const handleResolveIssue = async (issueId: string) => {
+    // Web gotcha: the "Resolve" button inside Alert.alert([buttons])
+    // frequently never fires on RN Web — the user taps Resolve and
+    // nothing happens (no error, no log, no DB write). Same pattern as
+    // the Submit-for-Review / Complete-Task confirms documented in
+    // replit.md. Branch on Platform so web users can actually resolve.
+    const doResolve = () => updateStatusMutation.mutate({
+      id: issueId,
+      status: 'RESOLVED',
+      updatedBy: employee?.id || '',
+    });
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm('Mark this issue as resolved?')) {
+        doResolve();
+      }
+      return;
+    }
     Alert.alert(
       'Resolve Issue',
       'Mark this issue as resolved?',
       [
         { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Resolve',
-          onPress: () => {
-            updateStatusMutation.mutate({
-              id: issueId,
-              status: 'RESOLVED',
-              updatedBy: employee?.id || '',
-            });
-          },
-        },
-      ]
+        { text: 'Resolve', onPress: doResolve },
+      ],
     );
   };
 
