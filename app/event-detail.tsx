@@ -812,12 +812,22 @@ export default function EventDetailScreen() {
 
   const handleApproveTask = (assignmentId: string) => {
     if (!employee?.id) return;
+    const doApprove = () => approveTaskMutation.mutate({ assignmentId, reviewerId: employee.id });
+    if (Platform.OS === 'web') {
+      // Alert.alert([...buttons]) is unreliable on RN Web — the press handler
+      // frequently never fires, so the mutation silently never runs.
+      // See replit.md "Alert.alert confirm on RN Web" gotcha.
+      if (window.confirm('Are you sure you want to approve this task?')) {
+        doApprove();
+      }
+      return;
+    }
     Alert.alert(
       'Approve Task',
       'Are you sure you want to approve this task?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Approve', onPress: () => approveTaskMutation.mutate({ assignmentId, reviewerId: employee.id }) }
+        { text: 'Approve', onPress: doApprove }
       ]
     );
   };

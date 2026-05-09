@@ -6027,14 +6027,29 @@ export const eventsRouter = createTRPCRouter({
         }
       }
 
-      await db.update(eventAssignments)
+      // Atomic conditional update: only flip to 'approved' if currently
+      // 'submitted'. Prevents (a) approving a task that was never submitted,
+      // (b) re-approving an already-approved/rejected task, (c) two reviewers
+      // racing — last-write-wins. Returning .id lets us detect 0 rows.
+      const updated = await db.update(eventAssignments)
         .set({
           submissionStatus: 'approved',
           reviewedAt: new Date(),
           reviewedBy: actorEmployeeId,
           updatedAt: new Date()
         })
-        .where(eq(eventAssignments.id, input.assignmentId));
+        .where(and(
+          eq(eventAssignments.id, input.assignmentId),
+          eq(eventAssignments.submissionStatus, 'submitted'),
+        ))
+        .returning({ id: eventAssignments.id });
+
+      if (updated.length === 0) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'This task is no longer pending review (already reviewed or not yet submitted).',
+        });
+      }
 
       // Send notification to team member
       try {
@@ -6093,7 +6108,10 @@ export const eventsRouter = createTRPCRouter({
         }
       }
 
-      await db.update(eventAssignments)
+      // Atomic conditional update: only flip to 'rejected' if currently
+      // 'submitted'. Prevents rejecting a task that was never submitted,
+      // re-rejecting an already-reviewed task, and reviewer race conditions.
+      const updated = await db.update(eventAssignments)
         .set({
           submissionStatus: 'rejected',
           reviewedAt: new Date(),
@@ -6101,7 +6119,18 @@ export const eventsRouter = createTRPCRouter({
           rejectionReason: input.reason || null,
           updatedAt: new Date()
         })
-        .where(eq(eventAssignments.id, input.assignmentId));
+        .where(and(
+          eq(eventAssignments.id, input.assignmentId),
+          eq(eventAssignments.submissionStatus, 'submitted'),
+        ))
+        .returning({ id: eventAssignments.id });
+
+      if (updated.length === 0) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'This task is no longer pending review (already reviewed or not yet submitted).',
+        });
+      }
 
       // Send notification to team member
       try {
