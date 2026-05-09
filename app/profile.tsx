@@ -15,6 +15,8 @@ export default function ProfileScreen() {
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [persNo, setPersNo] = useState('');
   const [linking, setLinking] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   
   const trpcUtils = trpc.useUtils();
   
@@ -57,32 +59,20 @@ export default function ProfileScreen() {
   };
   
   const performLogout = useCallback(async () => {
+    setLoggingOut(true);
     try {
       await logout();
     } finally {
+      setLoggingOut(false);
+      setShowLogoutConfirm(false);
       router.replace('/login');
     }
   }, [logout, router]);
 
-  const handleLogout = () => {
-    if (Platform.OS === 'web') {
-      const ok = typeof window !== 'undefined' && window.confirm('Are you sure you want to logout?');
-      if (ok) performLogout();
-      return;
-    }
-    Alert.alert(
-      'Logout',
-      'Are you sure you want to logout?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Logout',
-          style: 'destructive',
-          onPress: () => { performLogout(); },
-        },
-      ]
-    );
-  };
+  // Use a custom in-app modal on every platform — window.confirm leaks the
+  // host URL ("<host> says") on web, and Alert.alert([buttons]) onPress is
+  // unreliable on RN Web (see replit.md gotcha).
+  const handleLogout = () => setShowLogoutConfirm(true);
   
   const userRole = employee?.role || 'SALES_STAFF';
   const hasAdminAccess = canAccessAdminPanel(userRole);
@@ -312,6 +302,47 @@ export default function ProfileScreen() {
                 disabled={linking}
               >
                 <Text style={styles.submitButtonText}>{linking ? 'Linking...' : 'Link Profile'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Logout confirmation — custom modal to avoid the URL leak in
+          window.confirm and the unreliable Alert.alert([buttons]) on RN Web. */}
+      <Modal
+        visible={showLogoutConfirm}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => !loggingOut && setShowLogoutConfirm(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Logout</Text>
+              <TouchableOpacity onPress={() => !loggingOut && setShowLogoutConfirm(false)} disabled={loggingOut}>
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalBody}>
+              <Text style={styles.noteText}>
+                Are you sure you want to logout? You&apos;ll need to sign in again to access your tasks.
+              </Text>
+            </View>
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => setShowLogoutConfirm(false)}
+                disabled={loggingOut}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.submitButton, { backgroundColor: Colors.light.error }, loggingOut && styles.buttonDisabled]}
+                onPress={performLogout}
+                disabled={loggingOut}
+              >
+                <Text style={styles.submitButtonText}>{loggingOut ? 'Logging out…' : 'Logout'}</Text>
               </TouchableOpacity>
             </View>
           </View>
