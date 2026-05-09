@@ -71,7 +71,10 @@ import {
   notifyIssueRaised,
   notifySubtaskAssigned,
   notifySubtaskCompleted,
-  notifySubtaskReassigned
+  notifySubtaskReassigned,
+  notifyFinanceCollectionSubmitted,
+  notifyFinanceCollectionApproved,
+  notifyFinanceCollectionRejected,
 } from "@/backend/services/notification.service";
 
 function getISTDate(): Date {
@@ -3476,21 +3479,16 @@ export const eventsRouter = createTRPCRouter({
       // Send notification to event creator for review (best-effort; never fail the mutation if this errors)
       if (event[0].assignedTo && event[0].assignedTo !== employeeId) {
         try {
-          await db.insert(notifications).values({
-            recipientId: event[0].assignedTo,
-            type: 'FINANCE_COLLECTION_SUBMITTED',
-            title: 'Finance Collection Pending Review',
-            message: `${submitterName} submitted ₹${input.amountCollected.toLocaleString('en-IN')} collection (${input.financeType.replace('FIN_', '').replace(/_/g, ' ')}) for "${event[0].name}". Review required.`,
-            entityType: 'EVENT',
-            entityId: input.eventId,
-            metadata: { 
-              entryId: result[0].id, 
-              financeType: input.financeType, 
-              amount: input.amountCollected,
-              submitterName,
-              paymentMode: input.paymentMode 
-            },
-          });
+          await notifyFinanceCollectionSubmitted(
+            event[0].assignedTo,
+            input.eventId,
+            result[0].id,
+            event[0].name,
+            submitterName,
+            input.amountCollected,
+            input.financeType,
+            input.paymentMode,
+          );
         } catch (notifyErr: any) {
           console.error(`[FINANCE] Notification insert failed for submit (entry ${result[0].id}):`, notifyErr?.message || notifyErr);
         }
@@ -3519,17 +3517,26 @@ export const eventsRouter = createTRPCRouter({
       }));
     }),
     
-  getPendingFinanceCollections: publicProcedure
-    .input(z.object({ 
-      reviewerId: z.string().uuid(),
+  getPendingFinanceCollections: authedProcedure
+    .input(z.object({
+      // Legacy: clients may still send their own id. Authority comes from
+      // ctx.employeeId — input is accepted only if it matches the session.
+      reviewerId: z.string().uuid().optional(),
       financeType: z.string().optional(),
     }))
-    .query(async ({ input }) => {
-      
+    .query(async ({ input, ctx }) => {
+      if (input.reviewerId && input.reviewerId !== ctx.employeeId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only view pending collections for your own account.',
+        });
+      }
+      const actorEmployeeId = ctx.employeeId;
+
       // Check if user has management role
-      const reviewer = await db.select().from(employees).where(eq(employees.id, input.reviewerId)).limit(1);
+      const reviewer = await db.select().from(employees).where(eq(employees.id, actorEmployeeId)).limit(1);
       if (!reviewer[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
-        throw new Error('Only management users can review finance collections');
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only management users can review finance collections' });
       }
       
       // For senior managers (ADMIN, GM, CGM), show all pending collections in their circle
@@ -3557,7 +3564,7 @@ export const eventsRouter = createTRPCRouter({
           .from(events)
           .where(and(
             eq(events.taskCategory, 'Finance'),
-            eq(events.assignedTo, input.reviewerId),
+            eq(events.assignedTo, actorEmployeeId),
           ));
       }
       
@@ -3598,20 +3605,29 @@ export const eventsRouter = createTRPCRouter({
       }));
     }),
     
-  approveFinanceCollection: publicProcedure
+  approveFinanceCollection: authedProcedure
     .input(z.object({
       entryId: z.string().uuid(),
-      reviewerId: z.string().uuid(),
+      // Legacy: clients may still send their own id. Authority comes from
+      // ctx.employeeId — input is accepted only if it matches the session.
+      reviewerId: z.string().uuid().optional(),
       remarks: z.string().optional(),
     }))
-    .mutation(async ({ input }) => {
-      
-      // Check if user has management role
-      const reviewer = await db.select().from(employees).where(eq(employees.id, input.reviewerId)).limit(1);
-      if (!reviewer[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
-        throw new Error('Only management users can approve finance collections');
+    .mutation(async ({ input, ctx }) => {
+      if (input.reviewerId && input.reviewerId !== ctx.employeeId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only approve collections under your own account.',
+        });
       }
-      
+      const actorEmployeeId = ctx.employeeId;
+
+      // Check if user has management role
+      const reviewer = await db.select().from(employees).where(eq(employees.id, actorEmployeeId)).limit(1);
+      if (!reviewer[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only management users can approve finance collections' });
+      }
+
       // Pre-read entry + event for authz and notification context
       const entry = await db.select().from(financeCollectionEntries)
         .where(eq(financeCollectionEntries.id, input.entryId)).limit(1);
@@ -3621,8 +3637,8 @@ export const eventsRouter = createTRPCRouter({
       }
       const event = await db.select().from(events).where(eq(events.id, entry[0].eventId)).limit(1);
       if (!event[0]) throw new Error('Event not found');
-      if (event[0].assignedTo !== input.reviewerId && !['CMD', 'ADMIN', 'GM', 'CGM'].includes(reviewer[0].role)) {
-        throw new Error('You can only approve collections for events you manage');
+      if (event[0].assignedTo !== actorEmployeeId && !['CMD', 'ADMIN', 'GM', 'CGM'].includes(reviewer[0].role)) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only approve collections for events you manage' });
       }
       
       // Atomic + idempotent transition: claim the pending->approved update and only then increment.
@@ -3631,7 +3647,7 @@ export const eventsRouter = createTRPCRouter({
         const claimed = await tx.update(financeCollectionEntries)
           .set({
             approvalStatus: 'approved',
-            reviewedBy: input.reviewerId,
+            reviewedBy: actorEmployeeId,
             reviewedAt: new Date(),
             reviewRemarks: input.remarks,
           })
@@ -3665,22 +3681,20 @@ export const eventsRouter = createTRPCRouter({
           action: 'APPROVE_FINANCE_COLLECTION',
           entityType: 'FINANCE',
           entityId: input.entryId,
-          performedBy: input.reviewerId,
+          performedBy: actorEmployeeId,
           details: { eventId: entry[0].eventId, amount: entry[0].amountCollected, financeType: entry[0].financeType },
         });
       });
       
       // Notify the submitter (outside txn, best-effort — never undo the approval if notify fails)
       try {
-        await db.insert(notifications).values({
-          recipientId: entry[0].employeeId,
-          type: 'FINANCE_COLLECTION_APPROVED',
-          title: 'Collection Approved',
-          message: `Your ₹${entry[0].amountCollected.toLocaleString('en-IN')} collection for "${event[0].name}" has been approved.`,
-          entityType: 'EVENT',
-          entityId: entry[0].eventId,
-          metadata: { entryId: input.entryId, amount: entry[0].amountCollected },
-        });
+        await notifyFinanceCollectionApproved(
+          entry[0].employeeId,
+          entry[0].eventId,
+          input.entryId,
+          event[0].name,
+          Number(entry[0].amountCollected),
+        );
       } catch (notifyErr: any) {
         console.error(`[FINANCE] Notification insert failed for approval (entry ${input.entryId}):`, notifyErr?.message || notifyErr);
       }
@@ -3688,20 +3702,29 @@ export const eventsRouter = createTRPCRouter({
       return { success: true };
     }),
     
-  rejectFinanceCollection: publicProcedure
+  rejectFinanceCollection: authedProcedure
     .input(z.object({
       entryId: z.string().uuid(),
-      reviewerId: z.string().uuid(),
+      // Legacy: clients may still send their own id. Authority comes from
+      // ctx.employeeId — input is accepted only if it matches the session.
+      reviewerId: z.string().uuid().optional(),
       remarks: z.string().min(1, 'Rejection reason is required'),
     }))
-    .mutation(async ({ input }) => {
-      
-      // Check if user has management role
-      const reviewer = await db.select().from(employees).where(eq(employees.id, input.reviewerId)).limit(1);
-      if (!reviewer[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
-        throw new Error('Only management users can reject finance collections');
+    .mutation(async ({ input, ctx }) => {
+      if (input.reviewerId && input.reviewerId !== ctx.employeeId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only reject collections under your own account.',
+        });
       }
-      
+      const actorEmployeeId = ctx.employeeId;
+
+      // Check if user has management role
+      const reviewer = await db.select().from(employees).where(eq(employees.id, actorEmployeeId)).limit(1);
+      if (!reviewer[0] || !['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(reviewer[0].role)) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only management users can reject finance collections' });
+      }
+
       // Pre-read entry + event for authz and notification context
       const entry = await db.select().from(financeCollectionEntries)
         .where(eq(financeCollectionEntries.id, input.entryId)).limit(1);
@@ -3711,8 +3734,8 @@ export const eventsRouter = createTRPCRouter({
       }
       const event = await db.select().from(events).where(eq(events.id, entry[0].eventId)).limit(1);
       if (!event[0]) throw new Error('Event not found');
-      if (event[0].assignedTo !== input.reviewerId && !['CMD', 'ADMIN', 'GM', 'CGM'].includes(reviewer[0].role)) {
-        throw new Error('You can only reject collections for events you manage');
+      if (event[0].assignedTo !== actorEmployeeId && !['CMD', 'ADMIN', 'GM', 'CGM'].includes(reviewer[0].role)) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only reject collections for events you manage' });
       }
       
       // Atomic + idempotent transition: pending->rejected only, no event total mutation
@@ -3720,7 +3743,7 @@ export const eventsRouter = createTRPCRouter({
         const claimed = await tx.update(financeCollectionEntries)
           .set({
             approvalStatus: 'rejected',
-            reviewedBy: input.reviewerId,
+            reviewedBy: actorEmployeeId,
             reviewedAt: new Date(),
             reviewRemarks: input.remarks,
           })
@@ -3738,22 +3761,21 @@ export const eventsRouter = createTRPCRouter({
           action: 'REJECT_FINANCE_COLLECTION',
           entityType: 'FINANCE',
           entityId: input.entryId,
-          performedBy: input.reviewerId,
+          performedBy: actorEmployeeId,
           details: { eventId: entry[0].eventId, amount: entry[0].amountCollected, reason: input.remarks },
         });
       });
       
       // Notify the submitter (best-effort; never undo the rejection if notify fails)
       try {
-        await db.insert(notifications).values({
-          recipientId: entry[0].employeeId,
-          type: 'FINANCE_COLLECTION_REJECTED',
-          title: 'Collection Rejected',
-          message: `Your ₹${entry[0].amountCollected.toLocaleString('en-IN')} collection for "${event[0].name}" was rejected. Reason: ${input.remarks}`,
-          entityType: 'EVENT',
-          entityId: entry[0].eventId,
-          metadata: { entryId: input.entryId, amount: entry[0].amountCollected, reason: input.remarks },
-        });
+        await notifyFinanceCollectionRejected(
+          entry[0].employeeId,
+          entry[0].eventId,
+          input.entryId,
+          event[0].name,
+          Number(entry[0].amountCollected),
+          input.remarks,
+        );
       } catch (notifyErr: any) {
         console.error(`[FINANCE] Notification insert failed for rejection (entry ${input.entryId}):`, notifyErr?.message || notifyErr);
       }
@@ -5857,13 +5879,23 @@ export const eventsRouter = createTRPCRouter({
       return { success: true, message: 'Progress submitted successfully' };
     }),
 
-  submitTaskForReview: publicProcedure
+  submitTaskForReview: authedProcedure
     .input(z.object({
       assignmentId: z.string().uuid(),
-      employeeId: z.string().uuid(),
+      // Legacy: clients may still send their own id. Authority comes from
+      // ctx.employeeId — input is accepted only if it matches the session.
+      employeeId: z.string().uuid().optional(),
       note: z.string().max(500).optional(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      if (input.employeeId && input.employeeId !== ctx.employeeId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only submit your own tasks.',
+        });
+      }
+      const actorEmployeeId = ctx.employeeId;
+
       // Wrap the read-snapshot-write in a transaction so a concurrent
       // sales-entry insert can't slip between the read and the write,
       // which would cause us to record a stale snapshot.
@@ -5876,7 +5908,7 @@ export const eventsRouter = createTRPCRouter({
           throw new Error('Assignment not found');
         }
 
-        if (assignment[0].employeeId !== input.employeeId) {
+        if (assignment[0].employeeId !== actorEmployeeId) {
           throw new Error('You can only submit your own tasks');
         }
 
@@ -5938,7 +5970,7 @@ export const eventsRouter = createTRPCRouter({
         const event = await db.select().from(events)
           .where(eq(events.id, result.eventId));
         const submitter = await db.select().from(employees)
-          .where(eq(employees.id, input.employeeId));
+          .where(eq(employees.id, actorEmployeeId));
 
         if (event[0] && submitter[0]) {
           await notifyTaskSubmitted(
@@ -5959,44 +5991,56 @@ export const eventsRouter = createTRPCRouter({
       };
     }),
 
-  approveTask: publicProcedure
+  approveTask: authedProcedure
     .input(z.object({
       assignmentId: z.string().uuid(),
-      reviewerId: z.string().uuid(),
+      // Legacy: clients may still send their own id. Authority comes from
+      // ctx.employeeId — input is accepted only if it matches the session.
+      reviewerId: z.string().uuid().optional(),
     }))
-    .mutation(async ({ input }) => {
-      
+    .mutation(async ({ input, ctx }) => {
+      if (input.reviewerId && input.reviewerId !== ctx.employeeId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only approve tasks under your own account.',
+        });
+      }
+      const actorEmployeeId = ctx.employeeId;
+
       const assignment = await db.select().from(eventAssignments)
         .where(eq(eventAssignments.id, input.assignmentId));
-      
+
       if (!assignment[0]) {
         throw new Error('Assignment not found');
       }
-      
+
       const event = await db.select().from(events)
         .where(eq(events.id, assignment[0].eventId));
-      
-      if (!event[0] || event[0].createdBy !== input.reviewerId) {
+
+      if (!event[0] || event[0].createdBy !== actorEmployeeId) {
         const assignedBy = assignment[0].assignedBy;
-        if (assignedBy !== input.reviewerId) {
-          throw new Error('Only the task creator or assigner can approve');
+        if (assignedBy !== actorEmployeeId) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the task creator or assigner can approve',
+          });
         }
       }
-      
+
       await db.update(eventAssignments)
-        .set({ 
+        .set({
           submissionStatus: 'approved',
           reviewedAt: new Date(),
-          reviewedBy: input.reviewerId,
+          reviewedBy: actorEmployeeId,
           updatedAt: new Date()
         })
         .where(eq(eventAssignments.id, input.assignmentId));
-      
+
       // Send notification to team member
       try {
         const reviewer = await db.select().from(employees)
-          .where(eq(employees.id, input.reviewerId));
-        
+          .where(eq(employees.id, actorEmployeeId));
+
         if (event[0] && reviewer[0]) {
           await notifyTaskApproved(
             assignment[0].employeeId,
@@ -6008,50 +6052,62 @@ export const eventsRouter = createTRPCRouter({
       } catch (notifError) {
         console.error("Failed to send approval notification:", notifError);
       }
-      
+
       return { success: true, message: 'Task approved' };
     }),
 
-  rejectTask: publicProcedure
+  rejectTask: authedProcedure
     .input(z.object({
       assignmentId: z.string().uuid(),
-      reviewerId: z.string().uuid(),
+      // Legacy: clients may still send their own id. Authority comes from
+      // ctx.employeeId — input is accepted only if it matches the session.
+      reviewerId: z.string().uuid().optional(),
       reason: z.string().optional(),
     }))
-    .mutation(async ({ input }) => {
-      
+    .mutation(async ({ input, ctx }) => {
+      if (input.reviewerId && input.reviewerId !== ctx.employeeId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only reject tasks under your own account.',
+        });
+      }
+      const actorEmployeeId = ctx.employeeId;
+
       const assignment = await db.select().from(eventAssignments)
         .where(eq(eventAssignments.id, input.assignmentId));
-      
+
       if (!assignment[0]) {
         throw new Error('Assignment not found');
       }
-      
+
       const event = await db.select().from(events)
         .where(eq(events.id, assignment[0].eventId));
-      
-      if (!event[0] || event[0].createdBy !== input.reviewerId) {
+
+      if (!event[0] || event[0].createdBy !== actorEmployeeId) {
         const assignedBy = assignment[0].assignedBy;
-        if (assignedBy !== input.reviewerId) {
-          throw new Error('Only the task creator or assigner can reject');
+        if (assignedBy !== actorEmployeeId) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the task creator or assigner can reject',
+          });
         }
       }
-      
+
       await db.update(eventAssignments)
-        .set({ 
+        .set({
           submissionStatus: 'rejected',
           reviewedAt: new Date(),
-          reviewedBy: input.reviewerId,
+          reviewedBy: actorEmployeeId,
           rejectionReason: input.reason || null,
           updatedAt: new Date()
         })
         .where(eq(eventAssignments.id, input.assignmentId));
-      
+
       // Send notification to team member
       try {
         const reviewer = await db.select().from(employees)
-          .where(eq(employees.id, input.reviewerId));
-        
+          .where(eq(employees.id, actorEmployeeId));
+
         if (event[0] && reviewer[0]) {
           await notifyTaskRejected(
             assignment[0].employeeId,
@@ -6064,7 +6120,7 @@ export const eventsRouter = createTRPCRouter({
       } catch (notifError) {
         console.error("Failed to send rejection notification:", notifError);
       }
-      
+
       return { success: true, message: 'Task rejected' };
     }),
 

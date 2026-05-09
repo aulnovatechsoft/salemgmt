@@ -1,4 +1,6 @@
 import postgres from "postgres";
+import { syncNotificationTypeEnum } from "./migrate-notification-enum";
+import { syncReviewSnapshotColumns } from "./migrate-review-snapshot";
 
 const connectionString = process.env.BSNL_DATABASE_URL || process.env.DATABASE_URL!;
 
@@ -589,6 +591,11 @@ async function createTables() {
       }
     }
     console.log(`Finance bigint migration: ${widened} widened, ${skipped} skipped`);
+
+    // Run ad-hoc sub-migrations so a single `bun run backend/db/migrate.ts`
+    // is sufficient — no separate scripts to remember.
+    await syncReviewSnapshotColumns(sql);
+    await syncNotificationTypeEnum(sql);
 
     console.log("All tables created successfully!");
     await sql.end();

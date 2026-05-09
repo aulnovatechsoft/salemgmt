@@ -2,7 +2,7 @@ import { db } from '../db';
 import { notifications, pushTokens, notificationPreferences, pushNotificationQueue } from '../db/schema';
 import { eq, and, desc, sql, lt, gte, lte, inArray } from 'drizzle-orm';
 
-type NotificationType = 
+type NotificationType =
   | 'EVENT_ASSIGNED'
   | 'EVENT_STATUS_CHANGED'
   | 'ISSUE_RAISED'
@@ -19,7 +19,10 @@ type NotificationType =
   | 'SLA_WARNING'
   | 'SLA_BREACHED'
   | 'DEADLINE_WARNING'
-  | 'TASK_ENDING_TODAY';
+  | 'TASK_ENDING_TODAY'
+  | 'FINANCE_COLLECTION_SUBMITTED'
+  | 'FINANCE_COLLECTION_APPROVED'
+  | 'FINANCE_COLLECTION_REJECTED';
 
 interface CreateNotificationParams {
   recipientId: string;
@@ -568,6 +571,65 @@ export async function notifyTaskRejected(
     entityType: 'EVENT',
     entityId: eventId,
     metadata: { eventName, rejectedByName, reason },
+  });
+}
+
+export async function notifyFinanceCollectionSubmitted(
+  recipientId: string,
+  eventId: string,
+  entryId: string,
+  eventName: string,
+  submitterName: string,
+  amount: number,
+  financeType: string,
+  paymentMode: string,
+): Promise<void> {
+  const prettyType = financeType.replace('FIN_', '').replace(/_/g, ' ');
+  await createNotification({
+    recipientId,
+    type: 'FINANCE_COLLECTION_SUBMITTED',
+    title: 'Finance Collection Pending Review',
+    message: `${submitterName} submitted ₹${amount.toLocaleString('en-IN')} collection (${prettyType}) for "${eventName}". Review required.`,
+    entityType: 'EVENT',
+    entityId: eventId,
+    metadata: { entryId, financeType, amount, submitterName, paymentMode },
+  });
+}
+
+export async function notifyFinanceCollectionApproved(
+  recipientId: string,
+  eventId: string,
+  entryId: string,
+  eventName: string,
+  amount: number,
+): Promise<void> {
+  await createNotification({
+    recipientId,
+    type: 'FINANCE_COLLECTION_APPROVED',
+    title: 'Collection Approved',
+    message: `Your ₹${amount.toLocaleString('en-IN')} collection for "${eventName}" has been approved.`,
+    entityType: 'EVENT',
+    entityId: eventId,
+    metadata: { entryId, amount },
+  });
+}
+
+export async function notifyFinanceCollectionRejected(
+  recipientId: string,
+  eventId: string,
+  entryId: string,
+  eventName: string,
+  amount: number,
+  reason: string,
+): Promise<void> {
+  await createNotification({
+    recipientId,
+    type: 'FINANCE_COLLECTION_REJECTED',
+    title: 'Collection Rejected',
+    message: `Your ₹${amount.toLocaleString('en-IN')} collection for "${eventName}" was rejected. Reason: ${reason}`,
+    entityType: 'EVENT',
+    entityId: eventId,
+    metadata: { entryId, amount, reason },
   });
 }
 
