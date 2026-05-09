@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, RefreshControl, Modal, Platform } from 'react-native';
 import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
-import { MapPin, Calendar, Users, Plus, Trash2, Camera, User, X, Edit3, Play, Pause, CheckCircle, XCircle, ChevronRight, Clock, Flag, ListTodo, Zap, AlertCircle, Settings, Send, RotateCcw, CircleCheck, Hourglass, CircleDot, ThumbsUp, ThumbsDown, Check } from 'lucide-react-native';
+import { MapPin, Calendar, Users, Plus, Trash2, Camera, User, X, Edit3, Play, Pause, CheckCircle, XCircle, ChevronRight, Clock, Flag, ListTodo, Zap, AlertCircle, Settings, Send, RotateCcw, CircleCheck, Hourglass, CircleDot, ThumbsUp, ThumbsDown, Check, ArrowLeft } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { getDisplayTaskId } from '@/utils/taskId';
 import Colors from '@/constants/colors';
@@ -1309,10 +1309,32 @@ export default function EventDetailScreen() {
   const unassignedMembers = availableMembers?.filter(m => !m.isAssigned && m.id !== eventData?.assignedTo) || [];
   
 
+  // Back-arrow header — Expo Router doesn't auto-render one when the screen
+  // is opened via deep link / direct URL (no nav history). Always show one
+  // and fall back to the tasks tab when there's nothing to pop.
+  const goBackSafe = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)/events');
+    }
+  };
+  const renderBackButton = () => (
+    <TouchableOpacity onPress={goBackSafe} style={styles.headerButton} accessibilityLabel="Back">
+      <ArrowLeft size={22} color={Colors.light.background} />
+    </TouchableOpacity>
+  );
+  const baseHeaderOptions = {
+    title: 'Task Details',
+    headerStyle: { backgroundColor: Colors.light.primary },
+    headerTintColor: Colors.light.background,
+    headerLeft: renderBackButton,
+  } as const;
+
   if (!id) {
     return (
       <>
-        <Stack.Screen options={{ title: 'Task Details', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
+        <Stack.Screen options={baseHeaderOptions} />
         <View style={styles.loadingContainer}>
           <Text style={styles.errorTitle}>Invalid Task</Text>
           <Text style={styles.errorText}>No event ID provided</Text>
@@ -1327,7 +1349,7 @@ export default function EventDetailScreen() {
   if (isLoading) {
     return (
       <>
-        <Stack.Screen options={{ title: 'Task Details', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
+        <Stack.Screen options={baseHeaderOptions} />
         <View style={styles.loadingContainer}>
           <View style={styles.loadingSpinner}>
             <Text style={styles.loadingIcon}>⏳</Text>
@@ -1343,7 +1365,7 @@ export default function EventDetailScreen() {
     console.error('Event Detail Error:', error);
     return (
       <>
-        <Stack.Screen options={{ title: 'Task Details', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
+        <Stack.Screen options={baseHeaderOptions} />
         <View style={styles.loadingContainer}>
           <Text style={styles.errorIcon}>⚠️</Text>
           <Text style={styles.errorTitle}>Failed to Load Task</Text>
@@ -1362,7 +1384,7 @@ export default function EventDetailScreen() {
   if (!eventData) {
     return (
       <>
-        <Stack.Screen options={{ title: 'Task Details', headerStyle: { backgroundColor: Colors.light.primary }, headerTintColor: Colors.light.background }} />
+        <Stack.Screen options={baseHeaderOptions} />
         <View style={styles.loadingContainer}>
           <Text style={styles.errorIcon}>🔍</Text>
           <Text style={styles.errorTitle}>Task Not Found</Text>
@@ -1386,6 +1408,7 @@ export default function EventDetailScreen() {
           headerStyle: { backgroundColor: Colors.light.primary },
           headerTintColor: Colors.light.background,
           headerTitleStyle: { fontWeight: 'bold' as const },
+          headerLeft: renderBackButton,
           headerRight: () => canManageTeam ? (
             <TouchableOpacity onPress={openEditModal} style={styles.headerButton}>
               <Edit3 size={20} color={Colors.light.background} />
