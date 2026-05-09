@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
-import { Plus, Search, Calendar, MapPin, Users, Play, Pause, CheckCircle, XCircle, FileText, Edit3, ChevronRight, ChevronDown, ChevronUp, Zap, Briefcase, Clock } from 'lucide-react-native';
+import { Plus, Search, Calendar, MapPin, Users, Play, Pause, CheckCircle, XCircle, FileText, Edit3, ChevronRight, ChevronDown, ChevronUp, Zap, Briefcase, Clock, AlertTriangle, Inbox } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { useApp } from '@/contexts/app';
 import { getDisplayTaskId } from '@/utils/taskId';
@@ -35,7 +35,10 @@ export default function EventsScreen() {
     }
   );
   
-  type EventWithOwnership = Event & { ownershipCategory: 'created_by_me' | 'assigned_to_me' | 'subordinate_task' | 'draft_task' };
+  type EventWithOwnership = Event & {
+    ownershipCategory: 'created_by_me' | 'assigned_to_me' | 'subordinate_task' | 'draft_task';
+    submissionStatus?: string;
+  };
   
   const events: EventWithOwnership[] = useMemo(() => {
     if (!myEventsData) return [];
@@ -87,6 +90,11 @@ export default function EventsScreen() {
         routeFailCompleted: e.routeFailCompleted || 0,
         ofcFailCompleted: e.ofcFailCompleted || 0,
         ownershipCategory: e.ownershipCategory || 'subordinate_task',
+        // Aggregate submission status from getMyEvents — drives both
+        // the "Pending review" status chip and the "needs my action"
+        // red badge. Values: 'not_started' | 'in_progress' | 'submitted'
+        // | 'approved' | 'rejected'.
+        submissionStatus: e.submissionStatus || 'not_started',
       };
     });
   }, [myEventsData]);
@@ -127,6 +135,8 @@ export default function EventsScreen() {
   const canEditEvent = canCreateEvents(employee?.role || 'SALES_STAFF');
 
   const [activeCategory, setActiveCategory] = useState<'all' | 'created_by_me' | 'assigned_to_me' | 'subordinate_task' | 'draft_task'>('all');
+  type StatusFilter = 'all' | 'needs_action' | 'active' | 'pending_review' | 'overdue' | 'completed';
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     created_by_me: true,
     assigned_to_me: true,
@@ -136,6 +146,52 @@ export default function EventsScreen() {
 
   const toggleSection = (section: string) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
+
+  // ─── Per-event derived signals ─────────────────────────────────────────
+  // These are the building blocks behind the status sub-filter chips AND
+  // the red "needs my action" badge. Computed once per event so a single
+  // pass produces both filter buckets and the action count.
+  const eventSignals = useMemo(() => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    return new Map(events.map(e => {
+      const endMs = new Date(e.dateRange.endDate).getTime();
+      const startMs = new Date(e.dateRange.startDate).getTime();
+      const status = e.status as EventStatus;
+      const terminal = status === 'completed' || status === 'cancelled';
+      const isDraft = status === 'draft';
+      const isCompleted = status === 'completed';
+      const isOverdue = !terminal && !isDraft && endMs < now;
+      const isActive = !terminal && !isDraft && status !== 'paused' && now >= startMs && now <= endMs;
+      // "Pending review" only makes sense for tasks I created — those
+      // are the ones where MY action (approve/reject) unblocks the
+      // submitter. For tasks assigned to me with status 'submitted',
+      // the ball is in someone else's court (the creator).
+      const isPendingMyReview = e.ownershipCategory === 'created_by_me' && e.submissionStatus === 'submitted';
+      // "Needs my action" is the one number a manager scans first:
+      //   · I have submissions waiting for my approval, OR
+      //   · I'm personally on the hook for an overdue task and haven't
+      //     approved/submitted yet (rejected counts — I need to fix and resubmit)
+      const myWorkPending = e.ownershipCategory === 'assigned_to_me'
+        && isOverdue
+        && e.submissionStatus !== 'approved'
+        && e.submissionStatus !== 'submitted';
+      const needsMyAction = isPendingMyReview || myWorkPending;
+      return [e.id, { isOverdue, isActive, isCompleted, isPendingMyReview, needsMyAction, daysToEnd: Math.floor((endMs - now) / dayMs) }] as const;
+    }));
+  }, [events]);
+
+  const passesStatus = (e: EventWithOwnership, f: StatusFilter): boolean => {
+    if (f === 'all') return true;
+    const s = eventSignals.get(e.id);
+    if (!s) return false;
+    if (f === 'needs_action') return s.needsMyAction;
+    if (f === 'active') return s.isActive;
+    if (f === 'pending_review') return s.isPendingMyReview;
+    if (f === 'overdue') return s.isOverdue;
+    if (f === 'completed') return s.isCompleted;
+    return true;
   };
 
   const filteredEvents = useMemo(() => {
@@ -148,10 +204,12 @@ export default function EventsScreen() {
       );
     }
 
+    filtered = filtered.filter(e => passesStatus(e, statusFilter));
+
     return filtered.sort((a, b) => 
       new Date(b.dateRange.startDate).getTime() - new Date(a.dateRange.startDate).getTime()
     );
-  }, [events, searchQuery]);
+  }, [events, searchQuery, statusFilter, eventSignals]);
 
   const getEventDisplayStatus = (event: Event): { status: EventStatus | 'upcoming' | 'past'; label: string } => {
     const dbStatus = event.status as EventStatus;
@@ -181,11 +239,69 @@ export default function EventsScreen() {
     draft_task: draftEvents.length,
   };
 
-  const CATEGORY_CONFIG = {
-    created_by_me: { label: 'Created by Me', icon: Edit3, color: '#1565C0', bg: '#E3F2FD' },
-    assigned_to_me: { label: 'Assigned to Me', icon: Users, color: '#2E7D32', bg: '#E8F5E9' },
-    subordinate_task: { label: 'Team Tasks', icon: Users, color: '#7B1FA2', bg: '#F3E5F5' },
-    draft_task: { label: 'My Drafts', icon: FileText, color: '#78909C', bg: '#ECEFF1' },
+  // ─── Counts for the status sub-filter chips ────────────────────────────
+  // Computed against the SEARCH-filtered set (not the status-filtered
+  // set) so the chip labels reflect "what's available to filter to",
+  // not "what's currently shown" — otherwise selecting Overdue would
+  // make the other chips read 0 and look broken.
+  const searchedEvents = useMemo(() => {
+    if (!searchQuery.trim()) return events;
+    const q = searchQuery.toLowerCase();
+    return events.filter(e =>
+      e.name.toLowerCase().includes(q) || e.location.toLowerCase().includes(q),
+    );
+  }, [events, searchQuery]);
+
+  const statusCounts = useMemo(() => {
+    let needsAction = 0, active = 0, pendingReview = 0, overdue = 0, completed = 0;
+    for (const e of searchedEvents) {
+      const s = eventSignals.get(e.id);
+      if (!s) continue;
+      if (s.needsMyAction) needsAction++;
+      if (s.isActive) active++;
+      if (s.isPendingMyReview) pendingReview++;
+      if (s.isOverdue) overdue++;
+      if (s.isCompleted) completed++;
+    }
+    return { needsAction, active, pendingReview, overdue, completed, all: searchedEvents.length };
+  }, [searchedEvents, eventSignals]);
+
+  // The "needs your action" red badge on the All tab uses the count
+  // computed from ALL events (ignoring search/status filters) so the
+  // headline number stays stable regardless of what you're filtering.
+  const needsActionTotal = useMemo(() => {
+    let n = 0;
+    for (const e of events) {
+      const s = eventSignals.get(e.id);
+      if (s?.needsMyAction) n++;
+    }
+    return n;
+  }, [events, eventSignals]);
+
+  // ─── Hide-empty-tabs ───────────────────────────────────────────────────
+  // "All" and the active tab always render so the user never sees a
+  // ghost-jump when their last task in a category gets approved.
+  // Empty drafts/assigned vanish — they're noise.
+  type CatKey = 'created_by_me' | 'assigned_to_me' | 'subordinate_task' | 'draft_task';
+  const visibleCategories: CatKey[] = (['created_by_me', 'assigned_to_me', 'subordinate_task', 'draft_task'] as const)
+    .filter(k => categoryCounts[k] > 0 || activeCategory === k);
+
+  // If the active category just became empty (e.g. last task approved
+  // and no longer matches the status filter), bounce back to All so
+  // the user isn't staring at an empty pane.
+  useMemo(() => {
+    if (activeCategory !== 'all' && categoryCounts[activeCategory] === 0 && events.length > 0) {
+      // Fire-and-forget — useState setter inside useMemo is fine here
+      // because it's idempotent and we only care about the side effect.
+      setActiveCategory('all');
+    }
+  }, [activeCategory, categoryCounts, events.length]);
+
+  const CATEGORY_CONFIG: Record<CatKey, { label: string; short: string; color: string; bg: string }> = {
+    created_by_me: { label: 'Created by Me', short: 'Created', color: '#1565C0', bg: '#E3F2FD' },
+    assigned_to_me: { label: 'Assigned to Me', short: 'Assigned', color: '#2E7D32', bg: '#E8F5E9' },
+    subordinate_task: { label: 'Team Tasks', short: 'Team', color: '#7B1FA2', bg: '#F3E5F5' },
+    draft_task: { label: 'My Drafts', short: 'Drafts', color: '#78909C', bg: '#ECEFF1' },
   };
 
   return (
@@ -224,52 +340,148 @@ export default function EventsScreen() {
           />
         </View>
 
-        <View style={styles.categorySummary}>
-          <View style={styles.categoryChipsRow}>
-            <TouchableOpacity 
-              style={[styles.categoryChip, activeCategory === 'all' && styles.categoryChipActive]}
-              onPress={() => setActiveCategory('all')}
+        {/* Ownership tabs — single horizontally-scrollable row, with
+            empty categories hidden (Drafts vanishes if you have none,
+            etc.) so the eye lands on what's actionable. The All tab
+            carries a small red badge with the count of tasks that need
+            YOUR action — submissions to approve, plus overdue work
+            personally assigned to you that still needs to ship. */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.categoryStripContent}
+          style={styles.categoryStrip}
+        >
+          <TouchableOpacity
+            style={[styles.categoryChip, activeCategory === 'all' && styles.categoryChipActive]}
+            onPress={() => setActiveCategory('all')}
+          >
+            <Text style={[styles.categoryChipText, activeCategory === 'all' && styles.categoryChipTextActive]}>
+              All ({categoryCounts.all})
+            </Text>
+            {needsActionTotal > 0 && (
+              <View style={styles.actionBadge}>
+                <Text style={styles.actionBadgeText}>
+                  {needsActionTotal > 9 ? '9+' : String(needsActionTotal)}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          {visibleCategories.map(key => {
+            const cfg = CATEGORY_CONFIG[key];
+            const active = activeCategory === key;
+            return (
+              <TouchableOpacity
+                key={key}
+                style={[styles.categoryChip, active && styles.categoryChipActive, { borderColor: cfg.color }]}
+                onPress={() => setActiveCategory(key)}
+              >
+                <Text style={[
+                  styles.categoryChipText,
+                  active && styles.categoryChipTextActive,
+                  active && { color: cfg.color },
+                ]}>
+                  {cfg.short} ({categoryCounts[key]})
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        {/* Status sub-filter chips — sit under the ownership tabs and
+            slice whichever category is active by what NEEDS LOOKING AT.
+            "Needs action" gets a red dot to mirror the badge above.
+            Each chip hides itself when its count is 0 so the row stays
+            compact (we always show "All" so the user can clear the
+            filter without thinking). */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.statusStripContent}
+          style={styles.statusStrip}
+        >
+          <TouchableOpacity
+            style={[styles.statusChip, statusFilter === 'all' && styles.statusChipActive]}
+            onPress={() => setStatusFilter('all')}
+          >
+            <Text style={[styles.statusChipText, statusFilter === 'all' && styles.statusChipTextActive]}>
+              All status
+            </Text>
+          </TouchableOpacity>
+          {statusCounts.needsAction > 0 && (
+            <TouchableOpacity
+              style={[
+                styles.statusChip,
+                statusFilter === 'needs_action' && styles.statusChipActiveDanger,
+                { borderColor: '#C62828' },
+              ]}
+              onPress={() => setStatusFilter('needs_action')}
             >
-              <Text style={[styles.categoryChipText, activeCategory === 'all' && styles.categoryChipTextActive]}>
-                All ({categoryCounts.all})
+              <View style={styles.statusDotRed} />
+              <Text style={[
+                styles.statusChipText,
+                statusFilter === 'needs_action' ? { color: '#fff', fontWeight: '600' as const } : { color: '#C62828' },
+              ]}>
+                Needs action ({statusCounts.needsAction})
               </Text>
             </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.categoryChip, activeCategory === 'created_by_me' && styles.categoryChipActive, { borderColor: '#1565C0' }]}
-              onPress={() => setActiveCategory('created_by_me')}
+          )}
+          {statusCounts.pendingReview > 0 && (
+            <TouchableOpacity
+              style={[styles.statusChip, statusFilter === 'pending_review' && styles.statusChipActive, { borderColor: '#E65100' }]}
+              onPress={() => setStatusFilter('pending_review')}
             >
-              <Text style={[styles.categoryChipText, activeCategory === 'created_by_me' && styles.categoryChipTextActive]}>
-                Created ({categoryCounts.created_by_me})
+              <Inbox size={12} color={statusFilter === 'pending_review' ? '#fff' : '#E65100'} />
+              <Text style={[
+                styles.statusChipText,
+                statusFilter === 'pending_review' ? { color: '#fff', fontWeight: '600' as const } : { color: '#E65100' },
+              ]}>
+                Pending review ({statusCounts.pendingReview})
               </Text>
             </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.categoryChip, activeCategory === 'assigned_to_me' && styles.categoryChipActive, { borderColor: '#2E7D32' }]}
-              onPress={() => setActiveCategory('assigned_to_me')}
+          )}
+          {statusCounts.overdue > 0 && (
+            <TouchableOpacity
+              style={[styles.statusChip, statusFilter === 'overdue' && styles.statusChipActive, { borderColor: '#B71C1C' }]}
+              onPress={() => setStatusFilter('overdue')}
             >
-              <Text style={[styles.categoryChipText, activeCategory === 'assigned_to_me' && styles.categoryChipTextActive]}>
-                Assigned ({categoryCounts.assigned_to_me})
+              <AlertTriangle size={12} color={statusFilter === 'overdue' ? '#fff' : '#B71C1C'} />
+              <Text style={[
+                styles.statusChipText,
+                statusFilter === 'overdue' ? { color: '#fff', fontWeight: '600' as const } : { color: '#B71C1C' },
+              ]}>
+                Overdue ({statusCounts.overdue})
               </Text>
             </TouchableOpacity>
-          </View>
-          <View style={styles.categoryChipsRow}>
-            <TouchableOpacity 
-              style={[styles.categoryChip, activeCategory === 'subordinate_task' && styles.categoryChipActive, { borderColor: '#7B1FA2' }]}
-              onPress={() => setActiveCategory('subordinate_task')}
+          )}
+          {statusCounts.active > 0 && (
+            <TouchableOpacity
+              style={[styles.statusChip, statusFilter === 'active' && styles.statusChipActive, { borderColor: '#2E7D32' }]}
+              onPress={() => setStatusFilter('active')}
             >
-              <Text style={[styles.categoryChipText, activeCategory === 'subordinate_task' && styles.categoryChipTextActive]}>
-                Team ({categoryCounts.subordinate_task})
+              <Text style={[
+                styles.statusChipText,
+                statusFilter === 'active' ? { color: '#fff', fontWeight: '600' as const } : { color: '#2E7D32' },
+              ]}>
+                Active ({statusCounts.active})
               </Text>
             </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.categoryChip, activeCategory === 'draft_task' && styles.categoryChipActive, { borderColor: '#78909C' }]}
-              onPress={() => setActiveCategory('draft_task')}
+          )}
+          {statusCounts.completed > 0 && (
+            <TouchableOpacity
+              style={[styles.statusChip, statusFilter === 'completed' && styles.statusChipActive, { borderColor: '#1565C0' }]}
+              onPress={() => setStatusFilter('completed')}
             >
-              <Text style={[styles.categoryChipText, activeCategory === 'draft_task' && styles.categoryChipTextActive]}>
-                Drafts ({categoryCounts.draft_task})
+              <CheckCircle size={12} color={statusFilter === 'completed' ? '#fff' : '#1565C0'} />
+              <Text style={[
+                styles.statusChipText,
+                statusFilter === 'completed' ? { color: '#fff', fontWeight: '600' as const } : { color: '#1565C0' },
+              ]}>
+                Completed ({statusCounts.completed})
               </Text>
             </TouchableOpacity>
-          </View>
-        </View>
+          )}
+        </ScrollView>
 
         <ScrollView style={styles.scrollView}>
           {(activeCategory === 'all' || activeCategory === 'created_by_me') && createdByMeEvents.length > 0 && (
@@ -356,12 +568,14 @@ export default function EventsScreen() {
             </View>
           )}
 
-          {filteredEvents.length > 0 && activeCategory !== 'all' && categoryCounts[activeCategory] === 0 && (
+          {events.length > 0 && filteredEvents.length === 0 && (
             <View style={styles.emptyState}>
               <FileText size={48} color={Colors.light.textSecondary} />
-              <Text style={styles.emptyTitle}>No Tasks in This Category</Text>
+              <Text style={styles.emptyTitle}>Nothing matches this filter</Text>
               <Text style={styles.emptySubtitle}>
-                Try selecting a different category or "All" to see all tasks
+                {statusFilter !== 'all'
+                  ? 'Try clearing the status filter or switching tabs.'
+                  : 'Try a different tab or clear your search.'}
               </Text>
             </View>
           )}
@@ -731,28 +945,29 @@ const styles = StyleSheet.create({
     fontWeight: '600' as const,
     color: '#374151',
   },
-  categorySummary: {
-    paddingHorizontal: 16,
+  categoryStrip: {
+    flexGrow: 0,
     paddingVertical: 8,
-    gap: 8,
   },
-  categoryChipsRow: {
-    flexDirection: 'row',
+  categoryStripContent: {
+    paddingHorizontal: 16,
     gap: 8,
+    alignItems: 'center',
   },
   categoryChip: {
-    flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
     borderRadius: 10,
     backgroundColor: Colors.light.background,
     borderWidth: 1.5,
     borderColor: '#E5E7EB',
     alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
   },
   categoryChipActive: {
-    backgroundColor: Colors.light.primary,
-    borderColor: Colors.light.primary,
+    backgroundColor: '#fff',
+    borderWidth: 2,
   },
   categoryChipText: {
     fontSize: 13,
@@ -760,7 +975,68 @@ const styles = StyleSheet.create({
     color: '#6B7280',
   },
   categoryChipTextActive: {
-    color: Colors.light.background,
+    color: Colors.light.primary,
+  },
+  // Red attention badge that rides on the All chip — capped at 9+ so
+  // the layout never grows past two characters.
+  actionBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#C62828',
+    paddingHorizontal: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  actionBadgeText: {
+    fontSize: 11,
+    fontWeight: '700' as const,
+    color: '#fff',
+  },
+  // Status sub-filter strip — shorter than the ownership chips, sits
+  // immediately under them. Uses the same horizontal-scroll pattern.
+  statusStrip: {
+    flexGrow: 0,
+    paddingBottom: 8,
+  },
+  statusStripContent: {
+    paddingHorizontal: 16,
+    gap: 6,
+    alignItems: 'center',
+  },
+  statusChip: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  statusChipActive: {
+    backgroundColor: Colors.light.primary,
+    borderColor: Colors.light.primary,
+  },
+  statusChipActiveDanger: {
+    backgroundColor: '#C62828',
+    borderColor: '#C62828',
+  },
+  statusChipText: {
+    fontSize: 12,
+    fontWeight: '500' as const,
+    color: '#6B7280',
+  },
+  statusChipTextActive: {
+    color: '#fff',
+    fontWeight: '600' as const,
+  },
+  statusDotRed: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#C62828',
   },
   eventCard: {
     backgroundColor: Colors.light.card,
