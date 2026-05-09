@@ -18,6 +18,10 @@ export default function IssuesScreen() {
   // timeline so the raiser can see WHY it was marked resolved).
   const [resolveTargetId, setResolveTargetId] = useState<string | null>(null);
   const [resolveNotes, setResolveNotes] = useState('');
+  // Result toast modal — replaces window.alert (which shows the ugly
+  // "<host> says" Chrome dialog) with the same in-screen Modal style
+  // used everywhere else in the app.
+  const [resultModal, setResultModal] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
 
   const { data: allIssues, isLoading, refetch } = trpc.issues.getAll.useQuery(undefined, {
     enabled: !!employee?.id,
@@ -41,21 +45,14 @@ export default function IssuesScreen() {
     onSuccess: () => {
       closeResolveModal();
       refetch();
-      // Single-button feedback. Reliable on both platforms (web's
-      // window.alert is fine for a one-shot OK; iframe-blocking only
-      // affects subsequent dialogs in the same tick).
-      if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        window.alert('Issue resolved successfully');
-      } else {
-        Alert.alert('Success', 'Issue resolved successfully');
-      }
+      // Use the in-screen result modal (same look as the Resolve modal)
+      // instead of window.alert. window.alert shows the browser's
+      // chrome-y "<host> says" dialog, which feels broken inside the
+      // app shell.
+      setResultModal({ kind: 'success', message: 'Issue resolved successfully' });
     },
     onError: (error) => {
-      if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        window.alert(error.message || 'Failed to resolve issue');
-      } else {
-        Alert.alert('Error', error.message || 'Failed to resolve issue');
-      }
+      setResultModal({ kind: 'error', message: error.message || 'Failed to resolve issue' });
     },
   });
 
@@ -223,6 +220,37 @@ export default function IssuesScreen() {
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
+
+      {/* Result toast modal — same shell style as the Resolve modal,
+          single OK button. Replaces window.alert. */}
+      <Modal
+        visible={!!resultModal}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setResultModal(null)}
+      >
+        <View style={styles.resultOverlay}>
+          <View style={styles.resultModalCard}>
+            <View style={styles.resultIconWrap}>
+              {resultModal?.kind === 'success' ? (
+                <CheckCircle size={36} color={Colors.light.success} />
+              ) : (
+                <AlertCircle size={36} color={Colors.light.error} />
+              )}
+            </View>
+            <Text style={styles.resultTitle}>
+              {resultModal?.kind === 'success' ? 'Success' : 'Something went wrong'}
+            </Text>
+            <Text style={styles.resultMessage}>{resultModal?.message}</Text>
+            <TouchableOpacity
+              style={[styles.modalConfirmBtn, { flex: 0, paddingHorizontal: 32, alignSelf: 'stretch' }]}
+              onPress={() => setResultModal(null)}
+            >
+              <Text style={styles.modalConfirmText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* In-screen Resolve modal — replaces the unreliable
           Alert.alert/window.confirm and adds a notes field. */}
@@ -580,6 +608,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
+  resultOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   modalContent: {
     backgroundColor: Colors.light.background,
     borderTopLeftRadius: 20,
@@ -653,5 +687,37 @@ const styles = StyleSheet.create({
   },
   modalBtnDisabled: {
     opacity: 0.6,
+  },
+  resultModalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 24,
+    margin: 24,
+    alignItems: 'center',
+    alignSelf: 'center',
+    maxWidth: 360,
+    width: '85%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  resultIconWrap: {
+    marginBottom: 12,
+  },
+  resultTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.light.text,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  resultMessage: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20,
   },
 });
