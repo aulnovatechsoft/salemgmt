@@ -5531,6 +5531,9 @@ export const eventsRouter = createTRPCRouter({
             submittedAt: null as string | null,
             reviewedAt: null as string | null,
             rejectionReason: null as string | null,
+            lastResubmittedAt: null as string | null,
+            lastSubmittedSnapshot: null as Record<string, number> | null,
+            lastSubmissionNote: null as string | null,
           };
         }
         
@@ -5659,6 +5662,9 @@ export const eventsRouter = createTRPCRouter({
           submittedAt: assignment?.submittedAt ?? null,
           reviewedAt: assignment?.reviewedAt ?? null,
           rejectionReason: assignment?.rejectionReason ?? null,
+          lastResubmittedAt: assignment?.lastResubmittedAt ?? null,
+          lastSubmittedSnapshot: (assignment?.lastSubmittedSnapshot as Record<string, number> | null) ?? null,
+          lastSubmissionNote: assignment?.lastSubmissionNote ?? null,
         };
       });
     }),
@@ -5855,35 +5861,85 @@ export const eventsRouter = createTRPCRouter({
     .input(z.object({
       assignmentId: z.string().uuid(),
       employeeId: z.string().uuid(),
+      note: z.string().max(500).optional(),
     }))
     .mutation(async ({ input }) => {
-      
-      const assignment = await db.select().from(eventAssignments)
-        .where(eq(eventAssignments.id, input.assignmentId));
-      
-      if (!assignment[0]) {
-        throw new Error('Assignment not found');
-      }
-      
-      if (assignment[0].employeeId !== input.employeeId) {
-        throw new Error('You can only submit your own tasks');
-      }
-      
-      await db.update(eventAssignments)
-        .set({ 
-          submissionStatus: 'submitted',
-          submittedAt: new Date(),
-          updatedAt: new Date()
-        })
-        .where(eq(eventAssignments.id, input.assignmentId));
-      
-      // Send notification to task creator
+      // Wrap the read-snapshot-write in a transaction so a concurrent
+      // sales-entry insert can't slip between the read and the write,
+      // which would cause us to record a stale snapshot.
+      const result = await db.transaction(async (tx) => {
+        const assignment = await tx.select().from(eventAssignments)
+          .where(eq(eventAssignments.id, input.assignmentId))
+          .for('update');
+
+        if (!assignment[0]) {
+          throw new Error('Assignment not found');
+        }
+
+        if (assignment[0].employeeId !== input.employeeId) {
+          throw new Error('You can only submit your own tasks');
+        }
+
+        if (assignment[0].submissionStatus === 'approved') {
+          throw new Error('This task has already been approved and cannot be re-submitted');
+        }
+
+        // Snapshot current numbers (taken under row lock) so the reviewer and
+        // the diff check both see exactly what was submitted at this moment.
+        const a = assignment[0];
+        const currentSnapshot: Record<string, number> = {
+          simSold: a.simSold ?? 0,
+          ftthSold: a.ftthSold ?? 0,
+          leaseCompleted: a.leaseCompleted ?? 0,
+          ebCompleted: a.ebCompleted ?? 0,
+          btsDownCompleted: a.btsDownCompleted ?? 0,
+          routeFailCompleted: a.routeFailCompleted ?? 0,
+          ftthDownCompleted: a.ftthDownCompleted ?? 0,
+          ofcFailCompleted: a.ofcFailCompleted ?? 0,
+        };
+
+        const totalDone = Object.values(currentSnapshot).reduce((s, n) => s + n, 0);
+        if (totalDone === 0) {
+          throw new Error('Log at least one entry before submitting for review');
+        }
+
+        const isFirstSubmission = !a.submittedAt;
+        const previousSnapshot = (a.lastSubmittedSnapshot as Record<string, number> | null) ?? null;
+        const numbersUnchanged = previousSnapshot
+          ? Object.keys(currentSnapshot).every(k => (currentSnapshot[k] ?? 0) === (previousSnapshot[k] ?? 0))
+          : false;
+
+        // Politeness rule: don't spam the reviewer if nothing changed.
+        if (!isFirstSubmission && a.submissionStatus === 'submitted' && numbersUnchanged) {
+          throw new Error('No new entries since your last submission. Add more entries before re-submitting.');
+        }
+
+        const now = new Date();
+        await tx.update(eventAssignments)
+          .set({
+            submissionStatus: 'submitted',
+            submittedAt: isFirstSubmission ? now : a.submittedAt,
+            lastResubmittedAt: isFirstSubmission ? null : now,
+            lastSubmittedSnapshot: currentSnapshot,
+            lastSubmissionNote: input.note?.trim() || null,
+            // Clear stale rejection reason when re-submitting after a rejection.
+            rejectionReason: a.submissionStatus === 'rejected' ? null : a.rejectionReason,
+            updatedAt: now,
+          })
+          .where(eq(eventAssignments.id, input.assignmentId));
+
+        return { isFirstSubmission, eventId: a.eventId };
+      });
+
+      // Send notification to task creator (always — this is an explicit ping).
+      // Outside the transaction so notification I/O can't roll back the submit.
+      // The notification service has its own 5-min dedupe window.
       try {
         const event = await db.select().from(events)
-          .where(eq(events.id, assignment[0].eventId));
+          .where(eq(events.id, result.eventId));
         const submitter = await db.select().from(employees)
           .where(eq(employees.id, input.employeeId));
-        
+
         if (event[0] && submitter[0]) {
           await notifyTaskSubmitted(
             event[0].createdBy,
@@ -5895,8 +5951,12 @@ export const eventsRouter = createTRPCRouter({
       } catch (notifError) {
         console.error("Failed to send submission notification:", notifError);
       }
-      
-      return { success: true, message: 'Task submitted for review' };
+
+      return {
+        success: true,
+        message: result.isFirstSubmission ? 'Task submitted for review' : 'Updated submission sent to reviewer',
+        isResubmission: !result.isFirstSubmission,
+      };
     }),
 
   approveTask: publicProcedure

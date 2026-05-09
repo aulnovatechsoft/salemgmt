@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Modal, Alert, ActivityIndicator, AppState } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Modal, Alert, ActivityIndicator, AppState, TextInput, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, usePathname } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -34,6 +34,8 @@ export default function MyTasksScreen() {
   const [selectedTask, setSelectedTask] = useState<any>(null);
   const [createdExpanded, setCreatedExpanded] = useState(true);
   const [assignedExpanded, setAssignedExpanded] = useState(true);
+  const [reviewModalTask, setReviewModalTask] = useState<any>(null);
+  const [reviewNote, setReviewNote] = useState<string>('');
 
   const { data: myTasks, isLoading, refetch } = trpc.events.getMyAssignedTasks.useQuery(
     { employeeId: employee?.id || '' },
@@ -389,8 +391,49 @@ export default function MyTasksScreen() {
       item.myTargets.routeFail > 0 || item.myTargets.ftthDown > 0 || 
       item.myTargets.ofcFail > 0 || item.myTargets.eb > 0;
 
-    const canSubmit = item.assignmentId && 
-      (item.submissionStatus === 'in_progress' || item.submissionStatus === 'rejected' || item.submissionStatus === 'not_started');
+    // Current totals across every category the user works on.
+    const currentTotals: Record<string, number> = {
+      simSold: item.myProgress?.simSold ?? 0,
+      ftthSold: item.myProgress?.ftthSold ?? 0,
+      leaseCompleted: (item.myProgress as any)?.lease ?? 0,
+      ebCompleted: (item.myProgress as any)?.eb ?? 0,
+      btsDownCompleted: item.maintenanceProgress?.btsDown ?? 0,
+      routeFailCompleted: item.maintenanceProgress?.routeFail ?? 0,
+      ftthDownCompleted: item.maintenanceProgress?.ftthDown ?? 0,
+      ofcFailCompleted: item.maintenanceProgress?.ofcFail ?? 0,
+    };
+    const totalDoneAll = Object.values(currentTotals).reduce((s, n) => s + n, 0);
+    const prevSnap = (item.lastSubmittedSnapshot as Record<string, number> | null) || null;
+    const numbersChangedSinceLastSubmit = prevSnap
+      ? Object.keys(currentTotals).some(k => (currentTotals[k] ?? 0) !== (prevSnap[k] ?? 0))
+      : true;
+
+    const isApprovedOrCompleted =
+      item.submissionStatus === 'approved' || item.status === 'completed';
+    const isPendingReview = item.submissionStatus === 'submitted';
+    const isRejected = item.submissionStatus === 'rejected';
+
+    // Submit Sales Entry stays available unless the task is closed.
+    // Submit / Re-submit for Review is gated by "have you logged anything?"
+    // and "have the numbers changed since your last ping?".
+    const canSubmitForReview =
+      item.assignmentId &&
+      !isApprovedOrCompleted &&
+      totalDoneAll > 0 &&
+      (!isPendingReview || numbersChangedSinceLastSubmit);
+
+    const reviewButtonLabel = isPendingReview
+      ? 'Re-submit for Review'
+      : isRejected
+      ? 'Re-submit for Review'
+      : 'Submit for Review';
+
+    const reviewDisabledReason =
+      totalDoneAll === 0
+        ? 'Log at least one entry first'
+        : isPendingReview && !numbersChangedSinceLastSubmit
+        ? 'Awaiting reviewer — no new entries since last submit'
+        : null;
 
     const salesTargetsAchieved = 
       (!item.categories.hasSIM || item.myProgress.simSold >= item.myTargets.sim) &&
@@ -406,7 +449,6 @@ export default function MyTasksScreen() {
     
     const allTargetsAchieved = hasTargets && salesTargetsAchieved && maintenanceTargetsAchieved;
     const statusIndicator = getStatusIndicator(item.submissionStatus || 'not_started', allTargetsAchieved);
-    const isAlreadySubmittedOrApproved = item.submissionStatus === 'submitted' || item.submissionStatus === 'approved';
 
     return (
       <TouchableOpacity 
@@ -559,16 +601,28 @@ export default function MyTasksScreen() {
           )}
         </View>
 
-        {!isCompleted && !isAlreadySubmittedOrApproved && (item.categories.hasSIM || item.categories.hasFTTH || item.categories.hasLease || item.categories.hasEb) && (
+        {isPendingReview && (
+          <View style={styles.pendingReviewBanner}>
+            <Hourglass size={14} color="#1565C0" />
+            <Text style={styles.pendingReviewText} numberOfLines={2}>
+              Sent for review {item.lastResubmittedAt ? `(updated ${formatDate(item.lastResubmittedAt as any)})` : item.submittedAt ? `(${formatDate(item.submittedAt as any)})` : ''} · You can keep adding entries
+            </Text>
+          </View>
+        )}
+
+        {!isApprovedOrCompleted && (item.categories.hasSIM || item.categories.hasFTTH || item.categories.hasLease || item.categories.hasEb) && (
           salesTargetsAchieved ? (
-            <View style={[styles.submitButton, styles.disabledButton]}>
+            <TouchableOpacity
+              style={[styles.submitButton, { backgroundColor: '#4CAF50' }]}
+              onPress={(e) => { e.stopPropagation(); router.push(`/event-sales?eventId=${item.id}`); }}
+            >
               <Check size={16} color="#fff" />
-              <Text style={styles.submitButtonText}>Sales Targets Achieved</Text>
-            </View>
+              <Text style={styles.submitButtonText}>Targets met · Add more entries</Text>
+            </TouchableOpacity>
           ) : (
             <TouchableOpacity 
               style={styles.submitButton}
-              onPress={() => router.push(`/event-sales?eventId=${item.id}`)}
+              onPress={(e) => { e.stopPropagation(); router.push(`/event-sales?eventId=${item.id}`); }}
             >
               <Target size={16} color="#fff" />
               <Text style={styles.submitButtonText}>Submit Sales Entry</Text>
@@ -576,7 +630,7 @@ export default function MyTasksScreen() {
           )
         )}
 
-        {!isCompleted && !isAlreadySubmittedOrApproved && (item.categories.hasBtsDown || item.categories.hasRouteFail || 
+        {!isApprovedOrCompleted && (item.categories.hasBtsDown || item.categories.hasRouteFail || 
           item.categories.hasFtthDown || item.categories.hasOfcFail) && (
           (() => {
             const omTargetsAchieved =
@@ -592,7 +646,7 @@ export default function MyTasksScreen() {
             ) : (
               <TouchableOpacity 
                 style={[styles.submitButton, { backgroundColor: '#9C27B0' }]}
-                onPress={() => openMaintenanceModal(item)}
+                onPress={(e) => { e.stopPropagation(); openMaintenanceModal(item); }}
               >
                 <Wrench size={16} color="#fff" />
                 <Text style={styles.submitButtonText}>Complete Maintenance</Text>
@@ -600,25 +654,29 @@ export default function MyTasksScreen() {
             );
           })()
         )}
-        
-        {canSubmit && !isCompleted && (
-          <TouchableOpacity 
-            style={[styles.submitButton, { backgroundColor: '#1565C0', marginTop: 8 }]}
-            onPress={(e) => {
-              e.stopPropagation();
-              Alert.alert(
-                'Submit for Review',
-                'Are you sure you want to submit this task for review?',
-                [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Submit', onPress: () => submitForReviewMutation.mutate({ assignmentId: item.assignmentId, employeeId: employee?.id || '' }) }
-                ]
-              );
-            }}
-          >
-            <Send size={16} color="#fff" />
-            <Text style={styles.submitButtonText}>Submit for Review</Text>
-          </TouchableOpacity>
+
+        {!isApprovedOrCompleted && item.assignmentId && (
+          canSubmitForReview ? (
+            <TouchableOpacity 
+              style={[styles.submitButton, { backgroundColor: '#1565C0', marginTop: 8 }]}
+              onPress={(e) => {
+                e.stopPropagation();
+                setReviewNote('');
+                setReviewModalTask({ ...item, _allTargetsAchieved: allTargetsAchieved });
+              }}
+            >
+              <Send size={16} color="#fff" />
+              <Text style={styles.submitButtonText}>{reviewButtonLabel}</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={[styles.submitButton, { backgroundColor: '#B0BEC5', marginTop: 8 }]}>
+              <Send size={16} color="#fff" />
+              <Text style={styles.submitButtonText}>{reviewButtonLabel}</Text>
+            </View>
+          )
+        )}
+        {!isApprovedOrCompleted && reviewDisabledReason && (
+          <Text style={styles.helperText}>{reviewDisabledReason}</Text>
         )}
 
         {item.submissionStatus === 'rejected' && item.rejectionReason && (
@@ -902,6 +960,116 @@ export default function MyTasksScreen() {
           </View>
         </View>
       </Modal>
+
+      <Modal
+        visible={!!reviewModalTask}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setReviewModalTask(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.reviewModalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {reviewModalTask?.submissionStatus === 'submitted' ? 'Re-submit for Review' : 'Submit for Review'}
+              </Text>
+              <TouchableOpacity onPress={() => setReviewModalTask(null)}>
+                <X size={24} color={Colors.light.text} />
+              </TouchableOpacity>
+            </View>
+
+            {reviewModalTask && (
+              <View>
+                <Text style={styles.reviewModalSubtitle} numberOfLines={2}>
+                  {reviewModalTask.name}
+                </Text>
+
+                <View style={styles.reviewSummaryBox}>
+                  {reviewModalTask.categories?.hasSIM && (
+                    <Text style={styles.reviewSummaryLine}>
+                      SIM: {reviewModalTask.myProgress.simSold}/{reviewModalTask.myTargets.sim}
+                    </Text>
+                  )}
+                  {reviewModalTask.categories?.hasFTTH && (
+                    <Text style={styles.reviewSummaryLine}>
+                      FTTH: {reviewModalTask.myProgress.ftthSold}/{reviewModalTask.myTargets.ftth}
+                    </Text>
+                  )}
+                  {reviewModalTask.categories?.hasLease && (
+                    <Text style={styles.reviewSummaryLine}>
+                      Lease: {(reviewModalTask.myProgress as any)?.lease ?? 0}/{reviewModalTask.myTargets.lease || 0}
+                    </Text>
+                  )}
+                  {reviewModalTask.categories?.hasEb && (
+                    <Text style={styles.reviewSummaryLine}>
+                      EB: {(reviewModalTask.myProgress as any)?.eb ?? 0}/{reviewModalTask.myTargets.eb || 0}
+                    </Text>
+                  )}
+                </View>
+
+                {!reviewModalTask._allTargetsAchieved && (
+                  <View style={styles.underTargetWarning}>
+                    <Text style={styles.underTargetWarningText}>
+                      You're below target. You can still submit — add a short note for your reviewer if you'd like.
+                    </Text>
+                    <TextInput
+                      style={styles.reviewNoteInput}
+                      placeholder="Optional note (e.g. customer rescheduled, will continue tomorrow)"
+                      placeholderTextColor="#999"
+                      value={reviewNote}
+                      onChangeText={setReviewNote}
+                      multiline
+                      maxLength={500}
+                    />
+                  </View>
+                )}
+
+                <Text style={styles.reviewModalHelper}>
+                  You can keep adding entries after submitting. Re-submitting refreshes the reviewer's view.
+                </Text>
+
+                <View style={styles.reviewModalActions}>
+                  <TouchableOpacity
+                    style={[styles.reviewModalBtn, { backgroundColor: '#ECEFF1' }]}
+                    onPress={() => setReviewModalTask(null)}
+                    disabled={submitForReviewMutation.isPending}
+                  >
+                    <Text style={[styles.reviewModalBtnText, { color: '#37474F' }]}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.reviewModalBtn, { backgroundColor: '#1565C0' }]}
+                    onPress={() => {
+                      const task = reviewModalTask;
+                      submitForReviewMutation.mutate(
+                        {
+                          assignmentId: task.assignmentId,
+                          employeeId: employee?.id || '',
+                          note: reviewNote.trim() || undefined,
+                        },
+                        {
+                          onSettled: () => {
+                            setReviewModalTask(null);
+                            setReviewNote('');
+                          },
+                        }
+                      );
+                    }}
+                    disabled={submitForReviewMutation.isPending}
+                  >
+                    {submitForReviewMutation.isPending ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <Text style={styles.reviewModalBtnText}>
+                        {reviewModalTask.submissionStatus === 'submitted' ? 'Re-submit' : 'Submit'}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -981,4 +1149,19 @@ const styles = StyleSheet.create({
   rejectionReasonBox: { backgroundColor: '#FFEBEE', borderRadius: 8, padding: 12, marginTop: 12, borderLeftWidth: 3, borderLeftColor: '#C62828' },
   rejectionReasonLabel: { fontSize: 12, fontWeight: '600', color: '#C62828', marginBottom: 4 },
   rejectionReasonText: { fontSize: 13, color: '#B71C1C' },
+  pendingReviewBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#E3F2FD', borderRadius: 8, padding: 10, marginBottom: 8, borderLeftWidth: 3, borderLeftColor: '#1565C0' },
+  pendingReviewText: { flex: 1, fontSize: 12, color: '#0D47A1', fontWeight: '600' },
+  helperText: { fontSize: 11, color: Colors.light.textSecondary, marginTop: 4, textAlign: 'center', fontStyle: 'italic' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 16 },
+  reviewModalContent: { backgroundColor: '#fff', borderRadius: 16, padding: 20, width: '100%', maxWidth: 480 },
+  reviewModalSubtitle: { fontSize: 13, color: Colors.light.textSecondary, marginBottom: 12 },
+  reviewSummaryBox: { backgroundColor: '#F5F5F5', borderRadius: 8, padding: 12, marginBottom: 12 },
+  reviewSummaryLine: { fontSize: 14, color: Colors.light.text, marginVertical: 2, fontWeight: '500' },
+  underTargetWarning: { backgroundColor: '#FFF8E1', borderRadius: 8, padding: 12, marginBottom: 12, borderLeftWidth: 3, borderLeftColor: '#F57C00' },
+  underTargetWarningText: { fontSize: 12, color: '#E65100', marginBottom: 8 },
+  reviewNoteInput: { borderWidth: 1, borderColor: '#FFB74D', borderRadius: 8, padding: 10, minHeight: 60, fontSize: 13, color: Colors.light.text, backgroundColor: '#fff', textAlignVertical: 'top' },
+  reviewModalHelper: { fontSize: 11, color: Colors.light.textSecondary, fontStyle: 'italic', marginBottom: 12 },
+  reviewModalActions: { flexDirection: 'row', gap: 12 },
+  reviewModalBtn: { flex: 1, padding: 14, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  reviewModalBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
 });
