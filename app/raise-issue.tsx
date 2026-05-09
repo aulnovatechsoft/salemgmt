@@ -16,6 +16,11 @@ export default function RaiseIssueScreen() {
   const [selectedEventId, setSelectedEventId] = useState('');
   const [issueType, setIssueType] = useState<'MATERIAL_SHORTAGE' | 'SITE_ACCESS' | 'EQUIPMENT' | 'NETWORK_PROBLEM' | 'OTHER'>('MATERIAL_SHORTAGE');
   const [description, setDescription] = useState('');
+  // Severity hint set by the raiser. Defaults to 'medium' so the
+  // submit button stays enabled for users who don't care to choose
+  // (the most common case). 'urgent' is rendered red on the card so
+  // managers can triage a busy queue at a glance.
+  const [priority, setPriority] = useState<'low' | 'medium' | 'high' | 'urgent'>('medium');
 
   const [showEventPicker, setShowEventPicker] = useState(false);
   const [showTypePicker, setShowTypePicker] = useState(false);
@@ -90,8 +95,16 @@ export default function RaiseIssueScreen() {
       type: issueType,
       description: description.trim(),
       escalatedTo: escalateTo,
+      priority,
     });
   };
+
+  const PRIORITY_OPTIONS: { value: 'low' | 'medium' | 'high' | 'urgent'; label: string; color: string; bg: string }[] = [
+    { value: 'low',    label: 'Low',    color: '#2E7D32', bg: '#E8F5E9' },
+    { value: 'medium', label: 'Medium', color: '#1565C0', bg: '#E3F2FD' },
+    { value: 'high',   label: 'High',   color: '#E65100', bg: '#FFF3E0' },
+    { value: 'urgent', label: 'Urgent', color: '#C62828', bg: '#FFEBEE' },
+  ];
 
   const selectedEvent = myEvents.find(e => e.id === selectedEventId);
   const issueTypeLabel = ISSUE_TYPES.find(t => t.value === issueType)?.label || issueType;
@@ -134,6 +147,27 @@ export default function RaiseIssueScreen() {
             <Text style={styles.selectorText}>{issueTypeLabel}</Text>
             <ChevronDown size={20} color={Colors.light.textSecondary} />
           </TouchableOpacity>
+
+          <Text style={styles.label}>Priority</Text>
+          <View style={styles.priorityRow}>
+            {PRIORITY_OPTIONS.map(opt => {
+              const active = priority === opt.value;
+              return (
+                <TouchableOpacity
+                  key={opt.value}
+                  onPress={() => setPriority(opt.value)}
+                  style={[
+                    styles.priorityChip,
+                    { backgroundColor: active ? opt.bg : '#fff', borderColor: active ? opt.color : '#ddd' },
+                  ]}
+                >
+                  <Text style={[styles.priorityChipText, { color: active ? opt.color : Colors.light.textSecondary }]}>
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
 
           <Text style={styles.label}>Description *</Text>
           <TextInput
@@ -402,5 +436,20 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.light.textSecondary,
     marginTop: 2,
+  },
+  priorityRow: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  priorityChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  priorityChipText: {
+    fontSize: 13,
+    fontWeight: '600',
   },
 });

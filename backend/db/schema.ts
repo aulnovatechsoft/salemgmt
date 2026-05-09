@@ -43,6 +43,8 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'ISSUE_ESCALATED',
   'ISSUE_RESOLVED',
   'ISSUE_STATUS_CHANGED',
+  'ISSUE_COMMENT',
+  'ISSUE_WITHDRAWN',
   'SUBTASK_ASSIGNED',
   'SUBTASK_DUE_SOON',
   'SUBTASK_OVERDUE',
@@ -196,12 +198,31 @@ export const issues = pgTable('issues', {
   type: issueTypeEnum('type').notNull(),
   description: text('description').notNull(),
   status: issueStatusEnum('status').default('OPEN').notNull(),
+  // Severity hint set by the raiser. Reuses the existing
+  // `subtask_priority` enum (low/medium/high/urgent) so we don't
+  // create yet another four-value enum. Default 'medium' matches the
+  // subtask convention.
+  priority: subtaskPriorityEnum('priority').default('medium').notNull(),
   escalatedTo: uuid('escalated_to').references(() => employees.id),
   resolvedBy: uuid('resolved_by').references(() => employees.id),
   resolvedAt: timestamp('resolved_at'),
   timeline: jsonb('timeline').$type<{ action: string; performedBy: string; timestamp: string }[]>().default([]),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// Per-issue discussion thread. One row per comment. The author may be
+// the raiser, the escalated-to manager, the task creator/manager, or
+// any privileged role (same auth predicate as `loadAndAuthorize` in
+// the issues router). We DON'T store author name/role inline — those
+// are joined at read time so a rename in the employees table reflects
+// in past comments.
+export const issueComments = pgTable('issue_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  issueId: uuid('issue_id').notNull().references(() => issues.id, { onDelete: 'cascade' }),
+  authorId: uuid('author_id').notNull().references(() => employees.id),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
 export const auditLogs = pgTable('audit_logs', {

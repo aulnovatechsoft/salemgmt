@@ -1,8 +1,17 @@
 import { z } from "zod";
-import { eq, and, desc, gte } from "drizzle-orm";
+import { eq, and, desc, gte, asc, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, authedProcedure } from "../create-context";
-import { db, issues, auditLogs, events, employees, notifications, notificationPreferences } from "@/backend/db";
+import {
+  db,
+  issues,
+  issueComments,
+  auditLogs,
+  events,
+  employees,
+  notifications,
+  notificationPreferences,
+} from "@/backend/db";
 import { dispatchPushForNotification } from "@/backend/services/notification.service";
 import { allocateIssueDisplayId } from "@/backend/db/issueIdAllocator";
 
@@ -10,6 +19,9 @@ import { allocateIssueDisplayId } from "@/backend/db/issueIdAllocator";
 // (see submitTaskForReview). Same value as DEDUPE_WINDOW_MS in the
 // notification service.
 const DEDUPE_WINDOW_MS = 5 * 60 * 1000;
+
+const PRIORITY_VALUES = ['low', 'medium', 'high', 'urgent'] as const;
+type Priority = (typeof PRIORITY_VALUES)[number];
 
 /**
  * Authorization helper: who is allowed to act on a given issue.
@@ -59,11 +71,73 @@ async function loadAndAuthorize(
   return { issue, event: event ?? null, actor };
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// Read-side enrichment
+// ────────────────────────────────────────────────────────────────────────
+// The frontend used to fetch ALL employees and ALL events on the side
+// just to render "Raised by: <name>" + "<task name> — <location>" on
+// every issue card. That was both slow and fragile (it would render
+// "Raised by: Unknown" the moment the raiser wasn't in the viewer's
+// own employee scope). We instead join the related rows server-side and
+// embed thin `event` / `raisedByEmployee` / `escalatedToEmployee` /
+// `resolvedByEmployee` objects on each issue. The shape is stable so
+// the client can render a card with zero extra lookups.
+type EmployeeRef = { id: string; name: string; role: string; persNo: string | null } | null;
+type EventRef = { id: string; displayId: string | null; name: string; location: string | null; category: string | null; createdBy: string | null; assignedTo: string | null } | null;
+
+type EnrichedIssue = typeof issues.$inferSelect & {
+  event: EventRef;
+  raisedByEmployee: EmployeeRef;
+  escalatedToEmployee: EmployeeRef;
+  resolvedByEmployee: EmployeeRef;
+};
+
+async function enrichIssues(rows: (typeof issues.$inferSelect)[]): Promise<EnrichedIssue[]> {
+  if (rows.length === 0) return [];
+
+  const eventIds = Array.from(new Set(rows.map(r => r.eventId).filter(Boolean) as string[]));
+  const employeeIds = Array.from(new Set(
+    rows.flatMap(r => [r.raisedBy, r.escalatedTo, r.resolvedBy].filter(Boolean) as string[]),
+  ));
+
+  const [eventRows, employeeRows] = await Promise.all([
+    eventIds.length > 0
+      ? db.select({
+          id: events.id,
+          displayId: events.displayId,
+          name: events.name,
+          location: events.location,
+          category: events.category,
+          createdBy: events.createdBy,
+          assignedTo: events.assignedTo,
+        }).from(events).where(inArray(events.id, eventIds))
+      : Promise.resolve([] as EventRef[]),
+    employeeIds.length > 0
+      ? db.select({
+          id: employees.id,
+          name: employees.name,
+          role: employees.role,
+          persNo: employees.persNo,
+        }).from(employees).where(inArray(employees.id, employeeIds))
+      : Promise.resolve([] as EmployeeRef[]),
+  ]);
+
+  const eventById = new Map<string, EventRef>();
+  for (const e of eventRows as Exclude<EventRef, null>[]) eventById.set(e.id, e);
+  const employeeById = new Map<string, EmployeeRef>();
+  for (const e of employeeRows as Exclude<EmployeeRef, null>[]) employeeById.set(e.id, e);
+
+  return rows.map(r => ({
+    ...r,
+    event: eventById.get(r.eventId) ?? null,
+    raisedByEmployee: r.raisedBy ? (employeeById.get(r.raisedBy) ?? null) : null,
+    escalatedToEmployee: r.escalatedTo ? (employeeById.get(r.escalatedTo) ?? null) : null,
+    resolvedByEmployee: r.resolvedBy ? (employeeById.get(r.resolvedBy) ?? null) : null,
+  }));
+}
+
 export const issuesRouter = createTRPCRouter({
   // ─── Queries ──────────────────────────────────────────────────────────────
-  // All queries require auth so anonymous callers can't pull issue data.
-  // (Per-recipient filtering for getAll is part of the High-severity sprint;
-  // this Critical pass only locks down the writes + auth boundary.)
 
   getAll: authedProcedure
     .input(z.object({
@@ -72,39 +146,37 @@ export const issuesRouter = createTRPCRouter({
     }).optional())
     .query(async ({ input }) => {
       console.log("Fetching all issues", input);
-      // Honour input filters that were previously silently ignored.
       const conds = [] as any[];
       if (input?.eventId) conds.push(eq(issues.eventId, input.eventId));
       if (input?.status) conds.push(eq(issues.status, input.status));
       const q = db.select().from(issues);
-      const results = conds.length > 0
+      const rows = conds.length > 0
         ? await q.where(and(...conds)).orderBy(desc(issues.createdAt))
         : await q.orderBy(desc(issues.createdAt));
-      return results;
+      return enrichIssues(rows);
     }),
 
   getById: authedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const result = await db.select().from(issues).where(eq(issues.id, input.id));
-      return result[0] || null;
+      if (!result[0]) return null;
+      const [enriched] = await enrichIssues(result);
+      return enriched;
     }),
 
   getByEvent: authedProcedure
     .input(z.object({ eventId: z.string().uuid() }))
     .query(async ({ input }) => {
-      const result = await db.select().from(issues)
+      const rows = await db.select().from(issues)
         .where(eq(issues.eventId, input.eventId))
         .orderBy(desc(issues.createdAt));
-      return result;
+      return enrichIssues(rows);
     }),
 
   getByRaisedBy: authedProcedure
     .input(z.object({ raisedBy: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      // A user can only query their own raised-issues list. Privileged
-      // roles (ADMIN/CMD) can query anyone's. Otherwise we'd leak the
-      // count + content of issues raised by other employees.
       if (input.raisedBy !== ctx.employeeId) {
         const [actor] = await db.select({ role: employees.role })
           .from(employees).where(eq(employees.id, ctx.employeeId)).limit(1);
@@ -112,19 +184,19 @@ export const issuesRouter = createTRPCRouter({
           throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only view your own raised issues.' });
         }
       }
-      const result = await db.select().from(issues)
+      const rows = await db.select().from(issues)
         .where(eq(issues.raisedBy, input.raisedBy))
         .orderBy(desc(issues.createdAt));
-      return result;
+      return enrichIssues(rows);
     }),
 
   getByStatus: authedProcedure
     .input(z.object({ status: z.enum(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']) }))
     .query(async ({ input }) => {
-      const result = await db.select().from(issues)
+      const rows = await db.select().from(issues)
         .where(eq(issues.status, input.status))
         .orderBy(desc(issues.createdAt));
-      return result;
+      return enrichIssues(rows);
     }),
 
   getOpenCount: authedProcedure
@@ -134,17 +206,131 @@ export const issuesRouter = createTRPCRouter({
       return result.length;
     }),
 
+  // ─── Comments ─────────────────────────────────────────────────────────────
+
+  listComments: authedProcedure
+    .input(z.object({ issueId: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      // Authz: same predicate as loadAndAuthorize. Anyone who can see /
+      // act on the issue can read its discussion thread.
+      await loadAndAuthorize(input.issueId, ctx.employeeId);
+      const rows = await db.select({
+        id: issueComments.id,
+        issueId: issueComments.issueId,
+        authorId: issueComments.authorId,
+        body: issueComments.body,
+        createdAt: issueComments.createdAt,
+        authorName: employees.name,
+        authorRole: employees.role,
+      })
+        .from(issueComments)
+        .leftJoin(employees, eq(employees.id, issueComments.authorId))
+        .where(eq(issueComments.issueId, input.issueId))
+        .orderBy(asc(issueComments.createdAt));
+      return rows;
+    }),
+
+  addComment: authedProcedure
+    .input(z.object({
+      issueId: z.string().uuid(),
+      body: z.string().min(1).max(2000),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const actorId = ctx.employeeId;
+      const { issue, event } = await loadAndAuthorize(input.issueId, actorId);
+
+      type PushParams = { notificationId: string; recipientId: string; title: string; message: string };
+      const result = await db.transaction(async (tx) => {
+        const pushList: PushParams[] = [];
+        const [comment] = await tx.insert(issueComments).values({
+          issueId: input.issueId,
+          authorId: actorId,
+          body: input.body.trim(),
+        }).returning();
+
+        await tx.insert(auditLogs).values({
+          action: 'COMMENT_ISSUE',
+          entityType: 'ISSUE',
+          entityId: input.issueId,
+          performedBy: actorId,
+          details: { commentId: comment.id },
+        });
+
+        // Notify all participants except the actor: raiser + escalatedTo
+        // (the two "owners" of the issue). Skip when the recipient has
+        // turned ISSUE_COMMENT off in their preferences.
+        const recipients = new Set<string>();
+        if (issue.raisedBy && issue.raisedBy !== actorId) recipients.add(issue.raisedBy);
+        if (issue.escalatedTo && issue.escalatedTo !== actorId) recipients.add(issue.escalatedTo);
+
+        if (recipients.size > 0) {
+          const [actorRow] = await tx.select({ name: employees.name })
+            .from(employees).where(eq(employees.id, actorId)).limit(1);
+          const preview = input.body.trim().slice(0, 80);
+          const title = 'New comment on issue';
+          const message = `${actorRow?.name ?? 'Someone'} commented on "${event?.name ?? 'an issue'}": ${preview}`;
+
+          for (const recipientId of recipients) {
+            const [pref] = await tx.select({ enabled: notificationPreferences.enabled })
+              .from(notificationPreferences).where(and(
+                eq(notificationPreferences.employeeId, recipientId),
+                eq(notificationPreferences.notificationType, 'ISSUE_COMMENT'),
+              )).limit(1);
+            if (pref?.enabled === false) continue;
+
+            // Per-comment dedupe key (include comment id) so multiple
+            // comments by the same actor don't collide in the 5-min
+            // window — each comment is a real distinct event.
+            const dedupeKey = `ISSUE:${input.issueId}:ISSUE_COMMENT:${comment.id}`;
+            const [inserted] = await tx.insert(notifications).values({
+              recipientId,
+              type: 'ISSUE_COMMENT',
+              title,
+              message,
+              entityType: 'ISSUE',
+              entityId: input.issueId,
+              metadata: {
+                commentId: comment.id,
+                eventName: event?.name ?? null,
+                authorName: actorRow?.name ?? null,
+              },
+              dedupeKey,
+            }).returning({ id: notifications.id });
+            if (inserted?.id) {
+              pushList.push({ notificationId: inserted.id, recipientId, title, message });
+            }
+          }
+        }
+
+        return { comment, pushList };
+      });
+
+      // Push dispatch outside tx — best-effort, must never roll back.
+      for (const p of result.pushList) {
+        await dispatchPushForNotification({
+          notificationId: p.notificationId,
+          recipientId: p.recipientId,
+          type: 'ISSUE_COMMENT',
+          title: p.title,
+          message: p.message,
+          entityType: 'ISSUE',
+          entityId: input.issueId,
+        });
+      }
+
+      return result.comment;
+    }),
+
   // ─── Mutations ────────────────────────────────────────────────────────────
 
   create: authedProcedure
     .input(z.object({
       eventId: z.string().uuid(),
-      // Legacy: clients may still send their own id. Authority comes from
-      // ctx.employeeId — input is accepted only if it matches the session.
       raisedBy: z.string().uuid().optional(),
       type: z.enum(['MATERIAL_SHORTAGE', 'SITE_ACCESS', 'EQUIPMENT', 'NETWORK_PROBLEM', 'OTHER']),
       description: z.string().min(1),
       escalatedTo: z.string().uuid().optional().nullable(),
+      priority: z.enum(PRIORITY_VALUES).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       if (input.raisedBy && input.raisedBy !== ctx.employeeId) {
@@ -154,23 +340,14 @@ export const issuesRouter = createTRPCRouter({
         });
       }
       const actorId = ctx.employeeId;
+      const priority: Priority = input.priority ?? 'medium';
 
-      // Validate event exists (also gives us the creator for escalation
-      // fallback + the in-tx notification recipient).
       const [eventRow] = await db.select().from(events)
         .where(eq(events.id, input.eventId)).limit(1);
       if (!eventRow) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Task not found.' });
       }
 
-      // Validate the explicit escalation target if the client sent one.
-      // The raise-issue form auto-fills `escalatedTo` with `event.createdBy`,
-      // which equals the actor whenever a manager raises an issue on their
-      // OWN task — a common, valid case. Treat self-escalation as "no
-      // escalation" (silently drop) instead of rejecting, so the form keeps
-      // working for creator-as-raiser. Same with target-equals-original-
-      // raiser at create time (raisedBy === actor here, so this is the
-      // same case).
       let escalateTargetId: string | null = input.escalatedTo ?? null;
       if (escalateTargetId === actorId) {
         escalateTargetId = null;
@@ -182,19 +359,12 @@ export const issuesRouter = createTRPCRouter({
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'Escalation target is not a valid employee.' });
         }
       } else if (eventRow.createdBy && eventRow.createdBy !== actorId) {
-        // Fall back to the task creator only if it isn't the actor themselves.
         escalateTargetId = eventRow.createdBy;
       }
 
-      // Final fallback: when the raiser IS the task creator (manager
-      // raising on their own task), there's no upstream creator to
-      // escalate to. Walk one step up the reporting chain via the
-      // raiser's `reportingPersNo` → resolve to the manager's
-      // `employees.id`. Without this, self-created issues end up with
-      // `escalatedTo = null` and only the raiser sees them — defeating
-      // the purpose of "Raise Issue" (which the form's info banner
-      // describes as "escalated to your task manager or reporting
-      // manager for resolution").
+      // Walk one step up the reporting chain when the raiser IS the
+      // task creator (manager-on-own-task) so the issue still has an
+      // upstream owner. See replit.md gotcha for full rationale.
       if (!escalateTargetId) {
         const [raiserRow] = await db.select({
           reportingPersNo: employees.reportingPersNo,
@@ -209,18 +379,6 @@ export const issuesRouter = createTRPCRouter({
         }
       }
 
-      // ────────────────────────────────────────────────────────────────────
-      // Wrap the insert + audit + notification in a SINGLE transaction.
-      // Same production-grade pattern as submitTaskForReview: a server
-      // restart between the insert and the notification fan-out must
-      // never leave the issue created but the manager's bell silent.
-      // Push dispatch is best-effort and stays outside the tx (so an
-      // Expo / network outage never rolls back a successful issue create).
-      // ────────────────────────────────────────────────────────────────────
-      // Allocate a human-friendly display id (ISS-YYYY-MM-NNNN). Done
-      // OUTSIDE the tx because the allocator is its own atomic
-      // upsert+returning sequence — and a tx rollback should NOT free
-      // the sequence number (matches how task display ids work for events).
       const displayId = await allocateIssueDisplayId();
 
       type PushParams = { notificationId: string; recipientId: string; title: string; message: string };
@@ -231,6 +389,16 @@ export const issuesRouter = createTRPCRouter({
           performedBy: actorId,
           timestamp: new Date().toISOString(),
         }];
+        if (escalateTargetId) {
+          // Mirror the create-side fact in the timeline so the raiser
+          // can SEE that the issue has an owner (no longer a guess
+          // from the card header).
+          timeline.push({
+            action: 'Escalated on creation',
+            performedBy: actorId,
+            timestamp: new Date().toISOString(),
+          });
+        }
 
         const [created] = await tx.insert(issues).values({
           displayId,
@@ -238,6 +406,7 @@ export const issuesRouter = createTRPCRouter({
           raisedBy: actorId,
           type: input.type,
           description: input.description,
+          priority,
           escalatedTo: escalateTargetId,
           timeline,
         }).returning();
@@ -250,11 +419,11 @@ export const issuesRouter = createTRPCRouter({
           details: {
             eventId: input.eventId,
             type: input.type,
+            priority,
             escalatedTo: escalateTargetId,
           },
         });
 
-        // Bell notification (in-tx, atomic with the insert).
         let createdNotificationId: string | null = null;
         if (escalateTargetId && escalateTargetId !== actorId) {
           const [pref] = await tx.select({
@@ -267,10 +436,6 @@ export const issuesRouter = createTRPCRouter({
           if (enabled) {
             const [actorRow] = await tx.select({ name: employees.name })
               .from(employees).where(eq(employees.id, actorId)).limit(1);
-            // Include actor in dedupeKey so two different raisers can each
-            // notify the same manager about the same event within the
-            // 5-min window without colliding (matches submit-for-review
-            // dedupe pattern).
             const dedupeKey = `ISSUE:${created.id}:ISSUE_RAISED:${actorId}`;
             const windowStart = new Date(Date.now() - DEDUPE_WINDOW_MS);
             const [dup] = await tx.select({ id: notifications.id })
@@ -292,6 +457,7 @@ export const issuesRouter = createTRPCRouter({
                 entityId: created.id,
                 metadata: {
                   issueType: input.type,
+                  priority,
                   eventName: eventRow.name,
                   raisedByName: actorRow?.name ?? null,
                 },
@@ -313,8 +479,6 @@ export const issuesRouter = createTRPCRouter({
         return { created, createdNotificationId, escalateTargetId, pushParams };
       });
 
-      // Push dispatch — outside tx, best-effort. The bell row is durable;
-      // a push outage must never roll back a successful issue create.
       if (result.pushParams) {
         await dispatchPushForNotification({
           notificationId: result.pushParams.notificationId,
@@ -334,8 +498,6 @@ export const issuesRouter = createTRPCRouter({
     .input(z.object({
       id: z.string().uuid(),
       status: z.enum(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']),
-      // Legacy field retained for client compatibility; ignored if it
-      // doesn't match ctx.employeeId.
       updatedBy: z.string().uuid().optional(),
       remarks: z.string().optional(),
     }))
@@ -348,24 +510,11 @@ export const issuesRouter = createTRPCRouter({
       }
       const actorId = ctx.employeeId;
 
-      // Friendly pre-tx authorization probe (cheap, gives nice error
-      // messages without opening a tx). The authoritative check is the
-      // re-read with `for update` inside the tx below — that closes the
-      // TOCTOU window where a concurrent escalation/close could otherwise
-      // slip past the outer check.
       await loadAndAuthorize(input.id, actorId);
 
       type PushParams = { notificationId: string; recipientId: string; title: string; message: string };
       const result = await db.transaction(async (tx) => {
         let pushParams: PushParams | null = null;
-        // ── In-tx authorization re-check with row lock ──────────────────
-        // SELECT ... FOR UPDATE on the issue row blocks any concurrent
-        // escalation/status change until this tx commits or rolls back.
-        // We then re-evaluate the same authorization predicate against
-        // the now-locked row. If a concurrent escalation has changed
-        // `escalatedTo` away from the actor (and the actor wasn't the
-        // raiser/creator/manager/admin), this throws FORBIDDEN before
-        // any UPDATE runs.
         const [existing] = await tx.select().from(issues)
           .where(eq(issues.id, input.id)).for('update').limit(1);
         if (!existing) {
@@ -389,8 +538,36 @@ export const issuesRouter = createTRPCRouter({
             message: 'You are no longer authorised to act on this issue (it may have just been re-escalated).',
           });
         }
-        // SALES_STAFF / SD_JTO cannot resolve issues raised by others.
-        if (!isRaiser && (actor.role === 'SALES_STAFF' || actor.role === 'SD_JTO')) {
+
+        // Resolve / re-open authorisation:
+        //   · Only the escalated-to manager (or task creator/manager,
+        //     or ADMIN/CMD) may RESOLVE — this is the meaningful work
+        //     that makes the issue "done". A raiser-only resolve would
+        //     defeat the audit trail (the raiser could silently close
+        //     their own complaint).
+        //   · The raiser should use `withdraw` instead — that's a
+        //     separate mutation with its own audit / notification
+        //     shape.
+        if (input.status === 'RESOLVED') {
+          if (isRaiser && !isEscalatedTo && !isCreator && !isManager && !isPriv) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Only the manager assigned to this issue can mark it resolved. To withdraw your own issue, use the Withdraw button instead.',
+            });
+          }
+        }
+        // CLOSED is reserved for the withdraw path; reject direct CLOSED via this endpoint.
+        if (input.status === 'CLOSED') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Use the Withdraw action to close an issue.',
+          });
+        }
+        // SALES_STAFF / SD_JTO cannot resolve issues raised by others
+        // (defence in depth — covered by the rule above too, but kept
+        // explicit so the error message is clearer).
+        if (input.status === 'RESOLVED' && !isRaiser
+            && (actor.role === 'SALES_STAFF' || actor.role === 'SD_JTO')) {
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: 'Only managers can resolve issues raised by other employees.',
@@ -412,7 +589,7 @@ export const issuesRouter = createTRPCRouter({
           timeline: newTimeline,
           updatedAt: new Date(),
         };
-        if (input.status === 'RESOLVED' || input.status === 'CLOSED') {
+        if (input.status === 'RESOLVED') {
           updateData.resolvedBy = actorId;
           updateData.resolvedAt = new Date();
         }
@@ -434,11 +611,8 @@ export const issuesRouter = createTRPCRouter({
           },
         });
 
-        // Resolution notification (in-tx, atomic). Skip when the actor is
-        // notifying themselves (raiser self-resolves their own issue).
         let createdNotificationId: string | null = null;
-        if ((input.status === 'RESOLVED' || input.status === 'CLOSED')
-            && existing.raisedBy !== actorId) {
+        if (input.status === 'RESOLVED' && existing.raisedBy !== actorId) {
           const [pref] = await tx.select({
             enabled: notificationPreferences.enabled,
           }).from(notificationPreferences).where(and(
@@ -506,11 +680,132 @@ export const issuesRouter = createTRPCRouter({
       return result.updated;
     }),
 
+  // Raiser-only "I withdraw this issue" — separate from updateStatus so
+  // the auth predicate is dead simple (only the original raiser may
+  // withdraw, and only while OPEN/IN_PROGRESS) and the timeline /
+  // notification shape is clearly distinct from "manager resolved it".
+  withdraw: authedProcedure
+    .input(z.object({
+      id: z.string().uuid(),
+      reason: z.string().max(2000).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const actorId = ctx.employeeId;
+
+      type PushParams = { notificationId: string; recipientId: string; title: string; message: string };
+      const result = await db.transaction(async (tx) => {
+        let pushParams: PushParams | null = null;
+        const [existing] = await tx.select().from(issues)
+          .where(eq(issues.id, input.id)).for('update').limit(1);
+        if (!existing) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Issue not found.' });
+        }
+        if (existing.raisedBy !== actorId) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the original raiser can withdraw this issue.',
+          });
+        }
+        if (existing.status === 'RESOLVED' || existing.status === 'CLOSED') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'This issue is already closed.',
+          });
+        }
+        const [event] = await tx.select().from(events)
+          .where(eq(events.id, existing.eventId)).limit(1);
+
+        const currentTimeline = (existing.timeline as { action: string; performedBy: string; timestamp: string }[]) || [];
+        const reasonSuffix = input.reason ? `: ${input.reason}` : '';
+        const newTimeline = [
+          ...currentTimeline,
+          {
+            action: `Issue withdrawn by raiser${reasonSuffix}`,
+            performedBy: actorId,
+            timestamp: new Date().toISOString(),
+          },
+        ];
+
+        const [updated] = await tx.update(issues)
+          .set({
+            status: 'CLOSED',
+            timeline: newTimeline,
+            resolvedBy: actorId,
+            resolvedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(issues.id, input.id))
+          .returning();
+
+        await tx.insert(auditLogs).values({
+          action: 'WITHDRAW_ISSUE',
+          entityType: 'ISSUE',
+          entityId: input.id,
+          performedBy: actorId,
+          details: { reason: input.reason ?? null, previousStatus: existing.status },
+        });
+
+        // Notify the escalated-to manager (if any, and if not the actor)
+        // so they know they no longer need to act on this issue.
+        if (existing.escalatedTo && existing.escalatedTo !== actorId) {
+          const [pref] = await tx.select({ enabled: notificationPreferences.enabled })
+            .from(notificationPreferences).where(and(
+              eq(notificationPreferences.employeeId, existing.escalatedTo),
+              eq(notificationPreferences.notificationType, 'ISSUE_WITHDRAWN'),
+            )).limit(1);
+          if (pref?.enabled !== false) {
+            const [actorRow] = await tx.select({ name: employees.name })
+              .from(employees).where(eq(employees.id, actorId)).limit(1);
+            const dedupeKey = `ISSUE:${input.id}:ISSUE_WITHDRAWN:${actorId}`;
+            const title = 'Issue Withdrawn';
+            const message = `${actorRow?.name ?? 'The raiser'} withdrew their ${existing.type} issue for "${event?.name ?? 'a task'}"`;
+            const [inserted] = await tx.insert(notifications).values({
+              recipientId: existing.escalatedTo,
+              type: 'ISSUE_WITHDRAWN',
+              title,
+              message,
+              entityType: 'ISSUE',
+              entityId: input.id,
+              metadata: {
+                issueType: existing.type,
+                eventName: event?.name ?? null,
+                withdrawnByName: actorRow?.name ?? null,
+              },
+              dedupeKey,
+            }).returning({ id: notifications.id });
+            if (inserted?.id) {
+              pushParams = {
+                notificationId: inserted.id,
+                recipientId: existing.escalatedTo,
+                title,
+                message,
+              };
+            }
+          }
+        }
+
+        return { updated, pushParams };
+      });
+
+      if (result.pushParams) {
+        await dispatchPushForNotification({
+          notificationId: result.pushParams.notificationId,
+          recipientId: result.pushParams.recipientId,
+          type: 'ISSUE_WITHDRAWN',
+          title: result.pushParams.title,
+          message: result.pushParams.message,
+          entityType: 'ISSUE',
+          entityId: input.id,
+        });
+      }
+
+      return result.updated;
+    }),
+
   escalate: authedProcedure
     .input(z.object({
       id: z.string().uuid(),
       escalatedTo: z.string().uuid(),
-      // Legacy field — ignored if it doesn't match ctx.employeeId.
       escalatedBy: z.string().uuid().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
@@ -522,11 +817,6 @@ export const issuesRouter = createTRPCRouter({
       }
       const actorId = ctx.employeeId;
 
-      // Friendly pre-tx authorization probe + target validation. The
-      // authoritative auth check is the FOR UPDATE re-read inside the tx
-      // below — that closes the TOCTOU window where a concurrent
-      // escalation could otherwise change `escalatedTo` between this
-      // check and the UPDATE.
       await loadAndAuthorize(input.id, actorId);
       if (input.escalatedTo === actorId) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot escalate an issue to yourself.' });
@@ -540,7 +830,6 @@ export const issuesRouter = createTRPCRouter({
       type PushParams = { notificationId: string; recipientId: string; title: string; message: string };
       const result = await db.transaction(async (tx) => {
         let pushParams: PushParams | null = null;
-        // ── In-tx authorization re-check with row lock ──────────────────
         const [existing] = await tx.select().from(issues)
           .where(eq(issues.id, input.id)).for('update').limit(1);
         if (!existing) {
@@ -564,8 +853,6 @@ export const issuesRouter = createTRPCRouter({
             message: 'You are no longer authorised to escalate this issue.',
           });
         }
-        // Re-validate target against the locked row (raisedBy is immutable
-        // but defensive coding keeps the invariant explicit).
         if (input.escalatedTo === existing.raisedBy) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot escalate an issue back to its original raiser.' });
         }
@@ -601,7 +888,6 @@ export const issuesRouter = createTRPCRouter({
           },
         });
 
-        // Escalation notification (in-tx, atomic).
         let createdNotificationId: string | null = null;
         const [pref] = await tx.select({
           enabled: notificationPreferences.enabled,
