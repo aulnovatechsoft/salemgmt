@@ -1307,6 +1307,91 @@ export default function EventDetailScreen() {
   const availableTransitions = STATUS_TRANSITIONS[dbStatus] || [];
   
   const unassignedMembers = availableMembers?.filter(m => !m.isAssigned && m.id !== eventData?.assignedTo) || [];
+
+  // ================================================================
+  // PER-ASSIGNEE READINESS — derive a clear "is this person done?"
+  // signal from their submissionStatus + targets, and aggregate it
+  // into a single completionReadiness object that drives:
+  //   1. The status pill rendered next to each assignee's progress
+  //   2. The smart enable/disable on the task-level Complete button
+  //   3. The "Ready / Blocked" summary panel above the action buttons
+  // No backend or schema change required for this view — everything
+  // is computed from data already returned by getById.
+  // ================================================================
+  const completionReadiness = (() => {
+    const team = (eventData as any)?.teamWithAllocations || [];
+    // Only count rows that have at least one non-zero target — the
+    // builder sometimes injects an empty manager-self entry with all
+    // targets at 0 which we should NOT block completion on.
+    const real = team.filter((m: any) => {
+      const t = (m.simTarget || 0) + (m.ftthTarget || 0) + (m.leaseTarget || 0) + (m.ebTarget || 0)
+              + (m.btsDownTarget || 0) + (m.routeFailTarget || 0) + (m.ftthDownTarget || 0) + (m.ofcFailTarget || 0);
+      return t > 0;
+    });
+    if (real.length === 0) {
+      return { allApproved: true, blockers: [] as string[], approvedCount: 0, totalCount: 0, summary: 'No team assignments' };
+    }
+    const blockers: string[] = [];
+    let approved = 0;
+    for (const m of real) {
+      const status = m.submissionStatus || 'not_started';
+      if (status === 'approved') {
+        approved++;
+      } else {
+        const name = m.employee?.name || 'Unknown';
+        const tag = status === 'submitted' ? 'pending review'
+                  : status === 'rejected'  ? 'rejected'
+                  : status === 'in_progress' ? 'in progress'
+                  : 'not submitted';
+        blockers.push(`${name} (${tag})`);
+      }
+    }
+    return {
+      allApproved: blockers.length === 0,
+      blockers,
+      approvedCount: approved,
+      totalCount: real.length,
+      summary: `${approved}/${real.length} assignees approved`,
+    };
+  })();
+
+  // Compact status pill — placed inside each assignee row's progress
+  // column. Status is derived from `submissionStatus` + whether they
+  // hit their target, so the manager can tell at a glance whether they
+  // need to act on this person.
+  const renderAssigneeStatusPill = (member: any) => {
+    const status = (member?.submissionStatus as string) || 'not_started';
+    const targetSum = (member.simTarget || 0) + (member.ftthTarget || 0)
+                    + (member.leaseTarget || 0) + (member.ebTarget || 0);
+    const completedSum = (member.actualSimSold || 0) + (member.actualFtthSold || 0)
+                       + (member.actualLeaseCompleted || 0) + (member.actualEbCompleted || 0);
+    let label = 'Not Started';
+    let color = '#616161';
+    let bg = '#F5F5F5';
+    if (status === 'approved') {
+      if (targetSum > 0 && completedSum < targetSum) {
+        label = 'Approved · Partial';
+        color = '#E65100'; bg = '#FFF3E0';
+      } else {
+        label = '✓ Done';
+        color = '#1B5E20'; bg = '#E8F5E9';
+      }
+    } else if (status === 'submitted') {
+      label = 'Pending Review';
+      color = '#0277BD'; bg = '#E1F5FE';
+    } else if (status === 'rejected') {
+      label = 'Rejected · Resubmit';
+      color = '#B71C1C'; bg = '#FFEBEE';
+    } else if (status === 'in_progress') {
+      label = 'In Progress';
+      color = '#5D4037'; bg = '#EFEBE9';
+    }
+    return (
+      <View style={{ marginTop: 6, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, backgroundColor: bg, alignSelf: 'flex-end' }}>
+        <Text style={{ fontSize: 10, fontWeight: '700', color, letterSpacing: 0.3 }}>{label}</Text>
+      </View>
+    );
+  };
   
 
   // Back-arrow header — Expo Router doesn't auto-render one when the screen
@@ -1582,6 +1667,42 @@ export default function EventDetailScreen() {
               </View>
             </View>
             <Text style={styles.statusDescription}>{displayConfig?.description}</Text>
+
+            {/* Completion readiness panel — shows aggregate approval state of
+                the team. Drives the smart Complete button below; also visible
+                on its own so managers know exactly who they're waiting on
+                without having to scroll through every category card. */}
+            {(dbStatus === 'active' || dbStatus === 'paused') && completionReadiness.totalCount > 0 && (
+              <View style={{
+                marginTop: 12,
+                marginBottom: 12,
+                padding: 12,
+                borderRadius: 8,
+                backgroundColor: completionReadiness.allApproved ? '#E8F5E9' : '#FFF8E1',
+                borderWidth: 1,
+                borderColor: completionReadiness.allApproved ? '#A5D6A7' : '#FFE082',
+              }}>
+                <Text style={{
+                  fontSize: 11,
+                  fontWeight: '800',
+                  letterSpacing: 0.5,
+                  color: completionReadiness.allApproved ? '#1B5E20' : '#E65100',
+                  marginBottom: 4,
+                }}>
+                  {completionReadiness.allApproved ? '✓ READY TO COMPLETE' : '⚠ COMPLETION BLOCKED'}
+                </Text>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#212121' }}>
+                  {completionReadiness.summary}
+                </Text>
+                {!completionReadiness.allApproved && completionReadiness.blockers.length > 0 && (
+                  <Text style={{ fontSize: 12, color: '#5D4037', marginTop: 4 }}>
+                    Waiting on: {completionReadiness.blockers.slice(0, 3).join(', ')}
+                    {completionReadiness.blockers.length > 3 ? ` and ${completionReadiness.blockers.length - 3} more` : ''}
+                  </Text>
+                )}
+              </View>
+            )}
+
             <View style={styles.actionButtonsRow}>
               {availableTransitions.includes('active') && (
                 <TouchableOpacity style={[styles.actionBtn, styles.startBtn]} onPress={() => handleUpdateStatus('active')}>
@@ -1596,7 +1717,31 @@ export default function EventDetailScreen() {
                 </TouchableOpacity>
               )}
               {availableTransitions.includes('completed') && (
-                <TouchableOpacity style={[styles.actionBtn, styles.completeBtn]} onPress={() => handleUpdateStatus('completed')}>
+                <TouchableOpacity
+                  style={[
+                    styles.actionBtn,
+                    styles.completeBtn,
+                    !completionReadiness.allApproved && { opacity: 0.5 },
+                  ]}
+                  onPress={() => {
+                    if (!completionReadiness.allApproved) {
+                      // Use plain Alert.alert (no buttons array) — works on
+                      // RN Web; the buttons-array variant is unreliable there
+                      // (see replit.md gotcha). This is informational only,
+                      // never a confirm dialog.
+                      const list = completionReadiness.blockers.slice(0, 5).join('\n• ');
+                      const more = completionReadiness.blockers.length > 5
+                        ? `\n• ...and ${completionReadiness.blockers.length - 5} more`
+                        : '';
+                      Alert.alert(
+                        'Cannot Complete Yet',
+                        `${completionReadiness.summary}.\n\nWaiting on:\n• ${list}${more}\n\nEvery assignee must submit their work and be approved before this task can be completed.`,
+                      );
+                      return;
+                    }
+                    handleUpdateStatus('completed');
+                  }}
+                >
                   <CheckCircle size={16} color="#fff" />
                   <Text style={styles.actionBtnText}>Complete</Text>
                 </TouchableOpacity>
@@ -1665,6 +1810,7 @@ export default function EventDetailScreen() {
                         <View style={styles.assigneeMiniBar}>
                           <View style={[styles.assigneeMiniBarFill, { width: `${member.simTarget > 0 ? Math.min((member.actualSimSold / member.simTarget) * 100, 100) : 0}%`, backgroundColor: CATEGORY_CONFIG.SIM.color }]} />
                         </View>
+                        {renderAssigneeStatusPill(member)}
                       </View>
                     </View>
                   ))
@@ -1718,6 +1864,7 @@ export default function EventDetailScreen() {
                         <View style={styles.assigneeMiniBar}>
                           <View style={[styles.assigneeMiniBarFill, { width: `${member.ftthTarget > 0 ? Math.min((member.actualFtthSold / member.ftthTarget) * 100, 100) : 0}%`, backgroundColor: CATEGORY_CONFIG.FTTH.color }]} />
                         </View>
+                        {renderAssigneeStatusPill(member)}
                       </View>
                     </View>
                   ))
@@ -1774,6 +1921,7 @@ export default function EventDetailScreen() {
                         <View style={styles.assigneeMiniBar}>
                           <View style={[styles.assigneeMiniBarFill, { width: `${member.leaseTarget > 0 ? Math.min((memberCompleted / member.leaseTarget) * 100, 100) : 0}%`, backgroundColor: CATEGORY_CONFIG.LEASE_CIRCUIT.color }]} />
                         </View>
+                        {renderAssigneeStatusPill(member)}
                       </View>
                     </View>
                     );
@@ -2235,6 +2383,7 @@ export default function EventDetailScreen() {
                         <View style={styles.assigneeMiniBar}>
                           <View style={[styles.assigneeMiniBarFill, { width: `${member.ebTarget > 0 ? Math.min((memberCompleted / member.ebTarget) * 100, 100) : 0}%`, backgroundColor: CATEGORY_CONFIG.EB.color }]} />
                         </View>
+                        {renderAssigneeStatusPill(member)}
                       </View>
                     </View>
                     );

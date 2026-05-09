@@ -300,6 +300,33 @@ async function _completeExpiredEventsCore(
     progressByEvent.set(r.eventId, cur);
   }
 
+  // Phase 1 hardening: the auto-complete sweep must respect the SAME
+  // approval gate as manual completion. A task with all targets met but
+  // pending reviews is NOT silently auto-completed — it is left as 'active'
+  // so the reviewer is forced to act. Without this, the scheduler becomes
+  // a backdoor that bypasses the workflow control we just added to
+  // updateEventStatus.
+  const unapprovedByEvent = await db.select({
+    eventId: eventAssignments.eventId,
+    pendingCount: sql<number>`COUNT(*) FILTER (
+      WHERE ${eventAssignments.submissionStatus} <> 'approved'
+      AND (
+        COALESCE(${eventAssignments.simTarget}, 0)
+      + COALESCE(${eventAssignments.ftthTarget}, 0)
+      + COALESCE(${eventAssignments.leaseTarget}, 0)
+      + COALESCE(${eventAssignments.ebTarget}, 0)
+      + COALESCE(${eventAssignments.btsDownTarget}, 0)
+      + COALESCE(${eventAssignments.routeFailTarget}, 0)
+      + COALESCE(${eventAssignments.ftthDownTarget}, 0)
+      + COALESCE(${eventAssignments.ofcFailTarget}, 0)
+      ) > 0
+    )::integer`,
+  }).from(eventAssignments)
+    .where(inArray(eventAssignments.eventId, expiredCandidateIds))
+    .groupBy(eventAssignments.eventId);
+  const pendingByEvent = new Map<string, number>();
+  for (const r of unapprovedByEvent) pendingByEvent.set(r.eventId, Number(r.pendingCount));
+
   const eventsById = new Map(eventsList.map(e => [e.id, e]));
   type CompleteRec = { id: string; name: string; createdBy: string; assignedTo: string | null };
   const toComplete: CompleteRec[] = [];
@@ -320,7 +347,8 @@ async function _completeExpiredEventsCore(
     const activeCategories = checks.filter(c => c.target > 0);
     if (activeCategories.length === 0) continue;
     const allMet = activeCategories.every(c => c.progress >= c.target);
-    if (allMet) {
+    const allApproved = (pendingByEvent.get(id) || 0) === 0;
+    if (allMet && allApproved) {
       toComplete.push({ id, name: ev.name, createdBy: ev.createdBy, assignedTo: ev.assignedTo });
     }
   }
@@ -331,11 +359,32 @@ async function _completeExpiredEventsCore(
   // pause/cancel between read and write is NOT clobbered back to completed.
   // returning() gives us the actually-affected ids so audits/notifications
   // only fire for events we truly transitioned.
+  // Atomic sweep guard: the same NOT EXISTS clause used in updateEventStatus
+  // is applied here directly in the WHERE so that even if an assignment is
+  // un-approved (or a fresh non-zero assignment is added) between the
+  // pre-sweep `pendingByEvent` check and this UPDATE, the row will silently
+  // not flip. The candidate set is also re-narrowed by the existing
+  // status='active' guard, so a concurrent pause/cancel is also safe.
   const flipped = await db.update(events)
     .set({ status: 'completed', updatedAt: new Date() })
     .where(and(
       inArray(events.id, toComplete.map(c => c.id)),
       eq(events.status, 'active'),
+      sql`NOT EXISTS (
+        SELECT 1 FROM ${eventAssignments}
+        WHERE ${eventAssignments.eventId} = ${events.id}
+          AND ${eventAssignments.submissionStatus} <> 'approved'
+          AND (
+            COALESCE(${eventAssignments.simTarget}, 0)
+          + COALESCE(${eventAssignments.ftthTarget}, 0)
+          + COALESCE(${eventAssignments.leaseTarget}, 0)
+          + COALESCE(${eventAssignments.ebTarget}, 0)
+          + COALESCE(${eventAssignments.btsDownTarget}, 0)
+          + COALESCE(${eventAssignments.routeFailTarget}, 0)
+          + COALESCE(${eventAssignments.ftthDownTarget}, 0)
+          + COALESCE(${eventAssignments.ofcFailTarget}, 0)
+          ) > 0
+      )`,
     ))
     .returning({ id: events.id });
   const flippedIds = new Set(flipped.map(f => f.id));
@@ -3875,6 +3924,10 @@ export const eventsRouter = createTRPCRouter({
       status: z.enum(['draft', 'active', 'paused', 'completed', 'cancelled']),
       updatedBy: z.string().uuid().optional(), // legacy: ignored; actor is ctx.employeeId
       reason: z.string().max(500).optional(),
+      // Phase 2 hook: when true, bypass the all-approved guard for Complete.
+      // Phase 1 wires the input but the UI never sends it; the next phase
+      // adds a "Force Complete" path that requires reason >= 5 and audits.
+      force: z.boolean().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       // Authorization: actor identity from session, not client payload
@@ -3931,6 +3984,67 @@ export const eventsRouter = createTRPCRouter({
         });
       }
 
+      // ============================================================
+      // Phase 1 hardening — block premature Complete.
+      //
+      // A task may only transition active|paused -> completed when EVERY
+      // assignment with a non-zero target is in `submissionStatus = approved`.
+      // The UI already mirrors this with a disabled button + reason summary;
+      // this server-side guard exists so a direct API caller can't bypass.
+      //
+      // Reopens (cancelled -> completed via admin) are NOT subject to this
+      // — only fresh completions of work that was actually being executed.
+      //
+      // The `force` flag is reserved for the Phase 2 "Force Complete with
+      // reason" admin path. Until that path ships with role gating + reason
+      // validation + audit, we EXPLICITLY REJECT force here so the field
+      // can never function as an unprotected bypass to a critical workflow
+      // control.
+      // ============================================================
+      if (input.force) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Force-complete is not yet enabled. Every assignee must be approved before this task can be marked completed.',
+        });
+      }
+      // Pre-transaction probe: gives the user a friendly, specific error
+      // message ("3 of 5 assignees still need approval") before we even try
+      // the CAS. The actual atomicity is enforced inside the transaction
+      // below by a NOT EXISTS clause in the same UPDATE that flips status,
+      // so a race between this check and the commit still cannot let an
+      // unapproved task slip through.
+      let pendingProbeCount = 0;
+      let realProbeCount = 0;
+      if (input.status === 'completed' && previousStatus !== 'cancelled') {
+        const assignmentsForEvent = await db.select({
+          id: eventAssignments.id,
+          submissionStatus: eventAssignments.submissionStatus,
+          simTarget: eventAssignments.simTarget,
+          ftthTarget: eventAssignments.ftthTarget,
+          leaseTarget: eventAssignments.leaseTarget,
+          ebTarget: eventAssignments.ebTarget,
+          btsDownTarget: eventAssignments.btsDownTarget,
+          routeFailTarget: eventAssignments.routeFailTarget,
+          ftthDownTarget: eventAssignments.ftthDownTarget,
+          ofcFailTarget: eventAssignments.ofcFailTarget,
+        }).from(eventAssignments).where(eq(eventAssignments.eventId, input.eventId));
+
+        const realAssignments = assignmentsForEvent.filter(a => {
+          const t = (a.simTarget || 0) + (a.ftthTarget || 0) + (a.leaseTarget || 0) + (a.ebTarget || 0)
+                  + (a.btsDownTarget || 0) + (a.routeFailTarget || 0) + (a.ftthDownTarget || 0) + (a.ofcFailTarget || 0);
+          return t > 0;
+        });
+        realProbeCount = realAssignments.length;
+        pendingProbeCount = realAssignments.filter(a => a.submissionStatus !== 'approved').length;
+
+        if (pendingProbeCount > 0) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Cannot complete: ${pendingProbeCount} of ${realProbeCount} assignees still need approval. Every team member must submit their work and be approved before this task can be marked completed.`,
+          });
+        }
+      }
+
       // Cancel reason is mandatory so the team has context.
       // Server-side enforcement of the same minimum length the UI requires
       // (>=5 chars after trim) so non-UI clients can't bypass with "x".
@@ -3971,14 +4085,55 @@ export const eventsRouter = createTRPCRouter({
       let allocationsRemovedSummary = 0;
 
       const result = await db.transaction(async (tx) => {
+        // Atomic completion gate: when transitioning to 'completed' from a
+        // non-cancelled state, the same UPDATE that flips status also
+        // requires NOT EXISTS (any non-approved assignment with a non-zero
+        // target). This closes the TOCTOU window between the pre-tx probe
+        // above and the actual commit — a race where an assignment is
+        // un-approved (or a brand-new submission appears) between our probe
+        // and the CAS will harmlessly fail the WHERE clause, return 0 rows,
+        // and the caller is told to refresh. No half-completed state.
+        const completionGuard =
+          input.status === 'completed' && previousStatus !== 'cancelled'
+            ? sql`AND NOT EXISTS (
+                SELECT 1 FROM ${eventAssignments}
+                WHERE ${eventAssignments.eventId} = ${input.eventId}
+                  AND ${eventAssignments.submissionStatus} <> 'approved'
+                  AND (
+                    COALESCE(${eventAssignments.simTarget}, 0)
+                  + COALESCE(${eventAssignments.ftthTarget}, 0)
+                  + COALESCE(${eventAssignments.leaseTarget}, 0)
+                  + COALESCE(${eventAssignments.ebTarget}, 0)
+                  + COALESCE(${eventAssignments.btsDownTarget}, 0)
+                  + COALESCE(${eventAssignments.routeFailTarget}, 0)
+                  + COALESCE(${eventAssignments.ftthDownTarget}, 0)
+                  + COALESCE(${eventAssignments.ofcFailTarget}, 0)
+                  ) > 0
+              )`
+            : sql``;
+
         const updated = await tx.update(events)
           .set({ status: newStatus, updatedAt: new Date() })
           .where(and(
             eq(events.id, input.eventId),
             eq(events.status, prevStatus),
+            completionGuard,
           ))
           .returning();
         if (!updated[0]) {
+          // Disambiguate: if the row still exists with the expected status
+          // then the failure was the completion guard — surface a clear
+          // approval-race message instead of the generic conflict error.
+          if (input.status === 'completed' && previousStatus !== 'cancelled') {
+            const [stillThere] = await tx.select({ status: events.status })
+              .from(events).where(eq(events.id, input.eventId));
+            if (stillThere && stillThere.status === prevStatus) {
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: 'Another submission was added or un-approved while you were completing this task. Please refresh and try again.',
+              });
+            }
+          }
           throw new TRPCError({
             code: 'CONFLICT',
             message: 'This task was changed by someone else. Please refresh and try again.',
