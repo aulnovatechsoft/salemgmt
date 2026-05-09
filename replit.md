@@ -2,7 +2,7 @@
 A mobile-first application for managing task assignments and tracking performance for BSNL (Bharat Sanchar Nigam Limited) with web deployment support.
 
 ## Run & Operate
-- **Run migrations**: `bun run backend/db/migrate.ts`
+- **Run migrations**: `bun run backend/db/migrate.ts` (also run `migrate-review-snapshot.ts` and `migrate-notification-enum.ts` after pulling)
 - **Build web**: `bunx expo export --platform web`
 - **Start server**: `bun run server.ts`
 - **Env Vars**:
@@ -59,6 +59,8 @@ _Populate as you build_
 - **O&M Undo Gap**: Undoing O&M progress decrements the counter but doesn't delete `maintenance_entries` rows, leading to potential drift (P2 to address).
 - **Status Backdoor Closed**: Direct status changes via `events.update` are stripped; all status transitions must use `updateEventStatus` for proper state machine, auditing, and notifications.
 - **`GEO_FENCE_KM * GEO_FENCE_HARD_MULT`**: Submissions beyond this hard limit (default 150km) are always rejected.
+- **`Alert.alert` confirm on RN Web**: The "Submit" button inside an `Alert.alert([...buttons])` modal is unreliable on web — the press handler frequently never fires, so the mutation silently never runs. For any confirm-then-submit flow that ships to web, branch on `Platform.OS === 'web' ? window.confirm(msg) : Alert.alert(...)` (see `app/event-detail.tsx` Submit-for-Review button). Otherwise users see the dialog, tap Submit, and nothing happens — no error, no log line, no DB write.
+- **`notification_type` Postgres enum drift**: `backend/services/notification.service.ts` defines the `NotificationType` TS union. The Postgres `notification_type` enum must be kept in sync — if a TS value is missing from the DB enum, `createNotification`'s INSERT throws, the try/catch swallows it, and the recipient's bell stays empty with no user-visible error. Run `bun run backend/db/migrate-notification-enum.ts` after adding a new type. Original failure: `TASK_SUBMITTED`, `TASK_APPROVED`, `TASK_REJECTED`, `SLA_WARNING`, `SLA_BREACHED` were referenced from code but absent from the enum, so every Submit-for-Review notification silently failed.
 
 ## Pointers
 - **Expo Documentation**: [https://docs.expo.dev/](https://docs.expo.dev/)
