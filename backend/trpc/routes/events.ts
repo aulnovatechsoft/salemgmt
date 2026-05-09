@@ -3913,6 +3913,24 @@ export const eventsRouter = createTRPCRouter({
         });
       }
 
+      // Server-side state-machine — must mirror the frontend STATUS_TRANSITIONS
+      // map in app/event-detail.tsx so non-UI clients (mobile, scripts) can't
+      // drive an unsupported jump like draft -> completed.
+      const ALLOWED_TRANSITIONS: Record<string, string[]> = {
+        draft: ['active', 'cancelled'],
+        active: ['paused', 'completed', 'cancelled'],
+        paused: ['active', 'completed', 'cancelled'],
+        completed: [],
+        cancelled: [],
+      };
+      const allowedNext = ALLOWED_TRANSITIONS[previousStatus ?? ''] ?? [];
+      if (!allowedNext.includes(input.status)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Cannot change task status from ${previousStatus} to ${input.status}.`,
+        });
+      }
+
       // Cancel reason is mandatory so the team has context.
       // Server-side enforcement of the same minimum length the UI requires
       // (>=5 chars after trim) so non-UI clients can't bypass with "x".

@@ -605,6 +605,10 @@ export default function EventDetailScreen() {
           : (error.message || 'Failed to update task status'),
       );
       if (isConflict) refetch();
+      // Always close the cancel modal so it doesn't sit open with a stale
+      // reason after a backend rejection — user can re-open and retry cleanly.
+      setShowCancelReasonModal(false);
+      setCancelReason('');
     },
   });
 
@@ -1029,6 +1033,24 @@ export default function EventDetailScreen() {
       return;
     }
 
+    const doConfirm = () => {
+      updateStatusMutation.mutate({
+        eventId: eventData.id,
+        status: newStatus,
+        updatedBy: employee.id,
+      });
+    };
+
+    if (Platform.OS === 'web') {
+      // Alert.alert([...buttons]) is unreliable on RN Web — the press handler
+      // frequently never fires, so the mutation silently never runs.
+      // See replit.md "Alert.alert confirm on RN Web" gotcha.
+      if (typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}`)) {
+        doConfirm();
+      }
+      return;
+    }
+
     Alert.alert(
       title,
       message,
@@ -1037,13 +1059,7 @@ export default function EventDetailScreen() {
         {
           text: 'Confirm',
           style: 'default',
-          onPress: () => {
-            updateStatusMutation.mutate({
-              eventId: eventData.id,
-              status: newStatus,
-              updatedBy: employee.id,
-            });
-          },
+          onPress: doConfirm,
         },
       ]
     );
