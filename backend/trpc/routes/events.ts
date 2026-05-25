@@ -1162,11 +1162,24 @@ export const eventsRouter = createTRPCRouter({
         }
       }
 
-      const hasAnyAssignee = !!assignedToId || resolvedTeam.length > 0;
-      if (!hasAnyAssignee) {
+      // Strict guard (option 1): require at least one resolved team
+      // member whose taskIds overlap with the selected categories. The
+      // single-assignee placeholder produced by the `assignedTo`-only
+      // branch below inserts a zero-target row with no assignedTaskTypes,
+      // which the UI correctly considers "no team members assigned" for
+      // every task category. Allowing that path to satisfy the guard
+      // reproduces the TSK-2026-05-0014 ghost-task pattern.
+      const selectedCategorySet = new Set(
+        (input.category || '').split(',').map(s => s.trim()).filter(Boolean)
+      );
+      const teamCoversSelectedCategory = resolvedTeam.some(r =>
+        r.taskIds.some(t => selectedCategorySet.has(t))
+      );
+      if (!teamCoversSelectedCategory) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: 'Task must have at least one assigned team member.',
+          message:
+            'At least one team member must be assigned to one of the selected task categories. The single-manager placeholder does not count.',
         });
       }
       

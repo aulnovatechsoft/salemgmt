@@ -516,8 +516,19 @@ export default function CreateEventScreen() {
       Alert.alert('Error', 'You must be logged in to create a task');
       return;
     }
-    if (teamAssignments.length === 0 && !assignedEmployee?.id) {
-      Alert.alert('Error', 'Please assign at least one team member before creating the task');
+    // Require at least one team member with a real task-type allocation
+    // covering one of the selected categories. The single-assignee
+    // placeholder (created when only assignedTo is set) doesn't count —
+    // it has zero targets and no taskIds, so the resulting task has no
+    // one actually responsible for any work item. See TSK-2026-05-0014.
+    const teamCoversSelectedCategory = teamAssignments.some(a =>
+      a.taskIds.some(t => selectedCategories.includes(t))
+    );
+    if (!teamCoversSelectedCategory) {
+      Alert.alert(
+        'Error',
+        'Please use the team picker to assign at least one team member to one of the selected task categories.'
+      );
       return;
     }
 
