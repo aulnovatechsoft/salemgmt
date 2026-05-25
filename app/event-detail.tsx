@@ -1896,8 +1896,8 @@ export default function EventDetailScreen() {
               
               <View style={styles.categoryAssignees}>
                 <Text style={styles.assigneesLabel}>Assigned Team:</Text>
-                {eventData.teamWithAllocations?.filter((m: any) => m.simTarget > 0 && m.employeeId !== eventData.assignedTo).length > 0 ? (
-                  eventData.teamWithAllocations?.filter((m: any) => m.simTarget > 0 && m.employeeId !== eventData.assignedTo).map((member: any) => (
+                {eventData.teamWithAllocations?.filter((m: any) => m.simTarget > 0).length > 0 ? (
+                  eventData.teamWithAllocations?.filter((m: any) => m.simTarget > 0).map((member: any) => (
                     <View key={member.id} style={styles.assigneeRow}>
                       <View style={styles.assigneeInfo}>
                         <View style={[styles.assigneeAvatar, { backgroundColor: CATEGORY_CONFIG.SIM.bg }]}>
@@ -1950,8 +1950,8 @@ export default function EventDetailScreen() {
               
               <View style={styles.categoryAssignees}>
                 <Text style={styles.assigneesLabel}>Assigned Team:</Text>
-                {eventData.teamWithAllocations?.filter((m: any) => m.ftthTarget > 0 && m.employeeId !== eventData.assignedTo).length > 0 ? (
-                  eventData.teamWithAllocations?.filter((m: any) => m.ftthTarget > 0 && m.employeeId !== eventData.assignedTo).map((member: any) => (
+                {eventData.teamWithAllocations?.filter((m: any) => m.ftthTarget > 0).length > 0 ? (
+                  eventData.teamWithAllocations?.filter((m: any) => m.ftthTarget > 0).map((member: any) => (
                     <View key={member.id} style={styles.assigneeRow}>
                       <View style={styles.assigneeInfo}>
                         <View style={[styles.assigneeAvatar, { backgroundColor: CATEGORY_CONFIG.FTTH.bg }]}>
