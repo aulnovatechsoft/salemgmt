@@ -1108,6 +1108,67 @@ export const eventsRouter = createTRPCRouter({
           assignedToId = masterRecord[0].linkedEmployeeId;
         }
       }
+
+      // Defense in depth: refuse to create a ghost task with no resolvable
+      // assignees. The frontend validates this too, but any other tRPC
+      // caller (scripts, future integrations) must be blocked. A task
+      // with zero event_assignments rows silently bypasses the Phase-1
+      // completion guard (vacuously satisfied), never appears in any
+      // subordinate's "My Tasks", and would still consume circle
+      // SIM/FTTH inventory — see TSK-2026-05-0014 incident.
+      //
+      // We resolve teamAssignments UPFRONT (instead of in the later block)
+      // so the guard counts only assignees that will actually produce an
+      // event_assignments row. `assignedTeam.length` alone is not a valid
+      // signal — it's just a metadata mirror of pers-no strings; an array
+      // of bogus IDs would pass a length check but insert nothing.
+      type ResolvedTeamMember = { employeeId: string; taskIds: string[] };
+      const resolvedTeam: ResolvedTeamMember[] = [];
+      if (input.teamAssignments) {
+        try {
+          // Accept both key names: the frontend currently sends
+          // `employeePersNo`; legacy/external callers may send
+          // `employeePurseId`. Treat them as synonyms.
+          const rawAssignments = JSON.parse(input.teamAssignments) as Array<{
+            employeePurseId?: string;
+            employeePersNo?: string;
+            employeeName?: string;
+            linkedEmployeeId: string | null;
+            taskIds: string[];
+          }>;
+          if (Array.isArray(rawAssignments)) {
+            const seen = new Set<string>();
+            for (const a of rawAssignments) {
+              let employeeId = a.linkedEmployeeId;
+              if (!employeeId) {
+                const persNo = a.employeePurseId ?? a.employeePersNo;
+                if (persNo) {
+                  const masterRecord = await db.select().from(employeeMaster)
+                    .where(eq(employeeMaster.persNo, persNo));
+                  employeeId = masterRecord[0]?.linkedEmployeeId || null;
+                }
+              }
+              if (!employeeId || seen.has(employeeId)) continue;
+              seen.add(employeeId);
+              resolvedTeam.push({
+                employeeId,
+                taskIds: Array.from(new Set(a.taskIds || [])),
+              });
+            }
+            resolvedTeam.sort((x, y) => x.employeeId.localeCompare(y.employeeId));
+          }
+        } catch (e) {
+          console.error("Error parsing teamAssignments JSON:", e);
+        }
+      }
+
+      const hasAnyAssignee = !!assignedToId || resolvedTeam.length > 0;
+      if (!hasAnyAssignee) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Task must have at least one assigned team member.',
+        });
+      }
       
       const circleResources = await db.select().from(resources)
         .where(eq(resources.circle, input.circle));
@@ -1228,32 +1289,11 @@ export const eventsRouter = createTRPCRouter({
         }
       }
 
-      if (input.teamAssignments) {
+      if (resolvedTeam.length > 0) {
         try {
-          const rawAssignments = JSON.parse(input.teamAssignments) as Array<{
-            employeePurseId: string;
-            employeeName: string;
-            linkedEmployeeId: string | null;
-            taskIds: string[];
-          }>;
-
-          // Resolve every assignment to a real employeeId first, then deduplicate
-          // and sort deterministically so the fair-split share order is stable
-          // and reproducible across reruns.
-          const resolved: Array<{ employeeId: string; taskIds: string[] }> = [];
-          const seen = new Set<string>();
-          for (const a of rawAssignments) {
-            let employeeId = a.linkedEmployeeId;
-            if (!employeeId) {
-              const masterRecord = await db.select().from(employeeMaster)
-                .where(eq(employeeMaster.persNo, a.employeePurseId));
-              employeeId = masterRecord[0]?.linkedEmployeeId || null;
-            }
-            if (!employeeId || seen.has(employeeId)) continue;
-            seen.add(employeeId);
-            resolved.push({ employeeId, taskIds: Array.from(new Set(a.taskIds)) });
-          }
-          resolved.sort((x, y) => x.employeeId.localeCompare(y.employeeId));
+          // Reuse the resolution done above the events.insert (so the
+          // ghost-task guard is based on exactly the rows we will insert).
+          const resolved = resolvedTeam;
 
           // Build per-task-type assignee lists and fair shares so each task's
           // shares sum exactly to the event's target (no over- or

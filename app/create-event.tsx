@@ -516,6 +516,10 @@ export default function CreateEventScreen() {
       Alert.alert('Error', 'You must be logged in to create a task');
       return;
     }
+    if (teamAssignments.length === 0 && !assignedEmployee?.id) {
+      Alert.alert('Error', 'Please assign at least one team member before creating the task');
+      return;
+    }
 
     setIsSubmitting(true);
 
