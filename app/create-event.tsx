@@ -676,122 +676,8 @@ export default function CreateEventScreen() {
           )}
 
           <View style={styles.assignSection}>
-            <Text style={styles.assignSectionTitle}>Assign Task</Text>
-            
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Mobile Number</Text>
-              <View style={styles.mobileInputContainer}>
-                <Phone size={18} color={Colors.light.textSecondary} />
-                <TextInput
-                  style={styles.mobileInput}
-                  placeholder="Enter 10-digit mobile number"
-                  value={mobileNumber}
-                  onChangeText={handleMobileChange}
-                  keyboardType="phone-pad"
-                  maxLength={10}
-                />
-              </View>
-              <Text style={styles.helperText}>Enter mobile to auto-fill Pers No</Text>
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Pers No *</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter Pers No to assign task manager"
-                value={assignedToStaffId}
-                onChangeText={handleStaffIdChange}
-                autoCapitalize="characters"
-              />
-              {(isSearchingStaff || isSearchingByMobile || staffSearchQuery.isLoading || mobileSearchQuery.isLoading) && (
-                <View style={styles.staffSearching}>
-                  <ActivityIndicator size="small" color={Colors.light.primary} />
-                  <Text style={styles.staffSearchingText}>Searching employee...</Text>
-                </View>
-              )}
-              
-              {foundEmployee && !assignedEmployee && (
-                <View style={styles.foundEmployeeCard}>
-                  <View style={styles.foundEmployeeHeader}>
-                    <Text style={styles.foundEmployeeLabel}>Employee Found</Text>
-                  </View>
-                  <View style={styles.foundEmployeeBody}>
-                    <View style={styles.employeeAvatar}>
-                      <Text style={styles.employeeAvatarText}>{getInitials(foundEmployee.name)}</Text>
-                    </View>
-                    <View style={styles.employeeDetails}>
-                      <Text style={styles.employeeName}>{foundEmployee.name}</Text>
-                      <View style={styles.employeeMetaRow}>
-                        <Text style={styles.employeeMeta}>Pers No: {foundEmployee.persNo}</Text>
-                      </View>
-                      {foundEmployee.designation && (
-                        <Text style={styles.employeeDesignation}>{foundEmployee.designation}</Text>
-                      )}
-                      {foundEmployee.circle && (
-                        <Text style={styles.employeeCircle}>{foundEmployee.circle.replace(/_/g, ' ')}</Text>
-                      )}
-                    </View>
-                  </View>
-                  <View style={styles.foundEmployeeActions}>
-                    <TouchableOpacity 
-                      style={styles.rejectBtn}
-                      onPress={clearEmployee}
-                    >
-                      <X size={18} color={Colors.light.error} />
-                      <Text style={styles.rejectBtnText}>Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity 
-                      style={styles.confirmBtn}
-                      onPress={confirmEmployee}
-                    >
-                      <CheckCircle size={18} color={Colors.light.background} />
-                      <Text style={styles.confirmBtnText}>Confirm</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              )}
-
-              {assignedEmployee && (
-                <View style={styles.confirmedEmployeeCard}>
-                  <View style={styles.confirmedHeader}>
-                    <BadgeCheck size={16} color={Colors.light.success} />
-                    <Text style={styles.confirmedLabel}>Task Manager Assigned</Text>
-                  </View>
-                  <View style={styles.confirmedBody}>
-                    <View style={styles.confirmedAvatar}>
-                      <Text style={styles.confirmedAvatarText}>{getInitials(assignedEmployee.name)}</Text>
-                      <View style={styles.verifiedBadge}>
-                        <Check size={10} color={Colors.light.background} />
-                      </View>
-                    </View>
-                    <View style={styles.confirmedDetails}>
-                      <Text style={styles.confirmedName}>{assignedEmployee.name}</Text>
-                      <Text style={styles.confirmedMeta}>Pers No: {assignedEmployee.persNo}</Text>
-                      {assignedEmployee.designation && (
-                        <Text style={styles.confirmedDesignation}>{assignedEmployee.designation}</Text>
-                      )}
-                    </View>
-                    <TouchableOpacity
-                      style={styles.changeBtn}
-                      onPress={clearEmployee}
-                    >
-                      <Text style={styles.changeBtnText}>Change</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              )}
-
-              {assignedToStaffId.length >= 3 && !foundEmployee && !assignedEmployee && !isSearchingStaff && !staffSearchQuery.isLoading && (
-                <Text style={styles.staffNotFound}>No registered employee found with this Pers No</Text>
-              )}
-              <Text style={styles.helperText}>This person will manage the task and can create subtasks</Text>
-            </View>
-
-            <View style={styles.dividerContainer}>
-              <View style={styles.divider} />
-              <Text style={styles.dividerText}>OR</Text>
-              <View style={styles.divider} />
-            </View>
+            <Text style={styles.assignSectionTitle}>Assign Task *</Text>
+            <Text style={styles.helperText}>Pick team members from your hierarchy and allocate task categories to each.</Text>
 
             <TouchableOpacity
               style={styles.pickFromTeamButton}
@@ -799,10 +685,10 @@ export default function CreateEventScreen() {
             >
               <Users size={20} color={Colors.light.primary} />
               <View style={styles.pickFromTeamContent}>
-                <Text style={styles.pickFromTeamTitle}>Pick from My Team</Text>
+                <Text style={styles.pickFromTeamTitle}>Pick from My Team *</Text>
                 <Text style={styles.pickFromTeamSubtitle}>
                   {teamAssignments.length === 0 
-                    ? 'Select team members from your hierarchy'
+                    ? 'Required — tap to select team members'
                     : `${teamAssignments.length} team member${teamAssignments.length > 1 ? 's' : ''} assigned`
                   }
                 </Text>
