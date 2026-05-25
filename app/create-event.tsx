@@ -76,6 +76,7 @@ export default function CreateEventScreen() {
   
   // Task name is derived from selected task types
   const getTaskName = () => selectedTaskTypes.map(c => TASK_TYPES.find(t => t.id === c)?.label).filter(Boolean).join(', ');
+  const [formError, setFormError] = useState('');
   const [pinCode, setPinCode] = useState('');
   const [location, setLocation] = useState('');
   const [city, setCity] = useState('');
@@ -503,28 +504,37 @@ export default function CreateEventScreen() {
     // Defensive: even though the button is disabled, RN/Web have edge cases
     // (rapid double-tap, accessibility tooling) where onPress can fire twice.
     if (isSubmitting || hasCreated) return;
+    setFormError('');
+    // Helper: surface validation failures via BOTH inline state (works
+    // on every platform incl. the Replit preview iframe where
+    // window.alert is silently blocked — see replit.md gotcha) AND
+    // Alert.alert (native parity, harmless fallback on web).
+    const fail = (msg: string) => {
+      setFormError(msg);
+      if (Platform.OS !== 'web') Alert.alert('Error', msg);
+    };
     if (!taskCategory) {
-      Alert.alert('Error', 'Please select a task category (S&M or O&M)');
+      fail('Please select a task category (S&M or O&M)');
       return;
     }
     if (selectedCategories.length === 0) {
-      Alert.alert('Error', 'Please select at least one task type');
+      fail('Please select at least one task type');
       return;
     }
     if (!location.trim()) {
-      Alert.alert('Error', 'Please enter location');
+      fail('Please enter location');
       return;
     }
     if (!startDate.trim()) {
-      Alert.alert('Error', 'Please enter start date');
+      fail('Please enter start date');
       return;
     }
     if (!endDate.trim()) {
-      Alert.alert('Error', 'Please enter end date');
+      fail('Please enter end date');
       return;
     }
     if (!employee?.id) {
-      Alert.alert('Error', 'You must be logged in to create a task');
+      fail('You must be logged in to create a task');
       return;
     }
     // Require at least one team member with a real task-type allocation
@@ -536,9 +546,10 @@ export default function CreateEventScreen() {
       a.taskIds.some(t => selectedCategories.includes(t))
     );
     if (!teamCoversSelectedCategory) {
-      Alert.alert(
-        'Error',
-        'Please use the team picker to assign at least one team member to one of the selected task categories.'
+      fail(
+        teamAssignments.length === 0
+          ? 'Please assign at least one team member using the team picker before creating the task.'
+          : 'Please assign at least one team member to one of the selected task categories using the team picker.'
       );
       return;
     }
@@ -1322,6 +1333,12 @@ export default function CreateEventScreen() {
             />
           </View>
 
+          {formError ? (
+            <View style={styles.formErrorBanner}>
+              <Text style={styles.formErrorText}>{formError}</Text>
+            </View>
+          ) : null}
+
           <TouchableOpacity 
             style={[styles.submitButton, (isSubmitting || hasCreated) && styles.submitButtonDisabled]}
             onPress={handleSubmit}
@@ -1765,6 +1782,19 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     fontSize: 16,
     color: Colors.light.text,
+  },
+  formErrorBanner: {
+    backgroundColor: '#FEE2E2',
+    borderLeftWidth: 4,
+    borderLeftColor: '#DC2626',
+    padding: 12,
+    borderRadius: 6,
+    marginTop: 10,
+  },
+  formErrorText: {
+    color: '#991B1B',
+    fontSize: 14,
+    fontWeight: '600' as const,
   },
   submitButton: {
     backgroundColor: Colors.light.primary,
