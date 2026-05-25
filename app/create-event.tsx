@@ -176,6 +176,7 @@ export default function CreateEventScreen() {
   const [endCalendarYear, setEndCalendarYear] = useState(today.getFullYear());
 
   const circlesQuery = trpc.circles.getAll.useQuery();
+  const trpcUtils = trpc.useUtils();
   
   const circlesList = circlesQuery.data && circlesQuery.data.length > 0 
     ? circlesQuery.data.map(c => ({ label: c.label, value: c.value }))
@@ -236,27 +237,31 @@ export default function CreateEventScreen() {
     setPincodeError('');
     
     try {
-      const response = await fetch(`https://api.postalpincode.in/pincode/${pin}`);
-      const data = await response.json();
-      
-      if (data[0]?.Status === 'Success' && data[0]?.PostOffice?.length > 0) {
-        const postOffice = data[0].PostOffice[0];
+      // Go through our backend proxy (`pincode.lookup`) instead of calling
+      // `api.postalpincode.in` directly. The upstream cert expired
+      // 2026-05-21 AND is issued for the wrong CN, so every browser
+      // rejects a direct fetch and we'd silently land in the catch
+      // block below. See backend/trpc/routes/pincode.ts for details.
+      const result = await trpcUtils.pincode.lookup.fetch({ pin });
+
+      if (result.found && result.postOffices.length > 0) {
+        const postOffice = result.postOffices[0];
         setLocation(postOffice.Name || '');
         setCity(postOffice.District || '');
-        
+
         const stateUpper = (postOffice.State || '').toUpperCase();
         const divisionUpper = (postOffice.Division || '').toUpperCase();
         const districtUpper = (postOffice.District || '').toUpperCase();
-        
+
         let mappedCircle = stateToCircleMap[stateUpper];
-        
+
         if (stateUpper === 'UTTAR PRADESH') {
-          const isWest = upWestDivisions.some(div => 
+          const isWest = upWestDivisions.some(div =>
             divisionUpper.includes(div) || districtUpper.includes(div)
           );
           mappedCircle = isWest ? 'UTTAR_PRADESH_WEST' : 'UTTAR_PRADESH_EAST';
         }
-        
+
         if (mappedCircle) {
           setCircle(mappedCircle);
         }
@@ -264,8 +269,14 @@ export default function CreateEventScreen() {
       } else {
         setPincodeError('Invalid PIN code');
       }
-    } catch (error) {
-      setPincodeError('Failed to fetch location');
+    } catch (error: any) {
+      // Surface the server's actionable message when present (e.g.
+      // "PIN code service is temporarily unreachable…") instead of the
+      // generic legacy string.
+      const msg = error?.message && typeof error.message === 'string'
+        ? error.message
+        : 'Failed to fetch location';
+      setPincodeError(msg);
     } finally {
       setIsLoadingPincode(false);
     }

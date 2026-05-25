@@ -12,6 +12,7 @@ import { divisionsRouter } from "./routes/divisions";
 import { adminRouter } from "./routes/admin";
 import { ftthPendingRouter } from "./routes/ftth-pending";
 import { notificationsRouter } from "./routes/notifications";
+import { pincodeRouter } from "./routes/pincode";
 
 export const appRouter = createTRPCRouter({
   employees: employeesRouter,
@@ -27,6 +28,7 @@ export const appRouter = createTRPCRouter({
   admin: adminRouter,
   ftthPending: ftthPendingRouter,
   notifications: notificationsRouter,
+  pincode: pincodeRouter,
 });
 
 export type AppRouter = typeof appRouter;
