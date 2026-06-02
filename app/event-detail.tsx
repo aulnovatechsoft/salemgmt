@@ -1259,8 +1259,11 @@ export default function EventDetailScreen() {
     );
   };
   
-  const isEventManager = eventData?.assignedToEmployee?.id === employee?.id;
   const isEventCreator = eventData?.createdBy === employee?.id;
+  // Assignees (the primary `assignedTo` "event manager") are intentionally
+  // excluded — only the creator or a management role (CMD/AGM/DGM/CGM/GM)
+  // may edit/pause/complete/cancel. Backend mirrors this in
+  // backend/trpc/routes/events.ts (`update` + `updateEventStatus`).
   const canManageTeam = canCreateEvents(employee?.role || 'SALES_STAFF') || isEventCreator;
   // Check if user is a team member via either event_assignments OR assignedTeam array (persNo based)
   const isInAssignedTeam = employee?.persNo && (eventData?.assignedTeam as string[] || []).includes(employee.persNo);

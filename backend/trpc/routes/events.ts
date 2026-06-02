@@ -1462,14 +1462,16 @@ export const eventsRouter = createTRPCRouter({
       const existingEvent = await db.select().from(events).where(eq(events.id, id));
       if (!existingEvent[0]) throw new Error("Event not found");
 
-      // Event-level authorization: only the creator, the assigned event
-      // manager, or an admin (ADMIN/CMD) may edit the event.
+      // Event-level authorization (see canManageRole check below).
       const [actor] = await db.select({ role: employees.role })
         .from(employees).where(eq(employees.id, updatedBy)).limit(1);
-      const isPriv = actor?.role === 'ADMIN' || actor?.role === 'CMD';
+      // Only the creator or a management role (CMD/AGM/DGM/CGM/GM) or ADMIN
+      // may edit. The assigned event manager (assignedTo) is intentionally
+      // NOT granted edit rights — assignees submit work, they do not manage
+      // the task. Mirrors `canManageTeam` in app/event-detail.tsx.
+      const canManageRole = ['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(actor?.role ?? '');
       const isOwner = existingEvent[0].createdBy === updatedBy;
-      const isManager = existingEvent[0].assignedTo === updatedBy;
-      if (!isPriv && !isOwner && !isManager) {
+      if (!canManageRole && !isOwner) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'You do not have permission to edit this task.',
@@ -4007,14 +4009,19 @@ export const eventsRouter = createTRPCRouter({
         return existing;
       }
 
-      // Event-level authorization: only the creator, the assigned event
-      // manager, or an admin (ADMIN/CMD) may transition status.
+      // Event-level authorization (see canManageRole check below).
       const [actor] = await db.select({ role: employees.role })
         .from(employees).where(eq(employees.id, actorId)).limit(1);
       const isPriv = actor?.role === 'ADMIN' || actor?.role === 'CMD';
+      // Only the creator or a management role (CMD/AGM/DGM/CGM/GM) or ADMIN
+      // may transition status. The assigned event manager (assignedTo) is
+      // intentionally NOT granted control — assignees submit work for review,
+      // they do not pause/complete/cancel. Mirrors `canManageTeam` in
+      // app/event-detail.tsx. `isPriv` (ADMIN/CMD) is still used below to gate
+      // the Phase 2 force-complete path.
+      const canManageRole = ['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(actor?.role ?? '');
       const isOwner = existing.createdBy === actorId;
-      const isManager = existing.assignedTo === actorId;
-      if (!isPriv && !isOwner && !isManager) {
+      if (!canManageRole && !isOwner) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'You do not have permission to change this task’s status.',
