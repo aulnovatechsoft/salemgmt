@@ -554,6 +554,23 @@ export default function CreateEventScreen() {
       return;
     }
 
+    if (showSimTarget && (!targetSim || parseInt(targetSim) <= 0)) {
+      fail('SIM Target is required. Please enter a value greater than 0.');
+      return;
+    }
+    if (showFtthTarget && (!targetFtth || parseInt(targetFtth) <= 0)) {
+      fail('FTTH Target is required. Please enter a value greater than 0.');
+      return;
+    }
+    if (showLeaseCircuitTarget && (!targetLeaseCircuit || parseInt(targetLeaseCircuit) <= 0)) {
+      fail('Lease Circuit Target is required. Please enter a value greater than 0.');
+      return;
+    }
+    if (showEbTarget && (!targetEb || parseInt(targetEb) <= 0)) {
+      fail('EB Target is required. Please enter a value greater than 0.');
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
@@ -1023,14 +1040,14 @@ export default function CreateEventScreen() {
 
           {hasSalesTargets && (
             <View style={styles.targetSection}>
-              <Text style={styles.targetSectionTitle}>Sales Targets</Text>
+              <Text style={styles.targetSectionTitle}>Sales Targets *</Text>
               <View style={styles.row}>
                 {showSimTarget && (
                   <View style={[styles.inputGroup, styles.halfWidth]}>
-                    <Text style={styles.label}>SIM Target</Text>
+                    <Text style={styles.label}>SIM Target *</Text>
                     <TextInput
                       style={styles.input}
-                      placeholder="0"
+                      placeholder="Required"
                       value={targetSim}
                       onChangeText={setTargetSim}
                       keyboardType="number-pad"
@@ -1040,10 +1057,10 @@ export default function CreateEventScreen() {
 
                 {showFtthTarget && (
                   <View style={[styles.inputGroup, styles.halfWidth]}>
-                    <Text style={styles.label}>FTTH Target</Text>
+                    <Text style={styles.label}>FTTH Target *</Text>
                     <TextInput
                       style={styles.input}
-                      placeholder="0"
+                      placeholder="Required"
                       value={targetFtth}
                       onChangeText={setTargetFtth}
                       keyboardType="number-pad"
@@ -1055,10 +1072,10 @@ export default function CreateEventScreen() {
               <View style={styles.row}>
                 {showLeaseCircuitTarget && (
                   <View style={[styles.inputGroup, styles.halfWidth]}>
-                    <Text style={styles.label}>Lease Circuit Target</Text>
+                    <Text style={styles.label}>Lease Circuit Target *</Text>
                     <TextInput
                       style={styles.input}
-                      placeholder="0"
+                      placeholder="Required"
                       value={targetLeaseCircuit}
                       onChangeText={setTargetLeaseCircuit}
                       keyboardType="number-pad"
@@ -1076,10 +1093,10 @@ export default function CreateEventScreen() {
 
                 {showEbTarget && (
                   <View style={[styles.inputGroup, styles.halfWidth]}>
-                    <Text style={styles.label}>EB Target</Text>
+                    <Text style={styles.label}>EB Target *</Text>
                     <TextInput
                       style={styles.input}
-                      placeholder="0"
+                      placeholder="Required"
                       value={targetEb}
                       onChangeText={setTargetEb}
                       keyboardType="number-pad"
