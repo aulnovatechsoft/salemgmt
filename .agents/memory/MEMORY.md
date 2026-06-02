@@ -1,0 +1,1 @@
+- [Expo web build gotcha](expo-web-build.md) — `bunx expo export --platform web` often returns exit -1/124 with no tool output but actually completes; verify via dist bundle timestamp + "Exported: dist".

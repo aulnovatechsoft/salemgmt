@@ -9,7 +9,7 @@ import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
 import { CUSTOMER_TYPES } from '@/constants/app';
 import { GeoTaggedPhoto } from '@/types';
-import { uploadPhotos } from '@/lib/photoUpload';
+import { uploadPhotos, findOversizedPhotos, MAX_PHOTO_SIZE_MB } from '@/lib/photoUpload';
 import { captureLocation, isNullIsland, isGpsTestMode, TEST_LOCATION_LABEL } from '@/lib/captureLocation';
 
 type LcLine = { circuitId: string; customerName: string; bandwidth: string };
@@ -308,6 +308,22 @@ export default function EventSalesScreen() {
 
     if (photos.length === 0) {
       showError('Photo required', 'Please add at least one geo-tagged photo before submitting.');
+      return;
+    }
+
+    // Enforce the per-photo size cap before uploading. The server also rejects
+    // anything over the limit, but it does so silently (skips the photo), which
+    // looks like a partial/failed upload. Catching it here gives a specific,
+    // inline message naming the oversized photo(s).
+    const oversized = await findOversizedPhotos(photos);
+    if (oversized.length > 0) {
+      const toMb = (b: number) => `${(b / (1024 * 1024)).toFixed(1)} MB`;
+      const detail = oversized.map(v => `Photo ${v.index + 1} (${toMb(v.sizeBytes)})`).join(', ');
+      const isOne = oversized.length === 1;
+      showError(
+        'Image too large',
+        `Each photo must be ${MAX_PHOTO_SIZE_MB} MB or smaller. ${detail} ${isOne ? 'exceeds' : 'exceed'} the limit. Please remove or retake ${isOne ? 'it' : 'them'} and try again.`,
+      );
       return;
     }
    // if (!currentLocation?.latitude || !currentLocation?.longitude) {

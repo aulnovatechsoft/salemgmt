@@ -153,3 +153,57 @@ export async function uploadPhotos(
     timestamp: new Date().toISOString(),
   }));
 }
+
+// Per-photo size cap. MUST stay in sync with `MAX_PHOTO_SIZE` in server.ts
+// (5 MB) — the server rejects anything larger by silently skipping it, which
+// looks like a partial/failed upload to the user. Validating client-side first
+// lets us surface a specific, inline "image too large" message before upload.
+export const MAX_PHOTO_SIZE_MB = 5;
+export const MAX_PHOTO_SIZE_BYTES = MAX_PHOTO_SIZE_MB * 1024 * 1024;
+
+// Best-effort cross-platform byte-size measurement for a photo URI.
+// Returns null when the size can't be determined; callers should treat
+// "unknown" as acceptable so a measurement failure never blocks a submit —
+// the server-side MAX_PHOTO_SIZE check remains the backstop.
+export async function getPhotoSizeBytes(uri: string): Promise<number | null> {
+  try {
+    if (uri.startsWith('data:')) {
+      const base64 = uri.split(',')[1] || '';
+      const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+      return Math.floor((base64.length * 3) / 4) - padding;
+    }
+    if (Platform.OS === 'web') {
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      return blob.size;
+    }
+    const info = await FileSystem.getInfoAsync(uri, { size: true } as any);
+    if (info.exists && typeof (info as { size?: number }).size === 'number') {
+      return (info as { size: number }).size;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export interface PhotoSizeViolation {
+  index: number;
+  sizeBytes: number;
+}
+
+// Returns the photos (by index) that exceed `maxBytes`. Photos whose size
+// can't be measured are NOT reported as violations (fail-open client-side).
+export async function findOversizedPhotos(
+  photos: { uri: string }[],
+  maxBytes: number = MAX_PHOTO_SIZE_BYTES
+): Promise<PhotoSizeViolation[]> {
+  const violations: PhotoSizeViolation[] = [];
+  for (let i = 0; i < photos.length; i++) {
+    const size = await getPhotoSizeBytes(photos[i].uri);
+    if (size != null && size > maxBytes) {
+      violations.push({ index: i, sizeBytes: size });
+    }
+  }
+  return violations;
+}
