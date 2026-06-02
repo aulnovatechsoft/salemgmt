@@ -1698,9 +1698,9 @@ export const eventsRouter = createTRPCRouter({
       return { success: true };
     }),
 
-  getEventWithDetails: publicProcedure
+  getEventWithDetails: authedProcedure
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       
       if (!input.id || input.id.trim() === '') {
         console.error("getEventWithDetails: Empty ID provided");
@@ -1723,6 +1723,49 @@ export const eventsRouter = createTRPCRouter({
           eq(eventSalesEntries.entryStatus, 'active')
         ))
         .orderBy(desc(eventSalesEntries.createdAt));
+
+      // Attach per-item line details (mobile numbers, FTTH IDs, circuits, EB connections)
+      // so reviewers/assignees can see exactly what was submitted before approval.
+      // These rows contain customer PII (contacts, addresses), so they are only attached
+      // for authorized viewers: the task creator, assigned manager, an assigned team member,
+      // or a management/admin role. Everyone else still gets the aggregate counts only.
+      const actorId = ctx.employeeId;
+      let canSeeLineDetails = false;
+      if (actorId) {
+        const isCreatorOrManager = eventResult[0].createdBy === actorId || eventResult[0].assignedTo === actorId;
+        const isAssignedMember = assignments.some(a => a.employeeId === actorId);
+        if (isCreatorOrManager || isAssignedMember) {
+          canSeeLineDetails = true;
+        } else {
+          const actorRow = await db.select({ role: employees.role }).from(employees).where(eq(employees.id, actorId)).limit(1);
+          const actorRole = actorRow[0]?.role;
+          canSeeLineDetails = !!actorRole && ['CMD', 'ADMIN', 'GM', 'CGM', 'DGM', 'AGM'].includes(actorRole);
+        }
+      }
+      const salesEntryIds = salesEntries.map(s => s.id);
+      if (canSeeLineDetails && salesEntryIds.length > 0) {
+        const [simLinesAll, ftthLinesAll, lcLinesAll, ebLinesAll] = await Promise.all([
+          db.select().from(simSaleLines).where(inArray(simSaleLines.entryId, salesEntryIds)),
+          db.select().from(ftthSaleLines).where(inArray(ftthSaleLines.entryId, salesEntryIds)),
+          db.select().from(lcSaleLines).where(inArray(lcSaleLines.entryId, salesEntryIds)),
+          db.select().from(ebSaleLines).where(inArray(ebSaleLines.entryId, salesEntryIds)),
+        ]);
+        const groupByEntry = <T extends { entryId: string }>(rows: T[]): Record<string, T[]> => {
+          const m: Record<string, T[]> = {};
+          for (const r of rows) { (m[r.entryId] ||= []).push(r); }
+          return m;
+        };
+        const simByEntry = groupByEntry(simLinesAll);
+        const ftthByEntry = groupByEntry(ftthLinesAll);
+        const lcByEntry = groupByEntry(lcLinesAll);
+        const ebByEntry = groupByEntry(ebLinesAll);
+        for (const s of salesEntries as any[]) {
+          s.simLines = simByEntry[s.id] || [];
+          s.ftthLines = ftthByEntry[s.id] || [];
+          s.lcLines = lcByEntry[s.id] || [];
+          s.ebLines = ebByEntry[s.id] || [];
+        }
+      }
       
       const financeEntries = await db.select().from(financeCollectionEntries)
         .where(eq(financeCollectionEntries.eventId, input.id))

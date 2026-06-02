@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, RefreshControl, Modal, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, RefreshControl, Modal, Platform, Image } from 'react-native';
 import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
-import { MapPin, Calendar, Users, Plus, Trash2, Camera, User, X, Edit3, Play, Pause, CheckCircle, XCircle, ChevronRight, Clock, Flag, ListTodo, Zap, AlertCircle, Settings, Send, RotateCcw, CircleCheck, Hourglass, CircleDot, ThumbsUp, ThumbsDown, Check, ArrowLeft, AlertTriangle } from 'lucide-react-native';
+import { MapPin, Calendar, Users, Plus, Trash2, Camera, User, X, Edit3, Play, Pause, CheckCircle, XCircle, ChevronRight, ChevronDown, ChevronUp, Clock, Flag, ListTodo, Zap, AlertCircle, Settings, Send, RotateCcw, CircleCheck, Hourglass, CircleDot, ThumbsUp, ThumbsDown, Check, ArrowLeft, AlertTriangle } from 'lucide-react-native';
 import { useAuth } from '@/contexts/auth';
 import { getDisplayTaskId } from '@/utils/taskId';
 import Colors from '@/constants/colors';
@@ -380,6 +380,16 @@ export default function EventDetailScreen() {
   const [deleteEntryReason, setDeleteEntryReason] = useState('');
   const [activateModalEntry, setActivateModalEntry] = useState<{ id: string; kind: 'sim' | 'ftth'; remaining: number } | null>(null);
   const [activateInput, setActivateInput] = useState('');
+  // Recent Sales Entries: per-entry detail expansion + full-screen photo viewer
+  const [expandedSalesEntries, setExpandedSalesEntries] = useState<Set<string>>(new Set());
+  const toggleSalesEntryExpanded = (id: string) => {
+    setExpandedSalesEntries((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const [photoViewer, setPhotoViewer] = useState<{ uris: string[]; index: number } | null>(null);
 
   const trpcUtils = trpc.useUtils();
   
@@ -3210,6 +3220,114 @@ export default function EventDetailScreen() {
                     )}
                   </View>
                   {(() => {
+                    const isExpanded = expandedSalesEntries.has(entry.id);
+                    const simL: any[] = entry.simLines || [];
+                    const ftthL: any[] = entry.ftthLines || [];
+                    const lcL: any[] = entry.lcLines || [];
+                    const ebL: any[] = entry.ebLines || [];
+                    const photoL: any[] = entry.photos || [];
+                    const hasGps = !!entry.gpsLatitude && !!entry.gpsLongitude;
+                    const noDetails = simL.length === 0 && ftthL.length === 0 && lcL.length === 0 && ebL.length === 0 && !entry.remarks && photoL.length === 0;
+                    return (
+                      <>
+                        <TouchableOpacity style={styles.detailsToggle} onPress={() => toggleSalesEntryExpanded(entry.id)} activeOpacity={0.7}>
+                          <Text style={styles.detailsToggleText}>{isExpanded ? 'Hide details' : 'View details'}</Text>
+                          {isExpanded ? <ChevronUp size={14} color={Colors.light.primary} /> : <ChevronDown size={14} color={Colors.light.primary} />}
+                        </TouchableOpacity>
+                        {isExpanded && (
+                          <View style={styles.salesDetailBox}>
+                            {entry.customerType ? (
+                              <View style={styles.detailRow}>
+                                <Text style={styles.detailKey}>Customer Type</Text>
+                                <Text style={styles.detailVal}>{entry.customerType}</Text>
+                              </View>
+                            ) : null}
+                            {showSim && simL.length > 0 && (
+                              <View style={styles.detailGroup}>
+                                <Text style={styles.detailGroupTitle}>SIM Numbers ({simL.length})</Text>
+                                {simL.map((l) => (
+                                  <View key={l.id} style={styles.lineItem}>
+                                    <Text style={styles.lineItemMain}>{l.mobileNumber}{l.simSerialNumber ? `  ·  ${l.simSerialNumber}` : ''}</Text>
+                                    <View style={styles.lineItemMeta}>
+                                      {l.customerName ? <Text style={styles.lineItemSub}>{l.customerName}</Text> : null}
+                                      <Text style={[styles.lineBadge, l.isActivated ? styles.lineBadgeOn : styles.lineBadgeOff]}>{l.isActivated ? 'Activated' : 'Not activated'}</Text>
+                                    </View>
+                                  </View>
+                                ))}
+                              </View>
+                            )}
+                            {showFtth && ftthL.length > 0 && (
+                              <View style={styles.detailGroup}>
+                                <Text style={styles.detailGroupTitle}>FTTH IDs ({ftthL.length})</Text>
+                                {ftthL.map((l) => (
+                                  <View key={l.id} style={styles.lineItem}>
+                                    <Text style={styles.lineItemMain}>{l.ftthId}{l.planName ? `  ·  ${l.planName}` : ''}</Text>
+                                    <View style={styles.lineItemMeta}>
+                                      {l.customerName ? <Text style={styles.lineItemSub}>{l.customerName}{l.customerContact ? ` · ${l.customerContact}` : ''}</Text> : null}
+                                      <Text style={[styles.lineBadge, l.isActivated ? styles.lineBadgeOn : styles.lineBadgeOff]}>{l.isActivated ? 'Activated' : 'Not activated'}</Text>
+                                    </View>
+                                  </View>
+                                ))}
+                              </View>
+                            )}
+                            {showLease && lcL.length > 0 && (
+                              <View style={styles.detailGroup}>
+                                <Text style={styles.detailGroupTitle}>Lease Circuits ({lcL.length})</Text>
+                                {lcL.map((l) => (
+                                  <View key={l.id} style={styles.lineItem}>
+                                    <Text style={styles.lineItemMain}>{l.circuitId}{l.bandwidth ? `  ·  ${l.bandwidth}` : ''}</Text>
+                                    {l.customerName ? <Text style={styles.lineItemSub}>{l.customerName}{l.customerContact ? ` · ${l.customerContact}` : ''}</Text> : null}
+                                    {(l.endpointA || l.endpointB) ? <Text style={styles.lineItemSub}>{[l.endpointA, l.endpointB].filter(Boolean).join('  →  ')}</Text> : null}
+                                  </View>
+                                ))}
+                              </View>
+                            )}
+                            {showEb && ebL.length > 0 && (
+                              <View style={styles.detailGroup}>
+                                <Text style={styles.detailGroupTitle}>EB Connections ({ebL.length})</Text>
+                                {ebL.map((l) => (
+                                  <View key={l.id} style={styles.lineItem}>
+                                    <Text style={styles.lineItemMain}>{l.connectionId}{l.loadKw ? `  ·  ${l.loadKw}` : ''}</Text>
+                                    {l.customerName ? <Text style={styles.lineItemSub}>{l.customerName}{l.customerContact ? ` · ${l.customerContact}` : ''}</Text> : null}
+                                    {l.meterNumber ? <Text style={styles.lineItemSub}>Meter: {l.meterNumber}</Text> : null}
+                                    {l.siteAddress ? <Text style={styles.lineItemSub}>{l.siteAddress}</Text> : null}
+                                  </View>
+                                ))}
+                              </View>
+                            )}
+                            {entry.remarks ? (
+                              <View style={styles.detailGroup}>
+                                <Text style={styles.detailGroupTitle}>Remarks</Text>
+                                <Text style={styles.detailVal}>{entry.remarks}</Text>
+                              </View>
+                            ) : null}
+                            {hasGps ? (
+                              <View style={styles.detailRow}>
+                                <Text style={styles.detailKey}>GPS</Text>
+                                <Text style={styles.detailVal}>{Number(entry.gpsLatitude).toFixed(5)}, {Number(entry.gpsLongitude).toFixed(5)}</Text>
+                              </View>
+                            ) : null}
+                            {photoL.length > 0 && (
+                              <View style={styles.detailGroup}>
+                                <Text style={styles.detailGroupTitle}>Photos ({photoL.length})</Text>
+                                <View style={styles.photoThumbRow}>
+                                  {photoL.map((p, i) => (
+                                    <TouchableOpacity key={i} onPress={() => setPhotoViewer({ uris: photoL.map((x) => x.uri), index: i })} activeOpacity={0.8}>
+                                      <Image source={{ uri: p.uri }} style={styles.photoThumb} />
+                                    </TouchableOpacity>
+                                  ))}
+                                </View>
+                              </View>
+                            )}
+                            {noDetails && (
+                              <Text style={styles.detailEmpty}>No additional line details were recorded for this entry.</Text>
+                            )}
+                          </View>
+                        )}
+                      </>
+                    );
+                  })()}
+                  {(() => {
                     const isOwner = employee?.id === entry.employeeId;
                     const isEventCreator = employee?.id === eventData.createdBy;
                     const isEventManager = employee?.id === eventData.assignedTo;
@@ -4321,11 +4439,67 @@ export default function EventDetailScreen() {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {/* Full-screen photo viewer */}
+      <Modal visible={!!photoViewer} animationType="fade" transparent={true} onRequestClose={() => setPhotoViewer(null)}>
+        <View style={styles.photoViewerOverlay}>
+          <TouchableOpacity style={styles.photoViewerClose} onPress={() => setPhotoViewer(null)}>
+            <X size={26} color="#FFFFFF" />
+          </TouchableOpacity>
+          {photoViewer && (
+            <Image source={{ uri: photoViewer.uris[photoViewer.index] }} style={styles.photoViewerImage} resizeMode="contain" />
+          )}
+          {photoViewer && photoViewer.uris.length > 1 && (
+            <View style={styles.photoViewerNav}>
+              <TouchableOpacity
+                style={[styles.photoViewerNavBtn, photoViewer.index === 0 && styles.photoViewerNavBtnDisabled]}
+                disabled={photoViewer.index === 0}
+                onPress={() => setPhotoViewer((p) => p ? { ...p, index: Math.max(0, p.index - 1) } : p)}
+              >
+                <ChevronRight size={22} color="#FFFFFF" style={{ transform: [{ rotate: '180deg' }] }} />
+              </TouchableOpacity>
+              <Text style={styles.photoViewerCount}>{photoViewer.index + 1} / {photoViewer.uris.length}</Text>
+              <TouchableOpacity
+                style={[styles.photoViewerNavBtn, photoViewer.index === photoViewer.uris.length - 1 && styles.photoViewerNavBtnDisabled]}
+                disabled={photoViewer.index === photoViewer.uris.length - 1}
+                onPress={() => setPhotoViewer((p) => p ? { ...p, index: Math.min(p.uris.length - 1, p.index + 1) } : p)}
+              >
+                <ChevronRight size={22} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </Modal>
     </>
   );
 }
 
 const styles = StyleSheet.create({
+  detailsToggle: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', paddingVertical: 6, marginTop: 2 },
+  detailsToggleText: { fontSize: 13, fontWeight: '600', color: Colors.light.primary },
+  salesDetailBox: { backgroundColor: Colors.light.backgroundSecondary, borderRadius: 8, padding: 12, marginTop: 4, marginBottom: 4, gap: 10 },
+  detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  detailKey: { fontSize: 12, color: Colors.light.textSecondary, fontWeight: '600' },
+  detailVal: { fontSize: 13, color: Colors.light.text, flexShrink: 1, textAlign: 'right' },
+  detailGroup: { gap: 6 },
+  detailGroupTitle: { fontSize: 12, fontWeight: '700', color: Colors.light.textSecondary, textTransform: 'uppercase', letterSpacing: 0.3 },
+  lineItem: { backgroundColor: Colors.light.background, borderRadius: 6, paddingVertical: 7, paddingHorizontal: 10, gap: 2, borderWidth: 1, borderColor: Colors.light.border },
+  lineItemMain: { fontSize: 13, fontWeight: '600', color: Colors.light.text },
+  lineItemSub: { fontSize: 12, color: Colors.light.textSecondary },
+  lineItemMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' },
+  lineBadge: { fontSize: 10, fontWeight: '700', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, overflow: 'hidden' },
+  lineBadgeOn: { backgroundColor: '#E8F5E9', color: '#2E7D32' },
+  lineBadgeOff: { backgroundColor: '#FFF3E0', color: '#E65100' },
+  detailEmpty: { fontSize: 12, color: Colors.light.textSecondary, fontStyle: 'italic' },
+  photoThumbRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  photoThumb: { width: 64, height: 64, borderRadius: 8, backgroundColor: Colors.light.border },
+  photoViewerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center', alignItems: 'center' },
+  photoViewerClose: { position: 'absolute', top: 48, right: 20, zIndex: 2, padding: 8 },
+  photoViewerImage: { width: '92%', height: '70%' },
+  photoViewerNav: { position: 'absolute', bottom: 48, flexDirection: 'row', alignItems: 'center', gap: 20 },
+  photoViewerNavBtn: { padding: 10, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 24 },
+  photoViewerNavBtnDisabled: { opacity: 0.3 },
+  photoViewerCount: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
   container: { flex: 1, backgroundColor: Colors.light.backgroundSecondary },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32, backgroundColor: Colors.light.backgroundSecondary },
   loadingSpinner: { marginBottom: 16 },
