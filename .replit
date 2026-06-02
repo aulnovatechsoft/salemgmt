@@ -1,4 +1,4 @@
-modules = ["nodejs-20", "postgresql-16", "python-3.11"]
+modules = ["nodejs-20", "postgresql-16", "python-3.11", "bun"]
 [agent]
 expertMode = true
 stack = "BEST_EFFORT_FALLBACK"
@@ -47,6 +47,6 @@ build = ["bun", "run", "bunx", "expo", "export", "--platform", "web"]
 
 [userenv.shared]
 BSNL_DATABASE_URL = "postgresql://salesmgmt:Bsnl%40123@117.251.72.195:5433/salesmgmt_bsnl?sslmode=disable"
-EXPO_PUBLIC_API_URL = "https://06b9ccaa-a04b-4e74-9263-ab1987944791-00-zn9v013x6ydv.sisko.replit.dev"
+EXPO_PUBLIC_API_URL = "https://3412980a-9810-4a54-8db9-a1a6acf5f2e6-00-3ldiyvhr3su60.pike.replit.dev"
 EXPO_NO_TELEMETRY = "1"
 EXPO_PUBLIC_GPS_TEST_MODE = "1"
