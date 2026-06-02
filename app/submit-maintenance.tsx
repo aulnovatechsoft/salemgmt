@@ -60,6 +60,10 @@ export default function SubmitMaintenanceScreen() {
     onSuccess: (res) => {
       setHasSubmitted(true);
       utils.events.getEventWithDetails.invalidate();
+      // Header progress chips (overall % + per-category x/y) are powered by
+      // getEventProgressSummary — invalidate it too, otherwise O&M progress
+      // only refreshes after its 30s stale window.
+      utils.events.getEventProgressSummary.invalidate();
       utils.events.getMyEvents.invalidate();
       utils.events.getAll.invalidate();
       utils.events.getMyAssignedTasks.invalidate();

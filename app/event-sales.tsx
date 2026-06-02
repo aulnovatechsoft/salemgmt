@@ -61,6 +61,11 @@ export default function EventSalesScreen() {
     onSuccess: () => {
       setHasSubmitted(true);
       utils.events.getEventWithDetails.invalidate();
+      // The task-detail header progress chips (SIM x/y, LEASE x/y, overall %)
+      // are powered by getEventProgressSummary — invalidate it too or the
+      // counts only refresh after its 30s stale window (the "takes time to
+      // reflect" lag users see right after submitting).
+      utils.events.getEventProgressSummary.invalidate();
       utils.events.getMyEvents.invalidate();
       utils.events.getAll.invalidate();
       utils.events.getMyAssignedTasks.invalidate();
