@@ -1,2 +1,3 @@
 - [Expo web build gotcha](expo-web-build.md) — `bunx expo export --platform web` often returns exit -1/124 with no tool output but actually completes; verify via dist bundle timestamp + "Exported: dist".
 - [getEventWithDetails PII gate](event-details-pii.md) — sale-line detail tables carry customer PII; only attach them for authorized viewers, and the endpoint is authed (not public).
+- [Task management permissions](task-management-permissions.md) — edit/pause/complete/cancel = creator OR peer-or-above creator's role via `canManageEvent`; CGM ranks ABOVE GM (picker order ≠ seniority).

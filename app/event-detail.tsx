@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/auth';
 import { getDisplayTaskId } from '@/utils/taskId';
 import Colors from '@/constants/colors';
 import { trpc } from '@/lib/trpc';
-import { canCreateEvents } from '@/constants/app';
+import { canManageEvent } from '@/constants/app';
 import { Circle, SubtaskPriority, SubtaskStatus, EventStatus } from '@/types';
 
 const PRIORITY_COLORS: Record<SubtaskPriority, { bg: string; text: string }> = {
@@ -1270,11 +1270,11 @@ export default function EventDetailScreen() {
   };
   
   const isEventCreator = eventData?.createdBy === employee?.id;
-  // Assignees (the primary `assignedTo` "event manager") are intentionally
-  // excluded — only the creator or a management role (CMD/AGM/DGM/CGM/GM)
-  // may edit/pause/complete/cancel. Backend mirrors this in
-  // backend/trpc/routes/events.ts (`update` + `updateEventStatus`).
-  const canManageTeam = canCreateEvents(employee?.role || 'SALES_STAFF') || isEventCreator;
+  // Edit/pause/complete/cancel is allowed for the creator, OR anyone whose
+  // role is a PEER OR ABOVE the creator's role in the hierarchy (see
+  // `canManageEvent`). A user strictly BELOW the creator (e.g. a GM on a CGM's
+  // task) cannot manage it. Backend mirrors this in events.ts.
+  const canManageTeam = isEventCreator || canManageEvent(employee?.role, (eventData as any)?.creatorRole);
   // Check if user is a team member via either event_assignments OR assignedTeam array (persNo based)
   const isInAssignedTeam = employee?.persNo && (eventData?.assignedTeam as string[] || []).includes(employee.persNo);
   const hasAssignmentRecord = eventData?.teamWithAllocations?.some(t => t.employeeId === employee?.id);

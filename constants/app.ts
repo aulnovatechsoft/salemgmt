@@ -67,18 +67,43 @@ export const CUSTOMER_TYPES = [
   { label: 'Enterprise', value: 'Enterprise' },
 ];
 
+// Seniority ranking — higher number = more senior. This is the single source
+// of truth for "who outranks whom" and drives the task edit/manage rule in
+// `canManageEvent`. NOTE: CGM (Chief General Manager, heads a Circle) is
+// SENIOR to GM in the real BSNL hierarchy, so CGM ranks above GM here even
+// though the role-picker list happens to list GM first.
 export const getRoleHierarchy = (role: UserRole): number => {
   const hierarchy: Record<UserRole, number> = {
     CMD: 11,
     ADMIN: 10,
-    GM: 6,
-    CGM: 5,
+    CGM: 6,
+    GM: 5,
     DGM: 4,
     AGM: 3,
     SD_JTO: 2,
     SALES_STAFF: 1,
   };
   return hierarchy[role];
+};
+
+// Who may edit / pause / complete / cancel a task.
+// Rule (per product decision): the task creator, OR anyone whose role is a
+// PEER OR ABOVE the creator's role in the hierarchy. Someone strictly BELOW
+// the creator cannot manage it. CMD/ADMIN are always allowed (system-level
+// roles). Mirrored on the backend in `update` + `updateEventStatus`.
+export const canManageEvent = (
+  actorRole: UserRole | string | null | undefined,
+  creatorRole: UserRole | string | null | undefined,
+): boolean => {
+  if (!actorRole) return false;
+  if (isAdminRole(actorRole as UserRole)) return true; // CMD / ADMIN: always
+  // Creator role unknown (legacy rows): fall back to "can this role create
+  // tasks at all" so we don't silently lock everyone out.
+  if (!creatorRole) return canCreateEvents(actorRole as UserRole);
+  const actorRank = getRoleHierarchy(actorRole as UserRole);
+  const creatorRank = getRoleHierarchy(creatorRole as UserRole);
+  if (actorRank == null || creatorRank == null) return false;
+  return actorRank >= creatorRank;
 };
 
 export const isAdminRole = (role: UserRole): boolean => {
