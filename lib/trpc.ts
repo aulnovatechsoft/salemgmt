@@ -8,7 +8,7 @@ import type { AppRouter } from "@/backend/trpc/app-router";
 
 export const trpc = createTRPCReact<AppRouter>();
 
-const PRODUCTION_API_URL = 'http://117.251.72.195';
+const PRODUCTION_API_URL = process.env.EXPO_PUBLIC_API_URL || 'https://salesmgmt.ddns.net';
 
 const getBaseUrl = () => {
   // For native mobile apps (iOS/Android), ALWAYS use production API
@@ -16,15 +16,19 @@ const getBaseUrl = () => {
     console.log('[TRPC] Mobile platform detected, using production URL:', PRODUCTION_API_URL);
     return PRODUCTION_API_URL;
   }
-  
-  // For web, use window.location.origin (same server)
+
+  // For web, use window.location.origin only when NOT on localhost (i.e. deployed on the real server)
   if (typeof window !== 'undefined' && window.location) {
-    console.log('[TRPC] Web platform, using window.location.origin:', window.location.origin);
-    return window.location.origin;
+    const origin = window.location.origin;
+    const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
+    if (!isLocalhost) {
+      console.log('[TRPC] Web platform (deployed), using window.location.origin:', origin);
+      return origin;
+    }
   }
-  
-  // Fallback
-  console.log('[TRPC] Fallback to production URL:', PRODUCTION_API_URL);
+
+  // Local dev or fallback — always hit the production API
+  console.log('[TRPC] Local/fallback, using production URL:', PRODUCTION_API_URL);
   return PRODUCTION_API_URL;
 };
 

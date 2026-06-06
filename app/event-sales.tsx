@@ -141,7 +141,8 @@ export default function EventSalesScreen() {
     const result = await ImagePicker.launchCameraAsync({
       allowsEditing: false,
       aspect: [4, 3],
-      quality: 0.7,
+      quality: 0.4,
+      exif: false,
     });
 
     if (!result.canceled && result.assets[0]) {
@@ -198,7 +199,8 @@ export default function EventSalesScreen() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.7,
+      quality: 0.4,
+      exif: false,
     });
 
     if (!result.canceled && result.assets[0]) {
@@ -349,7 +351,8 @@ export default function EventSalesScreen() {
         );
       } catch (err) {
         console.error('Photo upload failed:', err);
-        showError('Upload Error', 'Failed to upload photos. Please try again.');
+        const detail = err instanceof Error ? err.message : String(err);
+        showError('Upload Error', `Failed to upload photos.\n\n${detail}`);
         setIsUploadingPhotos(false);
         return;
       }

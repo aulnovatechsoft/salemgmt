@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 
 // Base URL for the photo upload endpoint. Photo uploads carry sensitive
 // geo-tagged evidence (photo + lat/long), so plain HTTP is REJECTED on
@@ -109,12 +109,23 @@ export async function uploadPhotos(
       }
     } else {
       try {
-        base64 = await FileSystem.readAsStringAsync(photo.uri, {
+        // On Android, content:// URIs from the gallery need to be copied to a
+        // cache file first before expo-file-system can read them as base64.
+        let readUri = photo.uri;
+        if (photo.uri.startsWith('content://')) {
+          const ext = photo.uri.split('.').pop()?.split('?')[0] || 'jpg';
+          const dest = `${FileSystem.cacheDirectory}upload_${Date.now()}.${ext}`;
+          await FileSystem.copyAsync({ from: photo.uri, to: dest });
+          readUri = dest;
+        }
+        base64 = await FileSystem.readAsStringAsync(readUri, {
           encoding: 'base64' as any,
         });
       } catch (err) {
         console.error('Failed to read photo file:', err);
-        continue;
+        throw new Error(
+          `Could not read photo from device storage. Please try taking the photo again. (${err instanceof Error ? err.message : 'unknown error'})`
+        );
       }
     }
 
@@ -127,7 +138,9 @@ export async function uploadPhotos(
     });
   }
 
-  if (photosWithBase64.length === 0) return [];
+  if (photosWithBase64.length === 0) {
+    throw new Error('No photos could be prepared for upload. Please try taking the photos again.');
+  }
 
   const response = await fetch(`${baseUrl}/api/photos/upload`, {
     method: 'POST',
@@ -141,7 +154,12 @@ export async function uploadPhotos(
   });
 
   if (!response.ok) {
-    throw new Error('Failed to upload photos');
+    if (response.status === 413) {
+      throw new Error(
+        'Photo is too large for the server (HTTP 413). Please retake with lower resolution or ask admin to increase nginx client_max_body_size.'
+      );
+    }
+    throw new Error(`Upload failed (HTTP ${response.status})`);
   }
 
   const result = await response.json();
@@ -154,11 +172,11 @@ export async function uploadPhotos(
   }));
 }
 
-// Per-photo size cap. MUST stay in sync with `MAX_PHOTO_SIZE` in server.ts
-// (5 MB) — the server rejects anything larger by silently skipping it, which
-// looks like a partial/failed upload to the user. Validating client-side first
-// lets us surface a specific, inline "image too large" message before upload.
-export const MAX_PHOTO_SIZE_MB = 5;
+// Per-photo size cap. Capped at 0.7 MB so that after base64 encoding (~33%
+// overhead) the full request body stays under nginx's 1 MB client_max_body_size.
+// Once nginx is updated to allow larger bodies (client_max_body_size 15M),
+// raise this back to 5 and re-sync with MAX_PHOTO_SIZE in server.ts.
+export const MAX_PHOTO_SIZE_MB = 0.7;
 export const MAX_PHOTO_SIZE_BYTES = MAX_PHOTO_SIZE_MB * 1024 * 1024;
 
 // Best-effort cross-platform byte-size measurement for a photo URI.

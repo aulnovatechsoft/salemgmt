@@ -19,7 +19,9 @@
         "simulator": true
       },
       "env": {
-        "ENVIRONMENT": "development"
+        "ENVIRONMENT": "development",
+        "EXPO_PUBLIC_API_URL": "https://salesmgmt.ddns.net",
+        "EXPO_PUBLIC_API_BASE_URL": "https://salesmgmt.ddns.net"
       }
     },
     "development-device": {
@@ -33,7 +35,9 @@
         "simulator": false
       },
       "env": {
-        "ENVIRONMENT": "development"
+        "ENVIRONMENT": "development",
+        "EXPO_PUBLIC_API_URL": "https://salesmgmt.ddns.net",
+        "EXPO_PUBLIC_API_BASE_URL": "https://salesmgmt.ddns.net"
       }
     },
     "preview": {
@@ -44,7 +48,8 @@
       },
       "env": {
         "ENVIRONMENT": "preview",
-        "EXPO_PUBLIC_API_URL": "http://117.251.72.195"
+        "EXPO_PUBLIC_API_URL": "https://salesmgmt.ddns.net",
+        "EXPO_PUBLIC_API_BASE_URL": "https://salesmgmt.ddns.net"
       }
     },
     "test-production": {
@@ -55,7 +60,8 @@
       },
       "env": {
         "ENVIRONMENT": "production",
-        "EXPO_PUBLIC_API_URL": "http://117.251.72.195"
+        "EXPO_PUBLIC_API_URL": "https://salesmgmt.ddns.net",
+        "EXPO_PUBLIC_API_BASE_URL": "https://salesmgmt.ddns.net"
       }
     },
     "production": {
@@ -68,7 +74,8 @@
       },
       "env": {
         "ENVIRONMENT": "production",
-        "EXPO_PUBLIC_API_URL": "http://117.251.72.195"
+        "EXPO_PUBLIC_API_URL": "https://salesmgmt.ddns.net",
+        "EXPO_PUBLIC_API_BASE_URL": "https://salesmgmt.ddns.net"
       }
     }
   },
