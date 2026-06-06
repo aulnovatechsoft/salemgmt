@@ -31,6 +31,7 @@ export default function AdminScreen() {
   
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 100;
+  const [importError, setImportError] = useState<string | null>(null);
 
   const [showPrivilegedSection, setShowPrivilegedSection] = useState(false);
   const [includeManagement, setIncludeManagement] = useState(false);
@@ -158,76 +159,128 @@ export default function AdminScreen() {
     );
   }
   
-  const parseCSV = (text: string) => {
-    const lines = text.trim().split('\n');
-    if (lines.length < 2) {
-      throw new Error('CSV must have a header row and at least one data row');
+  // RFC-4180 compliant CSV parser — handles quoted fields, embedded commas,
+  // escaped double-quotes (""), and multi-line values inside quotes.
+  const parseQuotedCSVLine = (text: string, startPos: number): { fields: string[]; nextPos: number } => {
+    const fields: string[] = [];
+    let pos = startPos;
+    while (pos <= text.length) {
+      if (text[pos] === '"') {
+        // Quoted field
+        pos++;
+        let field = '';
+        while (pos < text.length) {
+          if (text[pos] === '"' && text[pos + 1] === '"') { field += '"'; pos += 2; }
+          else if (text[pos] === '"') { pos++; break; }
+          else { field += text[pos++]; }
+        }
+        fields.push(field);
+      } else {
+        // Unquoted field — read until comma or newline
+        let field = '';
+        while (pos < text.length && text[pos] !== ',' && text[pos] !== '\n' && text[pos] !== '\r') {
+          field += text[pos++];
+        }
+        const v = field.trim();
+        fields.push(v === 'NULL' || v === 'null' ? '' : v);
+      }
+      // skip comma or end of line
+      if (text[pos] === ',') { pos++; }
+      else { if (text[pos] === '\r') pos++; if (text[pos] === '\n') pos++; break; }
     }
-    
-    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
-    
-    const persNoIdx = headers.findIndex(h => h.includes('employee_pers_no') || h.includes('pers_no') || h.includes('purse') || h.includes('purse_id'));
+    return { fields, nextPos: pos };
+  };
+
+  const parseCSV = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error('CSV data is empty');
+
+    // Parse all rows using the RFC-4180 parser
+    const rows: string[][] = [];
+    let pos = 0;
+    while (pos < trimmed.length) {
+      const { fields, nextPos } = parseQuotedCSVLine(trimmed, pos);
+      if (fields.some(f => f.length > 0)) rows.push(fields);
+      if (nextPos === pos) break; // safety guard
+      pos = nextPos;
+    }
+
+    if (rows.length < 2) {
+      throw new Error(
+        'CSV must have a header row followed by data rows.\n\n' +
+        'Add this as the FIRST line of your CSV:\n' +
+        'employee_pers_no,emp_name,circle,ba_name,employee_designation,emp_group,controller_officer_pers_no,controller_officer_name\n\n' +
+        'Then paste your data rows below it.'
+      );
+    }
+
+    const headers = rows[0].map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
+
+    const persNoIdx = headers.findIndex(h => h.includes('employee_pers_no') || h.includes('pers_no') || h === 'pers' || h === 'persno');
     const nameIdx = headers.findIndex(h => h.includes('emp_name') || h.includes('employee_name') || h === 'name');
     const circleIdx = headers.findIndex(h => h === 'circle');
     const zoneIdx = headers.findIndex(h => h.includes('ba_name') || h.includes('zone'));
     const designationIdx = headers.findIndex(h => h.includes('employee_designation') || h.includes('designation'));
     const empGroupIdx = headers.findIndex(h => h.includes('emp_group'));
-    const reportingIdx = headers.findIndex(h => h.includes('controller_officer_pers_no') || h.includes('reporting'));
-    const reportingNameIdx = headers.findIndex(h => h.includes('controller_officer_name'));
-    const reportingDesigIdx = headers.findIndex(h => h.includes('controller_designation'));
+    const reportingIdx = headers.findIndex(h => h.includes('controller_officer_pers_no') || h.includes('reporting_pers'));
+    const reportingNameIdx = headers.findIndex(h => h.includes('controller_officer_name') || h.includes('reporting_name'));
+    const reportingDesigIdx = headers.findIndex(h => h.includes('controller_designation') || h.includes('reporting_desig'));
     const divisionIdx = headers.findIndex(h => h.includes('division_of_employee') || h.includes('division'));
     const buildingIdx = headers.findIndex(h => h.includes('building_name'));
     const officeIdx = headers.findIndex(h => h.includes('office_name'));
     const shiftIdx = headers.findIndex(h => h.includes('shift_group'));
     const distanceIdx = headers.findIndex(h => h.includes('distance_limit'));
     const sortOrderIdx = headers.findIndex(h => h.includes('sort_order'));
-    
+
     if (persNoIdx === -1 || nameIdx === -1) {
-      throw new Error('CSV must have Employee Pers No and Name columns');
+      throw new Error(
+        `Header row found but missing required columns.\n` +
+        `Found headers: ${headers.slice(0, 8).join(', ')}...\n\n` +
+        `Required column names (case-insensitive):\n` +
+        `• "employee_pers_no" (or "pers_no")\n` +
+        `• "emp_name" (or "employee_name")`
+      );
     }
-    
+
     const data = [];
-    for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(',').map(v => v.trim());
+    for (let i = 1; i < rows.length; i++) {
+      const values = rows[i];
       if (values.length < 2) continue;
-      
-      const persNo = values[persNoIdx];
-      const name = values[nameIdx];
-      
+      const persNo = values[persNoIdx]?.trim();
+      const name = values[nameIdx]?.trim();
       if (!persNo || !name) continue;
-      
       data.push({
         persNo,
         name,
-        circle: circleIdx >= 0 ? values[circleIdx] : undefined,
-        zone: zoneIdx >= 0 ? values[zoneIdx] : undefined,
-        designation: designationIdx >= 0 ? values[designationIdx] : undefined,
-        empGroup: empGroupIdx >= 0 ? values[empGroupIdx] : undefined,
-        reportingPersNo: reportingIdx >= 0 ? values[reportingIdx] : undefined,
-        reportingOfficerName: reportingNameIdx >= 0 ? values[reportingNameIdx] : undefined,
-        reportingOfficerDesignation: reportingDesigIdx >= 0 ? values[reportingDesigIdx] : undefined,
-        division: divisionIdx >= 0 ? values[divisionIdx] : undefined,
-        buildingName: buildingIdx >= 0 ? values[buildingIdx] : undefined,
-        officeName: officeIdx >= 0 ? values[officeIdx] : undefined,
-        shiftGroup: shiftIdx >= 0 ? values[shiftIdx] : undefined,
-        distanceLimit: distanceIdx >= 0 ? values[distanceIdx] : undefined,
+        circle: circleIdx >= 0 ? values[circleIdx]?.trim() || undefined : undefined,
+        zone: zoneIdx >= 0 ? values[zoneIdx]?.trim() || undefined : undefined,
+        designation: designationIdx >= 0 ? values[designationIdx]?.trim() || undefined : undefined,
+        empGroup: empGroupIdx >= 0 ? values[empGroupIdx]?.trim() || undefined : undefined,
+        reportingPersNo: reportingIdx >= 0 ? values[reportingIdx]?.trim() || undefined : undefined,
+        reportingOfficerName: reportingNameIdx >= 0 ? values[reportingNameIdx]?.trim() || undefined : undefined,
+        reportingOfficerDesignation: reportingDesigIdx >= 0 ? values[reportingDesigIdx]?.trim() || undefined : undefined,
+        division: divisionIdx >= 0 ? values[divisionIdx]?.trim() || undefined : undefined,
+        buildingName: buildingIdx >= 0 ? values[buildingIdx]?.trim() || undefined : undefined,
+        officeName: officeIdx >= 0 ? values[officeIdx]?.trim() || undefined : undefined,
+        shiftGroup: shiftIdx >= 0 ? values[shiftIdx]?.trim() || undefined : undefined,
+        distanceLimit: distanceIdx >= 0 ? values[distanceIdx]?.trim() || undefined : undefined,
         sortOrder: sortOrderIdx >= 0 ? parseInt(values[sortOrderIdx]) || undefined : undefined,
       });
     }
-    
     return data;
   };
   
   const handleImport = async () => {
+    setImportError(null);
     if (!csvText.trim()) {
-      Alert.alert('Error', 'Please paste CSV data');
+      setImportError('Please paste CSV data first.');
       return;
     }
-    
+
     try {
       const data = parseCSV(csvText);
       if (data.length === 0) {
-        Alert.alert('Error', 'No valid data found in CSV');
+        setImportError('No valid data rows found. Check that your CSV has a header row and data rows with non-empty pers_no and name fields.');
         return;
       }
       
@@ -290,10 +343,10 @@ export default function AdminScreen() {
         ]
       );
     } catch (error: any) {
-      Alert.alert('Parse Error', error.message);
+      setImportError(error.message);
     }
   };
-  
+
   const handleClearUnlinked = () => {
     Alert.alert(
       'Clear Unlinked Records',
@@ -641,12 +694,17 @@ export default function AdminScreen() {
                 </Text>
               </View>
             )}
+            {importError && (
+              <View style={styles.importErrorBox}>
+                <Text style={styles.importErrorText}>{importError}</Text>
+              </View>
+            )}
             <View style={styles.uploadActions}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => { setCsvText(''); setShowUploadSection(false); }} disabled={importing}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => { setCsvText(''); setShowUploadSection(false); setImportError(null); }} disabled={importing}>
                 <Text style={styles.cancelBtnText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.importBtn, importing && styles.buttonDisabled]} 
+              <TouchableOpacity
+                style={[styles.importBtn, importing && styles.buttonDisabled]}
                 onPress={handleImport}
                 disabled={importing}
               >
@@ -1354,6 +1412,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.light.textSecondary,
     marginTop: 8,
+  },
+  importErrorBox: {
+    backgroundColor: '#FEE2E2',
+    borderColor: '#EF4444',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 10,
+  },
+  importErrorText: {
+    color: '#B91C1C',
+    fontSize: 13,
+    lineHeight: 20,
   },
   uploadActions: {
     flexDirection: 'row',
